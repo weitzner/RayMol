@@ -35,6 +35,9 @@ dev = [
   "pytest==8.2.2",
   "requests==2.32.3",
 ]
+ai = [
+  "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+]
 
 [project.urls]
 Homepage = "https://pymol.org"
