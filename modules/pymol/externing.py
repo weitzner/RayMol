@@ -28,6 +28,27 @@ if True:
           DEFAULT_ERROR, DEFAULT_SUCCESS, _raising, is_ok, is_error
 
     from os import getcwd as getcwdu
+    import subprocess
+    import sys
+
+    def _get_system_clipboard():
+        """Get clipboard contents using platform-native commands."""
+        try:
+            if sys.platform == 'darwin':
+                result = subprocess.run(['pbpaste'], capture_output=True, text=True, timeout=2)
+            elif sys.platform.startswith('linux'):
+                result = subprocess.run(['xclip', '-selection', 'clipboard', '-o'],
+                                        capture_output=True, text=True, timeout=2)
+            elif sys.platform == 'win32':
+                result = subprocess.run(['powershell', '-command', 'Get-Clipboard'],
+                                        capture_output=True, text=True, timeout=2)
+            else:
+                return []
+            if result.returncode == 0 and result.stdout:
+                return result.stdout.splitlines()
+        except Exception:
+            pass
+        return []
 
     def cd(dir="~",complain=1,quiet=1):
         '''
@@ -154,6 +175,8 @@ SEE ALSO
         lst = []
         if hasattr(pymol,"machine_get_clipboard"):
             lst = pymol.machine_get_clipboard()
+        if not lst:
+            lst = _get_system_clipboard()
         if len(lst):
             new_lst = []
             for a in lst:

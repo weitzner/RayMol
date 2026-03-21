@@ -7,7 +7,6 @@ raise ImportError on non-macOS platforms (ai_chat handles that gracefully).
 
 import AppKit
 import Foundation
-import objc
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -40,18 +39,18 @@ def toggle():
         _create_panel()
 
     _visible = not _visible
+    glut_win = _get_glut_window()
     if _visible:
-        glut_win = AppKit.NSApp.mainWindow()
         if glut_win:
-            _position_panel()
+            _position_panel_and_shift_glut(glut_win, opening=True)
             _panel.orderFront_(None)
             glut_win.addChildWindow_ordered_(_panel, AppKit.NSWindowAbove)
         else:
             _panel.orderFront_(None)
     else:
-        glut_win = AppKit.NSApp.mainWindow()
         if glut_win and _panel:
             glut_win.removeChildWindow_(_panel)
+            _position_panel_and_shift_glut(glut_win, opening=False)
         _panel.orderOut_(None)
 
 
@@ -121,10 +120,16 @@ def _install_key_monitor():
     global _key_monitor
 
     def _key_handler(event):
-        if (event.modifierFlags() & AppKit.NSEventModifierFlagCommand
+        flags = event.modifierFlags()
+        # Check Cmd is pressed (ignore if Shift/Ctrl/Alt also pressed)
+        if (flags & AppKit.NSEventModifierFlagCommand
+                and not (flags & AppKit.NSEventModifierFlagShift)
+                and not (flags & AppKit.NSEventModifierFlagControl)
                 and event.charactersIgnoringModifiers() == 'l'):
-            from pymol import ai_chat
-            ai_chat._toggle_panel()
+            # Use a timer to toggle after returning from the event handler,
+            # which prevents the keystroke from reaching GLUT
+            Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                0.0, _TimerToggle.alloc().init(), 'fire:', None, False)
             return None  # swallow the event
         return event
 
@@ -133,19 +138,47 @@ def _install_key_monitor():
             AppKit.NSEventMaskKeyDown, _key_handler))
 
 
-def _position_panel():
-    """Position the panel to overlay the left edge of the GLUT window."""
-    glut_win = AppKit.NSApp.mainWindow()
-    if not glut_win or not _panel:
+_PANEL_WIDTH = 320
+_original_glut_frame = None  # saved before shifting
+
+
+def _get_glut_window():
+    """Get the GLUT NSWindow."""
+    # mainWindow() may return None if GLUT isn't focused; search all windows
+    for win in AppKit.NSApp.windows():
+        if win is not _panel and win.title() == "PyMOL Viewer":
+            return win
+    return AppKit.NSApp.mainWindow()
+
+
+def _position_panel_and_shift_glut(glut_win, opening):
+    """Position panel to the left and shift the GLUT window right, or restore."""
+    global _original_glut_frame
+    if not _panel or not glut_win:
         return
-    frame = glut_win.frame()
-    panel_width = 320
-    panel_frame = AppKit.NSMakeRect(
-        frame.origin.x,
-        frame.origin.y,
-        panel_width,
-        frame.size.height)
-    _panel.setFrame_display_(panel_frame, True)
+
+    if opening:
+        frame = glut_win.frame()
+        _original_glut_frame = frame
+        # Move GLUT window to the right to make room
+        new_glut_frame = AppKit.NSMakeRect(
+            frame.origin.x + _PANEL_WIDTH,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height)
+        glut_win.setFrame_display_animate_(new_glut_frame, True, True)
+        # Place panel where the GLUT window used to be
+        panel_frame = AppKit.NSMakeRect(
+            frame.origin.x,
+            frame.origin.y,
+            _PANEL_WIDTH,
+            frame.size.height)
+        _panel.setFrame_display_(panel_frame, True)
+    else:
+        # Restore GLUT window to original position
+        if _original_glut_frame:
+            glut_win.setFrame_display_animate_(_original_glut_frame, True, True)
+            _original_glut_frame = None
 
 
 def _prefix_for_role(role):
@@ -248,11 +281,11 @@ def _create_panel():
     new_btn.setTitle_("New")
     new_btn.setBezelStyle_(AppKit.NSBezelStyleRounded)
     new_btn.setAutoresizingMask_(AppKit.NSViewMinXMargin)
-    new_btn.setTarget_(_NewButtonTarget.alloc().init())
-    new_btn.setAction_(objc.selector(
-        _NewButtonTarget.newConversation_, signature=b'v@:@'))
-    # prevent target from being GC'd
-    new_btn.target().retain()
+    _new_target = _NewButtonTarget.alloc().init()
+    new_btn.setTarget_(_new_target)
+    new_btn.setAction_('newConversation:')
+    # prevent GC by storing on module
+    _create_panel._new_target = _new_target
     header.addSubview_(new_btn)
     content.addSubview_(header)
 
@@ -273,10 +306,10 @@ def _create_panel():
     send_btn.setTitle_("Send")
     send_btn.setBezelStyle_(AppKit.NSBezelStyleRounded)
     send_btn.setAutoresizingMask_(AppKit.NSViewMinXMargin)
-    send_btn.setTarget_(_SendButtonTarget.alloc().init())
-    send_btn.setAction_(objc.selector(
-        _SendButtonTarget.sendMessage_, signature=b'v@:@'))
-    send_btn.target().retain()
+    _send_target = _SendButtonTarget.alloc().init()
+    send_btn.setTarget_(_send_target)
+    send_btn.setAction_('sendMessage:')
+    _create_panel._send_target = _send_target
 
     content.addSubview_(_input_field)
     content.addSubview_(send_btn)
@@ -351,6 +384,14 @@ class _SendButtonTarget(AppKit.NSObject):
             _input_field.setStringValue_('')
             from pymol import ai_chat
             ai_chat._on_user_message(text)
+
+
+class _TimerToggle(AppKit.NSObject):
+    """Fires toggle from a timer to avoid GLUT seeing the keystroke."""
+
+    def fire_(self, timer):
+        from pymol import ai_chat
+        ai_chat._toggle_panel()
 
 
 class _Updater(AppKit.NSObject):
