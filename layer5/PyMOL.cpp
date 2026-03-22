@@ -2011,6 +2011,11 @@ void PyMOL_StartWithPython(CPyMOL * I)
 
 #endif
 
+void PyMOL_SetPythonInitStage(CPyMOL * I, int stage)
+{
+  I->PythonInitStage = stage;
+}
+
 void PyMOL_Stop(CPyMOL * I)
 {
   PyMOLGlobals *G = I->G;

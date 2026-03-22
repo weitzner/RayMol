@@ -26,7 +26,14 @@ extern "C" PyObject* PyInit__cmd(void);
 // Defined in P.cpp (declared in P.h, but we can't include P.h here
 // because it pulls in GLEW which conflicts with the OpenGL framework headers)
 extern void PInit(PyMOLGlobals * G, int global_instance);
+extern void PBlock(PyMOLGlobals * G);
 extern void PUnblock(PyMOLGlobals * G);
+extern int PLockAPIAsGlut(PyMOLGlobals * G, int block_if_busy);
+extern void PUnlockAPIAsGlut(PyMOLGlobals * G);
+
+// Defined in Ortho.cpp
+extern int OrthoButton(PyMOLGlobals * G, int button, int state, int x, int y, int mod);
+extern void OrthoDrag(PyMOLGlobals * G, int x, int y, int mod);
 
 // Symbols normally provided by main.cpp (GLUT host).
 // The AppKit host uses the PyMOL_* embedding API instead.
@@ -48,7 +55,7 @@ static PyMOLOpenGLView *glView = nullptr;
 // ---------------------------------------------------------------------------
 
 @interface PyMOLOpenGLView : NSOpenGLView {
-    CVDisplayLinkRef _displayLink;
+    NSTimer *_renderTimer;
     BOOL _needsDisplay;
     BOOL _initialized;
 }
@@ -103,18 +110,24 @@ static PyMOLOpenGLView *glView = nullptr;
     pymolInstance = PyMOL_NewWithOptions(options);
     PyMOLOptions_Free(options);
 
-    // Follow the same init sequence as the GLUT host (main.cpp):
-    // 1. Set the global singleton so PInit can find it
+    // Initialize PyMOL with Python support
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
     SingletonPyMOLGlobals = G;
+    G->HaveGUI = true;
 
-    // 2. Start the C-level subsystems
+    // Start C-level subsystems
     PyMOL_Start(pymolInstance);
 
-    // 3. Initialize Python-to-C hooks as a global (singleton) instance
+    // Initialize Python-to-C hooks as global singleton (allocates G->P_inst)
     PInit(G, true);
 
-    // 4. Release the GIL so the main thread can proceed
+    // Set PythonInitStage=1 so PyMOL_Idle runs exec_deferred(),
+    // which calls cmd.config_mouse() to set up mouse bindings.
+    // PyMOL_StartWithPython normally does this, but we can't use it
+    // because it calls PInit(G, false) which doesn't allocate G->P_inst.
+    PyMOL_SetPythonInitStage(pymolInstance, 1);
+
+    // Release the GIL
     PUnblock(G);
 
     // Compute Retina scale factor and set via the setting system
@@ -144,38 +157,29 @@ static PyMOLOpenGLView *glView = nullptr;
 
     _initialized = YES;
 
-    // Set up CVDisplayLink for rendering
-    CVDisplayLinkCreateWithActiveCGDisplays(&_displayLink);
-    CVDisplayLinkSetOutputCallback(_displayLink, &displayLinkCallback, (__bridge void *)self);
-
-    CGLContextObj cglContext = [[self openGLContext] CGLContextObj];
-    CGLPixelFormatObj cglPixelFormat = [[self pixelFormat] CGLPixelFormatObj];
-    CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(_displayLink, cglContext, cglPixelFormat);
-
-    CVDisplayLinkStart(_displayLink);
-}
-
-static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
-                                     const CVTimeStamp *now,
-                                     const CVTimeStamp *outputTime,
-                                     CVOptionFlags flagsIn,
-                                     CVOptionFlags *flagsOut,
-                                     void *displayLinkContext) {
-    @autoreleasepool {
-        PyMOLOpenGLView *view = (__bridge PyMOLOpenGLView *)displayLinkContext;
-        [view performSelectorOnMainThread:@selector(renderFrame) withObject:nil waitUntilDone:NO];
-    }
-    return kCVReturnSuccess;
+    // Use an NSTimer for the render loop — this cooperates with the
+    // main run loop and allows mouse/keyboard events to be processed.
+    // CVDisplayLink's performSelectorOnMainThread floods the run loop.
+    _renderTimer = [NSTimer scheduledTimerWithTimeInterval:1.0/60.0
+                                                    target:self
+                                                  selector:@selector(renderFrame)
+                                                  userInfo:nil
+                                                   repeats:YES];
+    // Ensure timer fires during event tracking (mouse drags)
+    [[NSRunLoop currentRunLoop] addTimer:_renderTimer forMode:NSEventTrackingRunLoopMode];
 }
 
 - (void)renderFrame {
     if (!_initialized || !pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
 
     [[self openGLContext] makeCurrentContext];
-    CGLLockContext([[self openGLContext] CGLContextObj]);
+
+    if (!PLockAPIAsGlut(G, false)) return;
 
     // Process idle work
     PyMOL_Idle(pymolInstance);
+
 
     // Handle pending reshapes — GetReshapeInfo returns point dimensions
     // (divided by DIP2PIXEL), so scale back to pixels for GL and PyMOL_Reshape
@@ -197,12 +201,12 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
         PyMOL_PopValidContext(pymolInstance);
     }
 
+    PUnlockAPIAsGlut(G);
+
     // Swap if needed (may also be handled by swap callback)
     if (PyMOL_GetSwap(pymolInstance, 1)) {
         [[self openGLContext] flushBuffer];
     }
-
-    CGLUnlockContext([[self openGLContext] CGLContextObj]);
 }
 
 - (void)reshape {
@@ -223,6 +227,23 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
     return YES;
 }
 
+- (BOOL)isFlipped {
+    return NO;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    // Ensure we receive mouse events over our entire area
+    NSPoint local = [self convertPoint:point fromView:[self superview]];
+    if (NSPointInRect(local, [self bounds])) {
+        return self;
+    }
+    return nil;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    return YES;
+}
+
 // ---------------------------------------------------------------------------
 #pragma mark - Modifier conversion
 // ---------------------------------------------------------------------------
@@ -238,9 +259,11 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
 
 - (NSPoint)pymolPointFromEvent:(NSEvent *)event {
     NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
-    // PyMOL uses top-left origin; NSView uses bottom-left
-    NSRect bounds = [self bounds];
-    loc.y = bounds.size.height - loc.y;
+    // Convert to backing (pixel) coordinates for Retina
+    loc = [self convertPointToBacking:loc];
+    // PyMOL uses top-left origin; backing coords use bottom-left
+    NSRect pixelBounds = [self convertRectToBacking:[self bounds]];
+    loc.y = pixelBounds.size.height - loc.y;
     return loc;
 }
 
@@ -249,90 +272,128 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
 // ---------------------------------------------------------------------------
 
 - (void)mouseDown:(NSEvent *)event {
+    FILE *f = fopen("/tmp/pymol_mouse.log", "a");
+    if (f) { fprintf(f, "VIEW mouseDown called!\n"); fclose(f); }
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     int button = PYMOL_BUTTON_LEFT;
     if ([event modifierFlags] & NSEventModifierFlagCommand) {
-        button = PYMOL_BUTTON_MIDDLE; // Cmd+Click = middle button
+        button = PYMOL_BUTTON_MIDDLE;
     }
-    PyMOL_Button(pymolInstance, button, PYMOL_BUTTON_DOWN,
-                 (int)pt.x, (int)pt.y, mods);
+    f = fopen("/tmp/pymol_mouse.log", "a");
+    if (f) { fprintf(f, "  btn=%d x=%d y=%d lock=", button, (int)pt.x, (int)pt.y); }
+    if (!PLockAPIAsGlut(G, false)) {
+        if (f) { fprintf(f, "FAIL\n"); fclose(f); }
+        return;
+    }
+    if (f) { fprintf(f, "OK, calling OrthoButton\n"); fclose(f); }
+    OrthoButton(G, button, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)mouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Button(pymolInstance, PYMOL_BUTTON_LEFT, PYMOL_BUTTON_UP,
-                 (int)pt.x, (int)pt.y, mods);
+    OrthoButton(G, PYMOL_BUTTON_LEFT, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)mouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Drag(pymolInstance, (int)pt.x, (int)pt.y, mods);
+    {
+        FILE *f = fopen("/tmp/pymol_mouse.log", "a");
+        if (f) { fprintf(f, "mouseDragged: x=%d y=%d lock=", (int)pt.x, (int)pt.y);  }
+        if (!PLockAPIAsGlut(G, false)) {
+            if (f) { fprintf(f, "FAIL\n"); fclose(f); }
+            return;
+        }
+        if (f) { fprintf(f, "OK\n"); fclose(f); }
+    }
+    OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)rightMouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Button(pymolInstance, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_DOWN,
-                 (int)pt.x, (int)pt.y, mods);
+    OrthoButton(G, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)rightMouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Button(pymolInstance, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_UP,
-                 (int)pt.x, (int)pt.y, mods);
+    OrthoButton(G, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)rightMouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Drag(pymolInstance, (int)pt.x, (int)pt.y, mods);
+    OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)otherMouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Button(pymolInstance, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_DOWN,
-                 (int)pt.x, (int)pt.y, mods);
+    OrthoButton(G, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)otherMouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Button(pymolInstance, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_UP,
-                 (int)pt.x, (int)pt.y, mods);
+    OrthoButton(G, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)otherMouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    PyMOL_Drag(pymolInstance, (int)pt.x, (int)pt.y, mods);
+    OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
+    PUnlockAPIAsGlut(G);
 }
 
 - (void)scrollWheel:(NSEvent *)event {
     if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     float dy = [event deltaY];
     if (dy > 0.0f) {
-        PyMOL_Button(pymolInstance, PYMOL_BUTTON_SCROLL_FORWARD, PYMOL_BUTTON_DOWN,
-                     (int)pt.x, (int)pt.y, mods);
+        OrthoButton(G, PYMOL_BUTTON_SCROLL_FORWARD, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
     } else if (dy < 0.0f) {
-        PyMOL_Button(pymolInstance, PYMOL_BUTTON_SCROLL_REVERSE, PYMOL_BUTTON_DOWN,
-                     (int)pt.x, (int)pt.y, mods);
+        OrthoButton(G, PYMOL_BUTTON_SCROLL_REVERSE, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
     }
+    PUnlockAPIAsGlut(G);
 }
 
 // ---------------------------------------------------------------------------
@@ -389,10 +450,9 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
 // ---------------------------------------------------------------------------
 
 - (void)dealloc {
-    if (_displayLink) {
-        CVDisplayLinkStop(_displayLink);
-        CVDisplayLinkRelease(_displayLink);
-        _displayLink = NULL;
+    if (_renderTimer) {
+        [_renderTimer invalidate];
+        _renderTimer = nil;
     }
     if (pymolInstance) {
         PyMOL_Stop(pymolInstance);
@@ -406,6 +466,11 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
 // ---------------------------------------------------------------------------
 #pragma mark - App Delegate
 // ---------------------------------------------------------------------------
+
+@interface PyMOLWindow : NSWindow
+@end
+@implementation PyMOLWindow
+@end
 
 @interface PyMOLAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property (strong) NSWindow *window;
@@ -421,7 +486,7 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
                             | NSWindowStyleMaskMiniaturizable
                             | NSWindowStyleMaskResizable;
 
-    self.window = [[NSWindow alloc] initWithContentRect:frame
+    self.window = [[PyMOLWindow alloc] initWithContentRect:frame
                                               styleMask:style
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
@@ -429,13 +494,21 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
     [self.window setDelegate:self];
     [self.window setMinSize:NSMakeSize(400, 300)];
 
-    // Create OpenGL view
+    // Set the OpenGL view as the window's content view directly
+    // (not as a subview — avoids event dispatch issues)
     glView = [[PyMOLOpenGLView alloc] initWithFrame:[[self.window contentView] bounds]];
-    [glView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-    [[self.window contentView] addSubview:glView];
+    [self.window setContentView:glView];
 
     [self.window makeKeyAndOrderFront:nil];
     [self.window makeFirstResponder:glView];
+
+    // Ensure app is properly activated and receives events
+    if (@available(macOS 14.0, *)) {
+        [NSApp activate];
+    } else {
+        [NSApp activateIgnoringOtherApps:YES];
+    }
+
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {

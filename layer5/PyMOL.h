@@ -230,6 +230,7 @@ void PyMOL_Free(CPyMOL * I);
 void PyMOL_Start(CPyMOL * I);
 void PyMOL_ConfigureShadersGL(CPyMOL * I);
 void PyMOL_StartWithPython(CPyMOL * I);
+void PyMOL_SetPythonInitStage(CPyMOL * I, int stage);
 void PyMOL_Stop(CPyMOL * I);
 
 
