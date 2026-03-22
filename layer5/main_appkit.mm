@@ -227,19 +227,6 @@ static PyMOLOpenGLView *glView = nullptr;
     return YES;
 }
 
-- (BOOL)isFlipped {
-    return NO;
-}
-
-- (NSView *)hitTest:(NSPoint)point {
-    // Ensure we receive mouse events over our entire area
-    NSPoint local = [self convertPoint:point fromView:[self superview]];
-    if (NSPointInRect(local, [self bounds])) {
-        return self;
-    }
-    return nil;
-}
-
 - (BOOL)acceptsFirstMouse:(NSEvent *)event {
     return YES;
 }
@@ -272,23 +259,15 @@ static PyMOLOpenGLView *glView = nullptr;
 // ---------------------------------------------------------------------------
 
 - (void)mouseDown:(NSEvent *)event {
-    FILE *f = fopen("/tmp/pymol_mouse.log", "a");
-    if (f) { fprintf(f, "VIEW mouseDown called!\n"); fclose(f); }
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     int button = PYMOL_BUTTON_LEFT;
     if ([event modifierFlags] & NSEventModifierFlagCommand) {
         button = PYMOL_BUTTON_MIDDLE;
     }
-    f = fopen("/tmp/pymol_mouse.log", "a");
-    if (f) { fprintf(f, "  btn=%d x=%d y=%d lock=", button, (int)pt.x, (int)pt.y); }
-    if (!PLockAPIAsGlut(G, false)) {
-        if (f) { fprintf(f, "FAIL\n"); fclose(f); }
-        return;
-    }
-    if (f) { fprintf(f, "OK, calling OrthoButton\n"); fclose(f); }
     OrthoButton(G, button, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
     PUnlockAPIAsGlut(G);
 }
@@ -306,17 +285,9 @@ static PyMOLOpenGLView *glView = nullptr;
 - (void)mouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    if (!PLockAPIAsGlut(G, false)) return;
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
-    {
-        FILE *f = fopen("/tmp/pymol_mouse.log", "a");
-        if (f) { fprintf(f, "mouseDragged: x=%d y=%d lock=", (int)pt.x, (int)pt.y);  }
-        if (!PLockAPIAsGlut(G, false)) {
-            if (f) { fprintf(f, "FAIL\n"); fclose(f); }
-            return;
-        }
-        if (f) { fprintf(f, "OK\n"); fclose(f); }
-    }
     OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
     PUnlockAPIAsGlut(G);
 }
@@ -467,11 +438,6 @@ static PyMOLOpenGLView *glView = nullptr;
 #pragma mark - App Delegate
 // ---------------------------------------------------------------------------
 
-@interface PyMOLWindow : NSWindow
-@end
-@implementation PyMOLWindow
-@end
-
 @interface PyMOLAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property (strong) NSWindow *window;
 @end
@@ -486,7 +452,7 @@ static PyMOLOpenGLView *glView = nullptr;
                             | NSWindowStyleMaskMiniaturizable
                             | NSWindowStyleMaskResizable;
 
-    self.window = [[PyMOLWindow alloc] initWithContentRect:frame
+    self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:style
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
