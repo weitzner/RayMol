@@ -131,6 +131,20 @@ static PyMOLOpenGLView *glView = nullptr;
     // which calls cmd.config_mouse() to set up mouse bindings.
     PyMOL_SetPythonInitStage(pymolInstance, 1);
 
+    // Load API keys into Python's os.environ before importing ai_chat.
+    // Finder-launched apps don't inherit shell env vars, so we also
+    // check ~/.pymol_ai.conf (simple KEY=VALUE format).
+    PyRun_SimpleString(
+        "import os, os.path\n"
+        "_conf = os.path.expanduser('~/.pymol_ai.conf')\n"
+        "if os.path.isfile(_conf):\n"
+        "    for _line in open(_conf):\n"
+        "        _line = _line.strip()\n"
+        "        if '=' in _line and not _line.startswith('#'):\n"
+        "            _k, _v = _line.split('=', 1)\n"
+        "            os.environ[_k.strip()] = _v.strip()\n"
+    );
+
     // Initialize the AI chat engine and set up the embedded chat UI
     // The chat container NSView (tag=100) was created in applicationDidFinishLaunching.
     // We find it by tag and pass it to ai_chat_ui._setup_embedded().
@@ -199,7 +213,6 @@ static PyMOLOpenGLView *glView = nullptr;
 
     // Process idle work
     PyMOL_Idle(pymolInstance);
-
 
     // Handle pending reshapes — GetReshapeInfo returns point dimensions
     // (divided by DIP2PIXEL), so scale back to pixels for GL and PyMOL_Reshape
@@ -281,7 +294,7 @@ static PyMOLOpenGLView *glView = nullptr;
 - (void)mouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     int button = PYMOL_BUTTON_LEFT;
@@ -289,93 +302,93 @@ static PyMOLOpenGLView *glView = nullptr;
         button = PYMOL_BUTTON_MIDDLE;
     }
     OrthoButton(G, button, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)mouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_LEFT, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)mouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)rightMouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)rightMouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)rightMouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)otherMouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)otherMouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)otherMouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 - (void)scrollWheel:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    if (!PLockAPIAsGlut(G, false)) return;
+    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     float dy = [event deltaY];
@@ -384,7 +397,7 @@ static PyMOLOpenGLView *glView = nullptr;
     } else if (dy < 0.0f) {
         OrthoButton(G, PYMOL_BUTTON_SCROLL_REVERSE, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
     }
-    PUnlockAPIAsGlut(G);
+    PUnblock(G);
 }
 
 // ---------------------------------------------------------------------------

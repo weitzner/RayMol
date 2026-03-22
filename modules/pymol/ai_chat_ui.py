@@ -409,8 +409,10 @@ class InputDelegate(AppKit.NSObject):
             text = field.stringValue().strip()
             if text:
                 field.setStringValue_('')
-                from pymol import ai_chat
-                ai_chat._on_user_message(text)
+                # Defer the message to avoid blocking the text field event cycle
+                _DeferredMessage._pending_text = text
+                Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                    0.0, _DeferredMessage.alloc().init(), 'fire:', None, False)
 
 
 class _NewButtonTarget(AppKit.NSObject):
@@ -430,6 +432,19 @@ class _SendButtonTarget(AppKit.NSObject):
         text = _input_field.stringValue().strip()
         if text:
             _input_field.setStringValue_('')
+            _DeferredMessage._pending_text = text
+            Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                0.0, _DeferredMessage.alloc().init(), 'fire:', None, False)
+
+
+class _DeferredMessage(AppKit.NSObject):
+    """Fires _on_user_message from a timer to avoid blocking the text field."""
+    _pending_text = ''
+
+    def fire_(self, timer):
+        text = _DeferredMessage._pending_text
+        if text:
+            _DeferredMessage._pending_text = ''
             from pymol import ai_chat
             ai_chat._on_user_message(text)
 
@@ -452,7 +467,16 @@ class _Updater(AppKit.NSObject):
         if role == 'error':
             show_message('error', content)
         else:
-            show_message('assistant', content)
+            show_message(role, content)
             for r in results:
                 show_message('result', r)
+        hide_status()
+
+
+class _StatusUpdater(AppKit.NSObject):
+    """Helper for dispatching status updates from worker threads."""
+    _text = ''
+
+    def doStatus_(self, ignored):
+        show_status(_StatusUpdater._text)
         hide_status()

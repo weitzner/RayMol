@@ -52,6 +52,14 @@ def _init(cmd_module):
 
     _cmd = cmd_module
 
+    # Re-read env vars (may have been set from ~/.pymol_ai.conf after module load)
+    _ai_config['provider'] = os.environ.get('PYMOL_LLM_PROVIDER', _ai_config['provider'])
+    for provider in _ai_config['api_keys']:
+        env_key = provider.upper() + '_API_KEY'
+        val = os.environ.get(env_key, '')
+        if val:
+            _ai_config['api_keys'][provider] = val
+
     try:
         from pymol import ai_chat_ui
         _has_ui = True
@@ -119,7 +127,11 @@ def _toggle_panel():
 
 
 def _get_session_context():
-    """Return a short text description of the current PyMOL session state."""
+    """Return a short text description of the current PyMOL session state.
+
+    Called from the worker thread. Uses try/except to handle cases where
+    the API lock can't be acquired.
+    """
     parts = []
     try:
         objects = _cmd.get_names('objects')
@@ -129,7 +141,7 @@ def _get_session_context():
         if selections:
             parts.append("Named selections: " + ", ".join(selections))
     except Exception:
-        pass
+        parts.append("(session state unavailable)")
     return "\n".join(parts) if parts else "Empty session (no objects loaded)."
 
 
@@ -137,12 +149,22 @@ def _on_user_message(text):
     """Main entry point called by the UI when the user submits a message."""
     global _messages
 
+    with open('/tmp/pymol_ai_debug.log', 'a') as f:
+        f.write(f"_on_user_message: {text!r}, provider={_ai_config['provider']}, "
+                f"key={_ai_config['api_keys'].get(_ai_config['provider'], '')[:10]}...\n")
+
     _messages.append({'role': 'user', 'content': text})
+
+    with open('/tmp/pymol_ai_debug.log', 'a') as f:
+        f.write("before show_message\n")
 
     if _has_ui:
         from pymol import ai_chat_ui
         ai_chat_ui.show_message('user', text)
         ai_chat_ui.show_status('Thinking...')
+
+    with open('/tmp/pymol_ai_debug.log', 'a') as f:
+        f.write("after show_message, checking key\n")
 
     provider = _ai_config['provider']
     key = _ai_config['api_keys'].get(provider, '')
@@ -159,68 +181,78 @@ def _on_user_message(text):
             print(error_msg)
         return
 
+    with open('/tmp/pymol_ai_debug.log', 'a') as f:
+        f.write("spawning worker thread...\n")
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
+    with open('/tmp/pymol_ai_debug.log', 'a') as f:
+        f.write(f"thread started: {t.is_alive()}\n")
 
 
 def _worker():
     """Background thread: call LLM, execute commands, retry on errors."""
     global _messages
+    import sys
 
     max_retries = 2
     attempt = 0
 
+    def _log(msg):
+        with open('/tmp/pymol_ai_debug.log', 'a') as f:
+            f.write(msg + '\n')
+
+    # Thread-safe UI helpers — dispatch to main thread
+    def _ui_msg(role, text):
+        if _has_ui:
+            from pymol import ai_chat_ui
+            ai_chat_ui.update_on_main_thread(role, text, [])
+
+    def _ui_status(text):
+        if _has_ui:
+            from pymol import ai_chat_ui
+            ai_chat_ui._StatusUpdater._text = text
+            ai_chat_ui._StatusUpdater.alloc().init().performSelectorOnMainThread_withObject_waitUntilDone_(
+                'doStatus:', None, False)
+
     try:
         while attempt <= max_retries:
             try:
+                _log(f"calling LLM ({_ai_config['provider']})...")
                 response_text = _call_llm()
+                _log(f"got response: {response_text[:80]}...")
             except Exception as exc:
                 error_msg = f"LLM call failed: {exc}"
                 _messages.append({'role': 'assistant', 'content': error_msg})
-                if _has_ui:
-                    from pymol import ai_chat_ui
-                    ai_chat_ui.show_message('assistant', error_msg)
-                    ai_chat_ui.show_status('')
-                else:
-                    print(error_msg)
+                _ui_msg('error', error_msg)
+                _ui_status('')
                 return
 
             _messages.append({'role': 'assistant', 'content': response_text})
-
-            if _has_ui:
-                from pymol import ai_chat_ui
-                ai_chat_ui.show_message('assistant', response_text)
-                ai_chat_ui.show_status('Executing...')
+            _ui_msg('assistant', response_text)
+            _ui_status('Executing...')
 
             results = _execute_commands(response_text)
-
             errors = [r for r in results if r.startswith('Error:')]
+            # Only show errors in the chat, not OK confirmations
+            for r in errors:
+                _ui_msg('error', r)
 
             if not errors or attempt >= max_retries:
-                if _has_ui:
-                    from pymol import ai_chat_ui
-                    ai_chat_ui.show_status('')
+                _ui_status('')
                 break
 
-            # Retry: inform the LLM about the errors
             retry_content = (
                 "The following commands had errors:\n"
                 + "\n".join(errors)
                 + "\nPlease fix and try again."
             )
             _messages.append({'role': 'user', 'content': retry_content})
-            if _has_ui:
-                from pymol import ai_chat_ui
-                ai_chat_ui.show_status('Retrying...')
+            _ui_status('Retrying...')
             attempt += 1
 
     except Exception as exc:
-        if _has_ui:
-            from pymol import ai_chat_ui
-            ai_chat_ui.show_message('assistant', f"Unexpected error: {exc}")
-            ai_chat_ui.show_status('')
-        else:
-            print(f"Unexpected error in AI worker: {exc}")
+        _ui_msg('error', f"Unexpected error: {exc}")
+        _ui_status('')
 
 
 def _call_llm():
@@ -229,16 +261,8 @@ def _call_llm():
     key = _ai_config['api_keys'].get(provider, '')
     model = _ai_config['models'].get(provider, '')
 
-    session_ctx = _get_session_context()
-
-    # Build messages, injecting session context into the latest user message
-    messages = []
-    for i, msg in enumerate(_messages):
-        if i == len(_messages) - 1 and msg['role'] == 'user':
-            content = f"{msg['content']}\n\n[Session state]\n{session_ctx}"
-        else:
-            content = msg['content']
-        messages.append({'role': msg['role'], 'content': content})
+    # Build messages (skip session context — calling _cmd from worker thread deadlocks)
+    messages = [{'role': m['role'], 'content': m['content']} for m in _messages]
 
     if provider == 'anthropic':
         return _call_anthropic(messages, key, model)
@@ -251,31 +275,28 @@ def _call_llm():
 
 
 def _execute_commands(response_text):
-    """Parse the LLM response and execute each PyMOL command line.
+    """Parse the LLM response and queue each PyMOL command line.
 
-    Returns a list of result strings ('OK: ...' or 'Error: ...').
+    Commands are queued via cmd.do() with async=1 so they execute during
+    PyMOL's idle cycle on the main thread, avoiding API lock contention
+    with the render loop.
+
+    Returns a list of result strings.
     """
     results = []
     for line in response_text.splitlines():
         line = line.strip()
         if not line or line.startswith('#'):
             continue
+        # Strip markdown code fences if the LLM wraps commands
+        if line.startswith('```'):
+            continue
 
-        old_stdout = sys.stdout
-        captured = io.StringIO()
-        sys.stdout = captured
         try:
             _cmd.do(line)
-            output = captured.getvalue().strip()
-            # Detect PyMOL error feedback in captured output
-            if 'Error' in output or 'error' in output:
-                results.append(f"Error: {line} => {output}")
-            else:
-                results.append(f"OK: {line}")
+            results.append(f"OK: {line}")
         except Exception as exc:
             results.append(f"Error: {line} => {exc}")
-        finally:
-            sys.stdout = old_stdout
 
     return results
 
@@ -309,8 +330,12 @@ def _call_anthropic(messages, key, model):
     )
 
     try:
+        with open('/tmp/pymol_ai_debug.log', 'a') as f:
+            f.write(f"HTTP POST to {url} with model={model}...\n")
         with urllib.request.urlopen(req, timeout=60) as resp:
             body = json.loads(resp.read().decode('utf-8'))
+        with open('/tmp/pymol_ai_debug.log', 'a') as f:
+            f.write(f"HTTP response OK\n")
         return body['content'][0]['text']
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode('utf-8', errors='replace')
