@@ -123,9 +123,10 @@ static PyMOLOpenGLView *glView = nullptr;
 
     // Set PythonInitStage=1 so PyMOL_Idle runs exec_deferred(),
     // which calls cmd.config_mouse() to set up mouse bindings.
-    // PyMOL_StartWithPython normally does this, but we can't use it
-    // because it calls PInit(G, false) which doesn't allocate G->P_inst.
     PyMOL_SetPythonInitStage(pymolInstance, 1);
+
+    // Initialize the AI chat panel (Cmd+L to toggle)
+    PyRun_SimpleString("from pymol import ai_chat; ai_chat._init(__import__('pymol').cmd)");
 
     // Release the GIL
     PUnblock(G);
