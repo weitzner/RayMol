@@ -2256,39 +2256,42 @@ void PyMOL_DrawWithoutLock(CPyMOL * I)
 
     I->G->HaveGUI = I->G->Option->pmgui;
 
+    // Skip GL-specific initialization when using Metal renderer
+    if (!I->G->Renderer) {
 #ifndef PURE_OPENGL_ES_2
-    // stereo test with PyQt5 on Linux is broken (QTBUG-59636), so we
-    // test for stereo here
-    if (I->G->HaveGUI)
-    {
-      check_gl_stereo_capable(I->G);
-    }
+      // stereo test with PyQt5 on Linux is broken (QTBUG-59636), so we
+      // test for stereo here
+      if (I->G->HaveGUI)
+      {
+        check_gl_stereo_capable(I->G);
+      }
 #endif
+
+      I->G->ShaderMgr->Config();
+
+      // OpenGL debugging (glewInit must be called first)
+      if (I->G->Option->gldebug) {
+#ifdef GL_DEBUG_OUTPUT
+        if (!glDebugMessageCallback) {
+          printf("glDebugMessageCallback not available\n");
+        } else {
+          glDebugMessageCallback(gl_debug_proc, nullptr);
+          glEnable(GL_DEBUG_OUTPUT);
+        }
+#else
+        printf("GL_DEBUG_OUTPUT not available\n");
+#endif
+      }
+    } // end if (!I->G->Renderer) — skip GL init for Metal
 
     PyMOL_LaunchStatus_Feedback(I->G);
-
-    I->G->ShaderMgr->Config();
-
-    // OpenGL debugging (glewInit must be called first)
-    if (I->G->Option->gldebug) {
-#ifdef GL_DEBUG_OUTPUT
-      if (!glDebugMessageCallback) {
-        printf("glDebugMessageCallback not available\n");
-      } else {
-        glDebugMessageCallback(gl_debug_proc, nullptr);
-        glEnable(GL_DEBUG_OUTPUT);
-      }
-#else
-      printf("GL_DEBUG_OUTPUT not available\n");
-#endif
-    }
   }
 
   PyMOLGlobals * G = I->G;
   if(I->ModalDraw) {
     if(G->HaveGUI) {
       PyMOL_PushValidContext(I);
-      setup_gl_state();
+      if (!G->Renderer) setup_gl_state();
     }
     {
       PyMOLModalDrawFn *fn = I->ModalDraw;
@@ -2311,7 +2314,7 @@ void PyMOL_DrawWithoutLock(CPyMOL * I)
     if(G->HaveGUI) {
       PyMOL_PushValidContext(I);
 
-      setup_gl_state();
+      if (!G->Renderer) setup_gl_state();
 
       if(!I->DrawnFlag) {
         SceneSetCardInfo(G, (char *) glGetString(GL_VENDOR),
