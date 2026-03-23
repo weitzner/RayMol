@@ -847,8 +847,9 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
         [[NSColor colorWithCalibratedRed:0.15 green:0.15 blue:0.17 alpha:1.0] CGColor];
     [container addSubview:self.chatContainer];
 
-    // Object panel on the right (220px wide, full height, dark background)
-    NSRect objFrame = NSMakeRect(contentW - kObjectPanelWidth, 0, kObjectPanelWidth, contentH);
+    // Object panel on the right, below the command panel area
+    CGFloat objHeight = contentH - kCommandPanelHeight;
+    NSRect objFrame = NSMakeRect(contentW - kObjectPanelWidth, 0, kObjectPanelWidth, objHeight);
     self.objectPanelContainer = [[NSView alloc] initWithFrame:objFrame];
     self.objectPanelContainer.autoresizingMask = NSViewHeightSizable | NSViewMinXMargin;
     self.objectPanelContainer.identifier = @"objectPanel";
@@ -861,8 +862,9 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     CGFloat centerX = kChatPanelWidth;
     CGFloat centerWidth = contentW - kChatPanelWidth - kObjectPanelWidth;
 
-    // Command panel container at the top of the center area
-    NSRect cmdFrame = NSMakeRect(centerX, contentH - kCommandPanelHeight, centerWidth, kCommandPanelHeight);
+    // Command panel container at the top — spans center + object panel width
+    CGFloat cmdWidth = contentW - kChatPanelWidth;
+    NSRect cmdFrame = NSMakeRect(centerX, contentH - kCommandPanelHeight, cmdWidth, kCommandPanelHeight);
     self.commandPanelContainer = [[NSView alloc] initWithFrame:cmdFrame];
     self.commandPanelContainer.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     self.commandPanelContainer.identifier = @"commandPanel";
