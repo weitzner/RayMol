@@ -303,10 +303,16 @@ void RendererMetal::beginFrame()
 
   // Configure clear values on the render pass descriptor
   if (_passDesc) {
+    _passDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
     _passDesc.colorAttachments[0].clearColor =
         MTLClearColorMake(_clearR, _clearG, _clearB, _clearA);
+    _passDesc.depthAttachment.loadAction = MTLLoadActionClear;
     _passDesc.depthAttachment.clearDepth = 1.0;
+    _passDesc.stencilAttachment.loadAction = MTLLoadActionClear;
     _passDesc.stencilAttachment.clearStencil = 0;
+
+    // Create the encoder immediately to ensure the clear executes
+    _encoder = [_cmdBuffer renderCommandEncoderWithDescriptor:_passDesc];
   }
 }
 
