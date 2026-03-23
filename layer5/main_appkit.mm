@@ -83,6 +83,7 @@ static RendererBackend g_requestedBackend = kBackendAuto;
 @property (strong) NSWindow *window;
 @property (strong) NSView *chatContainer;
 @property (strong) NSView *commandPanelContainer;
+@property (strong) NSView *objectPanelContainer;
 @property (assign) BOOL chatVisible;
 @property (assign) BOOL usingMetal;
 - (void)toggleChatPanel;
@@ -311,6 +312,19 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
         "        break\n"
     );
 
+    // Initialize the object/selection panel on the right side
+    PyRun_SimpleString(
+        "import AppKit\n"
+        "from pymol import appkit_object_panel\n"
+        "for _win in AppKit.NSApp.windows():\n"
+        "    if _win.title() == 'PyMOL Viewer':\n"
+        "        for _sv in _win.contentView().subviews():\n"
+        "            if _sv.identifier() == 'objectPanel':\n"
+        "                appkit_object_panel.setup(_sv, __import__('pymol').cmd)\n"
+        "                break\n"
+        "        break\n"
+    );
+
     // Release the GIL
 
 
@@ -454,6 +468,9 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     id<MTLCommandQueue> _commandQueue;
     BOOL _initialized;
     NSPoint _lastDragPoint;
+    NSPoint _mouseDownPoint;   // point-space coordinates at mouseDown
+    NSTimeInterval _mouseDownTime;
+    BOOL _isDragging;          // true once movement exceeds threshold
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -566,6 +583,19 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
         "        break\n"
     );
 
+    // Initialize the object/selection panel on the right side
+    PyRun_SimpleString(
+        "import AppKit\n"
+        "from pymol import appkit_object_panel\n"
+        "for _win in AppKit.NSApp.windows():\n"
+        "    if _win.title() == 'PyMOL Viewer':\n"
+        "        for _sv in _win.contentView().subviews():\n"
+        "            if _sv.identifier() == 'objectPanel':\n"
+        "                appkit_object_panel.setup(_sv, __import__('pymol').cmd)\n"
+        "                break\n"
+        "        break\n"
+    );
+
     // Compute Retina scale factor
     NSRect pointBounds = [self bounds];
     NSRect pixelBounds = [self convertRectToBacking:pointBounds];
@@ -649,26 +679,82 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
 
-// Mouse and keyboard — same shared helpers as OpenGLView
+// Mouse and keyboard — click-vs-drag detection for left button.
+// Short clicks (< 3px movement) trigger picking via OrthoButton;
+// longer movements start a drag (rotation via SceneRotate).
 - (void)mouseDown:(NSEvent *)e {
-    _lastDragPoint = [self convertPoint:[e locationInWindow] fromView:nil];
-    int btn = ([e modifierFlags] & NSEventModifierFlagCommand) ? PYMOL_BUTTON_MIDDLE : PYMOL_BUTTON_LEFT;
-    handleMouseButton(self, e, btn, PYMOL_BUTTON_DOWN);
+    _mouseDownPoint = [self convertPoint:[e locationInWindow] fromView:nil];
+    _lastDragPoint = _mouseDownPoint;
+    _mouseDownTime = [e timestamp];
+    _isDragging = NO;
+    // Don't send button-down yet — wait for drag threshold or mouseUp
 }
-- (void)mouseUp:(NSEvent *)e        { handleMouseButton(self, e, PYMOL_BUTTON_LEFT, PYMOL_BUTTON_UP); }
+- (void)mouseUp:(NSEvent *)e {
+    if (!_isDragging) {
+        // Short click — route through OrthoButton for picking
+        [self performPickAtPoint:_mouseDownPoint withEvent:e];
+    }
+    // Always send button-up so PyMOL state stays consistent
+    handleMouseButton(self, e, PYMOL_BUTTON_LEFT, PYMOL_BUTTON_UP);
+}
 - (void)mouseDragged:(NSEvent *)e {
-    // Direct rotation via SceneRotate — bypasses OrthoButton/findBlock
     NSPoint cur = [self convertPoint:[e locationInWindow] fromView:nil];
-    float dx = cur.x - _lastDragPoint.x;
-    float dy = cur.y - _lastDragPoint.y;
+    float dx = cur.x - _mouseDownPoint.x;
+    float dy = cur.y - _mouseDownPoint.y;
+
+    if (!_isDragging) {
+        // Only start dragging after 3px movement threshold
+        if (sqrtf(dx * dx + dy * dy) < 3.0f) return;
+        _isDragging = YES;
+        _lastDragPoint = cur;
+        return;
+    }
+
+    // Continue rotating (existing behavior)
+    float ddx = cur.x - _lastDragPoint.x;
+    float ddy = cur.y - _lastDragPoint.y;
     _lastDragPoint = cur;
     if (pymolInstance) {
         PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
         extern void SceneRotate(PyMOLGlobals*, float, float, float, float, bool);
-        SceneRotate(G, dx, 0.0f, 1.0f, 0.0f, true);  // horizontal = Y rotation
-        SceneRotate(G, -dy, 1.0f, 0.0f, 0.0f, true);  // vertical = X rotation (inverted)
+        SceneRotate(G, ddx, 0.0f, 1.0f, 0.0f, true);  // horizontal = Y rotation
+        SceneRotate(G, -ddy, 1.0f, 0.0f, 0.0f, true);  // vertical = X rotation (inverted)
     }
 }
+
+// Picking via the dummy GL context.
+// Makes the offscreen GL context current, sets up viewport to match
+// the Metal scene, then sends a button press/release through OrthoButton
+// which triggers SceneClick → SceneDoXYPick → GL picking render → selection.
+- (void)performPickAtPoint:(NSPoint)point withEvent:(NSEvent *)event {
+    if (!pymolInstance) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+
+    // Convert point-space coordinates to backing-pixel coordinates
+    NSPoint pixelPt = [self convertPointToBacking:point];
+    int x = (int)pixelPt.x;
+    int y = (int)pixelPt.y;
+    int mods = pymolModifiers(event);
+
+    // Make the dummy GL context current for the GL picking render pass
+    NSOpenGLContext *dummyGL = objc_getAssociatedObject(self, "dummyGL");
+    [dummyGL makeCurrentContext];
+
+    // Set up GL viewport to match the current scene dimensions
+    glViewport(0, 0, G->Option->winX, G->Option->winY);
+
+    // Simulate a full click (down + up) at this location.
+    // OrthoButton → SceneClick → SceneDoXYPick does the actual picking.
+    PyMOL_PushValidContext(pymolInstance);
+
+    int btn = ([event modifierFlags] & NSEventModifierFlagCommand)
+                  ? PYMOL_BUTTON_MIDDLE : PYMOL_BUTTON_LEFT;
+    OrthoButton(G, btn, PYMOL_BUTTON_DOWN, x, y, mods);
+    OrthoButton(G, btn, PYMOL_BUTTON_UP, x, y, mods);
+
+    PyMOL_PopValidContext(pymolInstance);
+}
+
 - (void)rightMouseDown:(NSEvent *)e  {
     _lastDragPoint = [self convertPoint:[e locationInWindow] fromView:nil];
     handleMouseButton(self, e, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_DOWN);
@@ -725,9 +811,10 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     static const CGFloat kChatPanelWidth = 320.0;
     static const CGFloat kCommandPanelHeight = 200.0;
+    static const CGFloat kObjectPanelWidth = 220.0;
 
     // Create window
-    NSRect frame = NSMakeRect(100, 100, 1024, 768);
+    NSRect frame = NSMakeRect(100, 100, 1280, 768);
     NSWindowStyleMask style = NSWindowStyleMaskTitled
                             | NSWindowStyleMaskClosable
                             | NSWindowStyleMaskMiniaturizable
@@ -741,14 +828,17 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     [self.window setDelegate:self];
     [self.window setMinSize:NSMakeSize(400, 300)];
 
-    // Create a container view that holds chat panel, GL view, and command panel
+    // Create a container view that holds chat panel, GL view, command panel, and object panel
     NSRect contentBounds = [[self.window contentView] bounds];
     NSView *container = [[NSView alloc] initWithFrame:contentBounds];
     container.autoresizesSubviews = YES;
     container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
+    CGFloat contentW = contentBounds.size.width;
+    CGFloat contentH = contentBounds.size.height;
+
     // Chat container on the left (320px wide, full height, dark background)
-    NSRect chatFrame = NSMakeRect(0, 0, kChatPanelWidth, contentBounds.size.height);
+    NSRect chatFrame = NSMakeRect(0, 0, kChatPanelWidth, contentH);
     self.chatContainer = [[NSView alloc] initWithFrame:chatFrame];
     self.chatContainer.autoresizingMask = NSViewHeightSizable | NSViewMaxXMargin;
     self.chatContainer.identifier = @"chatContainer";
@@ -757,13 +847,22 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
         [[NSColor colorWithCalibratedRed:0.15 green:0.15 blue:0.17 alpha:1.0] CGColor];
     [container addSubview:self.chatContainer];
 
-    // Right side: command panel (top) + GL viewport (bottom)
-    CGFloat rightX = kChatPanelWidth;
-    CGFloat rightWidth = contentBounds.size.width - kChatPanelWidth;
-    CGFloat contentH = contentBounds.size.height;
+    // Object panel on the right (220px wide, full height, dark background)
+    NSRect objFrame = NSMakeRect(contentW - kObjectPanelWidth, 0, kObjectPanelWidth, contentH);
+    self.objectPanelContainer = [[NSView alloc] initWithFrame:objFrame];
+    self.objectPanelContainer.autoresizingMask = NSViewHeightSizable | NSViewMinXMargin;
+    self.objectPanelContainer.identifier = @"objectPanel";
+    self.objectPanelContainer.wantsLayer = YES;
+    self.objectPanelContainer.layer.backgroundColor =
+        [[NSColor colorWithCalibratedRed:0.15 green:0.15 blue:0.17 alpha:1.0] CGColor];
+    [container addSubview:self.objectPanelContainer];
 
-    // Command panel container at the top of the right side
-    NSRect cmdFrame = NSMakeRect(rightX, contentH - kCommandPanelHeight, rightWidth, kCommandPanelHeight);
+    // Center area: between chat (left) and object panel (right)
+    CGFloat centerX = kChatPanelWidth;
+    CGFloat centerWidth = contentW - kChatPanelWidth - kObjectPanelWidth;
+
+    // Command panel container at the top of the center area
+    NSRect cmdFrame = NSMakeRect(centerX, contentH - kCommandPanelHeight, centerWidth, kCommandPanelHeight);
     self.commandPanelContainer = [[NSView alloc] initWithFrame:cmdFrame];
     self.commandPanelContainer.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     self.commandPanelContainer.identifier = @"commandPanel";
@@ -775,7 +874,7 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     // Rendering view below the command panel — Metal if available, else OpenGL.
     // Respect --metal / --opengl flags and PYMOL_RENDERER env var.
     CGFloat glHeight = contentH - kCommandPanelHeight;
-    NSRect glFrame = NSMakeRect(rightX, 0, rightWidth, glHeight);
+    NSRect glFrame = NSMakeRect(centerX, 0, centerWidth, glHeight);
 
     bool tryMetal = (g_requestedBackend != kBackendOpenGL);
     bool tryOpenGL = (g_requestedBackend != kBackendMetal);
@@ -828,27 +927,33 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 - (void)toggleChatPanel {
     static const CGFloat kChatPanelWidth = 320.0;
     static const CGFloat kCommandPanelHeight = 200.0;
+    static const CGFloat kObjectPanelWidth = 220.0;
     NSRect contentBounds = [[self.window contentView] bounds];
 
     self.chatVisible = !self.chatVisible;
 
     CGFloat cmdH = self.commandPanelContainer.isHidden ? 0 : kCommandPanelHeight;
+    CGFloat objW = self.objectPanelContainer.isHidden ? 0 : kObjectPanelWidth;
 
+    CGFloat W = contentBounds.size.width;
     CGFloat H = contentBounds.size.height;
+
+    // Object panel stays anchored to the right
+    [self.objectPanelContainer setFrame:NSMakeRect(W - objW, 0, objW, H)];
 
     if (self.chatVisible) {
         [self.chatContainer setHidden:NO];
         [self.chatContainer setFrame:NSMakeRect(0, 0, kChatPanelWidth, H)];
 
-        CGFloat rightX = kChatPanelWidth;
-        CGFloat rightW = contentBounds.size.width - kChatPanelWidth;
-        [self.commandPanelContainer setFrame:NSMakeRect(rightX, H - cmdH, rightW, cmdH)];
-        [glView setFrame:NSMakeRect(rightX, 0, rightW, H - cmdH)];
+        CGFloat centerX = kChatPanelWidth;
+        CGFloat centerW = W - kChatPanelWidth - objW;
+        [self.commandPanelContainer setFrame:NSMakeRect(centerX, H - cmdH, centerW, cmdH)];
+        [glView setFrame:NSMakeRect(centerX, 0, centerW, H - cmdH)];
     } else {
         [self.chatContainer setHidden:YES];
-        CGFloat rightW = contentBounds.size.width;
-        [self.commandPanelContainer setFrame:NSMakeRect(0, H - cmdH, rightW, cmdH)];
-        [glView setFrame:NSMakeRect(0, 0, rightW, H - cmdH)];
+        CGFloat centerW = W - objW;
+        [self.commandPanelContainer setFrame:NSMakeRect(0, H - cmdH, centerW, cmdH)];
+        [glView setFrame:NSMakeRect(0, 0, centerW, H - cmdH)];
     }
 
     // Force reshape so PyMOL picks up the new viewport size
