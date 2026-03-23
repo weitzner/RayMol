@@ -619,6 +619,16 @@ static void initPython(int argc, const char *argv[]) {
     // Set program name
     PyConfig_SetBytesString(&config, &config.program_name, argv[0]);
 
+    // If a bundled Python framework exists, set PYTHONHOME to it.
+    // This makes the app portable — it finds its stdlib in the bundle
+    // instead of /opt/homebrew/. In development mode (no bundled framework),
+    // this is skipped and the system Python is used.
+    NSString *bundledPython = [[[bundle bundlePath]
+        stringByAppendingPathComponent:@"Contents/Frameworks/Python.framework/Versions/3.14"] retain];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:bundledPython]) {
+        PyConfig_SetBytesString(&config, &config.home, [bundledPython UTF8String]);
+    }
+
     // Initialize Python
     PyStatus status = Py_InitializeFromConfig(&config);
     PyConfig_Clear(&config);
@@ -628,7 +638,6 @@ static void initPython(int argc, const char *argv[]) {
     }
 
     // Register pymol._cmd in sys.modules so "import pymol._cmd" works.
-    // init_cmd() calls PyInit__cmd() and inserts the module as "pymol._cmd".
     init_cmd();
 
     // Add our modules path to sys.path
@@ -637,6 +646,15 @@ static void initPython(int argc, const char *argv[]) {
         PyObject *path = PyUnicode_FromString([modulesPath UTF8String]);
         PyList_Insert(sysPath, 0, path);
         Py_DECREF(path);
+
+        // Add bundled site-packages (numpy, PyObjC, etc.) if present
+        NSString *sitePackages = [resourcePath
+            stringByAppendingPathComponent:@"lib/python3.14/site-packages"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:sitePackages]) {
+            PyObject *spPath = PyUnicode_FromString([sitePackages UTF8String]);
+            PyList_Insert(sysPath, 1, spPath);
+            Py_DECREF(spPath);
+        }
     }
 
     // Set PYMOL_PATH and PYMOL_DATA for pymol module initialization
