@@ -83,6 +83,12 @@ _ACTION_OPTIONS = [
 # ObjC helper classes
 # ---------------------------------------------------------------------------
 
+class ObjPanel_FlippedView(AppKit.NSView):
+    """An NSView subclass with flipped (top-left origin) coordinates."""
+    def isFlipped(self):
+        return True
+
+
 class ObjPanel_ButtonTarget(AppKit.NSObject):
     """Target for popup button actions."""
 
@@ -274,50 +280,56 @@ def _build_row(name, is_selection, enabled):
 
 
 def _rebuild_rows(objects, selections, enabled_set):
-    """Rebuild all rows in the stack view."""
+    """Rebuild all rows using manual top-down layout in the document view."""
     global _retained
 
-    # Remove existing arranged subviews
-    for sv in list(_stack_view.arrangedSubviews()):
-        _stack_view.removeArrangedSubview_(sv)
+    # Remove all subviews from the document view
+    doc = _scroll_view.documentView()
+    for sv in list(doc.subviews()):
         sv.removeFromSuperview()
 
-    # Clear retained ObjC targets (they'll be recreated)
     _retained = []
 
-    # Header
+    row_height = 26
+    header_height = 18
+    w = doc.bounds().size.width
+    y = 0  # Start from top (flipped view)
+
+    # "Objects" header
     header = AppKit.NSTextField.labelWithString_('Objects')
     header.setFont_(AppKit.NSFont.boldSystemFontOfSize_(11))
     header.setTextColor_(_HEADER_COLOR)
-    header.setFrame_(AppKit.NSMakeRect(0, 0, 200, 16))
-    header_container = AppKit.NSView.alloc().initWithFrame_(
-        AppKit.NSMakeRect(0, 0, 220, 18))
-    header.setFrameOrigin_(AppKit.NSMakePoint(6, 1))
-    header_container.addSubview_(header)
-    _stack_view.addArrangedSubview_(header_container)
+    header.setFrame_(AppKit.NSMakeRect(6, y, w - 12, header_height))
+    doc.addSubview_(header)
+    y += header_height + 2
 
     # Object rows
     for name in objects:
         enabled = name in enabled_set
         row = _build_row(name, False, enabled)
-        _stack_view.addArrangedSubview_(row)
+        row.setFrame_(AppKit.NSMakeRect(0, y, w, row_height))
+        doc.addSubview_(row)
+        y += row_height + 1
 
-    # Selection header (if any)
+    # "Selections" header (if any)
     if selections:
+        y += 4
         sel_header = AppKit.NSTextField.labelWithString_('Selections')
         sel_header.setFont_(AppKit.NSFont.boldSystemFontOfSize_(11))
         sel_header.setTextColor_(_HEADER_COLOR)
-        sel_header.setFrame_(AppKit.NSMakeRect(0, 0, 200, 16))
-        sel_container = AppKit.NSView.alloc().initWithFrame_(
-            AppKit.NSMakeRect(0, 0, 220, 18))
-        sel_header.setFrameOrigin_(AppKit.NSMakePoint(6, 1))
-        sel_container.addSubview_(sel_header)
-        _stack_view.addArrangedSubview_(sel_container)
+        sel_header.setFrame_(AppKit.NSMakeRect(6, y, w - 12, header_height))
+        doc.addSubview_(sel_header)
+        y += header_height + 2
 
         for name in selections:
             enabled = name in enabled_set
             row = _build_row(name, True, enabled)
-            _stack_view.addArrangedSubview_(row)
+            row.setFrame_(AppKit.NSMakeRect(0, y, w, row_height))
+            doc.addSubview_(row)
+            y += row_height + 1
+
+    # Resize document view to fit content
+    doc.setFrameSize_(AppKit.NSMakeSize(w, max(y, doc.bounds().size.height)))
 
 
 def _poll_objects():
@@ -385,20 +397,12 @@ def setup(container_view, cmd):
     _scroll_view.setBackgroundColor_(_BG_COLOR)
     _scroll_view.setBorderType_(AppKit.NSNoBorder)
 
-    # Vertical stack view as document view
-    _stack_view = AppKit.NSStackView.alloc().initWithFrame_(
-        AppKit.NSMakeRect(0, 0, bounds.size.width, 0))
-    _stack_view.setOrientation_(AppKit.NSUserInterfaceLayoutOrientationVertical)
-    _stack_view.setAlignment_(AppKit.NSLayoutAttributeLeading)
-    _stack_view.setSpacing_(1)
-    _stack_view.setAutoresizingMask_(AppKit.NSViewWidthSizable)
+    # Flipped document view for top-down layout
+    doc_view = ObjPanel_FlippedView.alloc().initWithFrame_(
+        AppKit.NSMakeRect(0, 0, bounds.size.width, bounds.size.height))
+    doc_view.setAutoresizingMask_(AppKit.NSViewWidthSizable)
 
-    # Flip the stack view so items appear top-down
-    # NSStackView with vertical orientation stacks bottom-up by default,
-    # but using gravity=Top achieves top-down ordering
-    _stack_view.setEdgeInsets_(AppKit.NSEdgeInsetsMake(4, 0, 4, 0))
-
-    _scroll_view.setDocumentView_(_stack_view)
+    _scroll_view.setDocumentView_(doc_view)
     container_view.addSubview_(_scroll_view)
 
     # Start polling timer
