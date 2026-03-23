@@ -1851,6 +1851,13 @@ void SceneRenderMetal(PyMOLGlobals* G)
 
   CScene* I = G->Scene;
 
+  // Metal requires VBO-based CGO optimization, not immediate mode
+  static bool metalConfigDone = false;
+  if (!metalConfigDone) {
+    SettingSetGlobal_b(G, cSetting_use_shaders, true);
+    metalConfigDone = true;
+  }
+
   // --- Update phase (CPU only, no GL) ---
   ExecutiveUpdateSceneMembers(G);
   SceneUpdate(G, false);
@@ -1907,6 +1914,23 @@ void SceneRenderMetal(PyMOLGlobals* G)
   }
 
   // --- Render objects: opaque, then transparent ---
+  {
+    static int logOnce = 0;
+    if (!logOnce && !I->Obj.empty()) {
+      FILE* f = fopen("/tmp/pymol_metal_render.log", "w");
+      if (f) {
+        fprintf(f, "SceneRenderMetal: nObjects=%d use_shaders=%d\n",
+                (int)I->Obj.size(),
+                SettingGetGlobal_b(G, cSetting_use_shaders));
+        fprintf(f, "winX=%d winY=%d aspRat=%f\n", G->Option->winX, G->Option->winY, aspRat);
+        for (auto* obj : I->Obj) {
+          fprintf(f, "  obj: %s type=%d\n", obj->Name, obj->type);
+        }
+        fclose(f);
+      }
+      logOnce = 1;
+    }
+  }
   for (auto pass : {RenderPass::Opaque, RenderPass::Antialias,
                     RenderPass::Transparent}) {
     SceneRenderAll(G, &context, normal, nullptr, pass, false, 0.0f,
