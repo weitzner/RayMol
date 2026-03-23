@@ -651,6 +651,8 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 
 // Mouse and keyboard — same shared helpers as OpenGLView
 - (void)mouseDown:(NSEvent *)e {
+    { static int c=0; if(c<3){ FILE*f=fopen("/tmp/pymol_metal_render.log","a");
+      if(f){NSPoint p=pymolPoint(self,e);fprintf(f,"Metal mouseDown: x=%.0f y=%.0f\n",p.x,p.y);fclose(f);}c++;}}
     int btn = ([e modifierFlags] & NSEventModifierFlagCommand) ? PYMOL_BUTTON_MIDDLE : PYMOL_BUTTON_LEFT;
     handleMouseButton(self, e, btn, PYMOL_BUTTON_DOWN);
 }

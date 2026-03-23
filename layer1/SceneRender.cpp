@@ -1855,6 +1855,8 @@ void SceneRenderMetal(PyMOLGlobals* G)
   static bool metalConfigDone = false;
   if (!metalConfigDone) {
     SettingSetGlobal_b(G, cSetting_use_shaders, true);
+    SettingSetGlobal_i(G, cSetting_internal_gui, 0);
+    SettingSetGlobal_i(G, cSetting_internal_feedback, 0);
     metalConfigDone = true;
   }
 
@@ -1883,7 +1885,9 @@ void SceneRenderMetal(PyMOLGlobals* G)
     G->Renderer->loadMatrixf(mv);
 
     static int logCount = 0;
-    if (logCount < 3 && !I->Obj.empty()) {
+    static float lastMV12 = 0;
+    if (!I->Obj.empty() && (logCount < 3 || fabsf(mv[12] - lastMV12) > 0.001f)) {
+      lastMV12 = mv[12];
       FILE* f = fopen("/tmp/pymol_metal_render.log", "a");
       if (f) {
         fprintf(f, "Scene matrices [%d]: MV=%.4f %.4f %.4f %.4f P=%.4f %.4f %.4f %.4f mv12-14=%.2f %.2f %.2f\n",
