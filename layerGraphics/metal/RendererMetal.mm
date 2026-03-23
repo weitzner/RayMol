@@ -120,6 +120,10 @@ RendererMetal::RendererMetal(id<MTLDevice> device, id<MTLCommandQueue> queue)
     , _drawable(nil)
     , _currentPipeline(nil)
     , _batchPipeline(nil)
+    , _vboPipelineUByte(nil)
+    , _vboPipelineFloat(nil)
+    , _vboVertexFunc(nil)
+    , _vboFragmentFunc(nil)
     , _depthStencilState(nil)
 {
   _modelviewMatrix = identityMatrix();
@@ -219,6 +223,9 @@ fragment float4 batch_fragment(BatchVertexOut in [[stage_in]])
   } else {
     NSLog(@"RendererMetal: failed to compile batch shader: %@", error);
   }
+
+  // Build VBO pipelines for molecular geometry rendering
+  buildVBOPipelines();
 }
 
 RendererMetal::~RendererMetal()
@@ -1108,6 +1115,373 @@ void RendererMetal::pixelStorei(int /*pname*/, int /*param*/)
 {
   // Metal doesn't have pixel store state — alignment is handled
   // explicitly when creating textures and reading pixels.
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - VBO Pipeline
+// ---------------------------------------------------------------------------
+
+void RendererMetal::buildVBOPipelines()
+{
+  // Metal shader for VBO-based molecular geometry (cartoons, surfaces, etc.)
+  // Supports position + normal + color with basic Lambertian lighting.
+  NSString* vboSrc = @R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct VBOVertexIn {
+  float3 position [[attribute(0)]];
+  float3 normal   [[attribute(1)]];
+  float4 color    [[attribute(2)]];
+};
+
+struct VBOUniforms {
+  float4x4 modelview;
+  float4x4 projection;
+};
+
+struct VBOVertexOut {
+  float4 position [[position]];
+  float4 color;
+};
+
+vertex VBOVertexOut vbo_vertex(
+    VBOVertexIn in [[stage_in]],
+    constant VBOUniforms& uniforms [[buffer(1)]])
+{
+  VBOVertexOut out;
+  float4 eyePos = uniforms.modelview * float4(in.position, 1.0);
+  out.position = uniforms.projection * eyePos;
+
+  // Basic directional lighting in eye space
+  float3 eyeNormal = normalize((uniforms.modelview * float4(in.normal, 0.0)).xyz);
+  float3 lightDir = float3(0.0, 0.0, 1.0);
+  float NdotL = max(dot(eyeNormal, lightDir), 0.0);
+  float ambient = 0.25;
+  float lighting = ambient + (1.0 - ambient) * NdotL;
+
+  out.color = float4(in.color.rgb * lighting, in.color.a);
+  return out;
+}
+
+fragment float4 vbo_fragment(VBOVertexOut in [[stage_in]])
+{
+  return in.color;
+}
+)";
+
+  NSError* error = nil;
+  id<MTLLibrary> lib = [_device newLibraryWithSource:vboSrc
+                                             options:nil
+                                               error:&error];
+  if (!lib) {
+    NSLog(@"RendererMetal: failed to compile VBO shader: %@", error);
+    return;
+  }
+
+  _vboVertexFunc = [lib newFunctionWithName:@"vbo_vertex"];
+  _vboFragmentFunc = [lib newFunctionWithName:@"vbo_fragment"];
+  if (!_vboVertexFunc || !_vboFragmentFunc) {
+    NSLog(@"RendererMetal: VBO shader functions not found");
+    return;
+  }
+
+  // Create pipeline for UByte4Norm color format:
+  // position: Float3 @ offset 0, normal: Float3 @ offset 12, color: UChar4Norm @ offset 24
+  // stride = 28
+  {
+    MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+    vd.attributes[0].format = MTLVertexFormatFloat3;
+    vd.attributes[0].offset = 0;
+    vd.attributes[0].bufferIndex = 0;
+    vd.attributes[1].format = MTLVertexFormatFloat3;
+    vd.attributes[1].offset = 12;
+    vd.attributes[1].bufferIndex = 0;
+    vd.attributes[2].format = MTLVertexFormatUChar4Normalized;
+    vd.attributes[2].offset = 24;
+    vd.attributes[2].bufferIndex = 0;
+    vd.layouts[0].stride = 28;
+    vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+    MTLRenderPipelineDescriptor* psd =
+        [[MTLRenderPipelineDescriptor alloc] init];
+    psd.vertexFunction = _vboVertexFunc;
+    psd.fragmentFunction = _vboFragmentFunc;
+    psd.vertexDescriptor = vd;
+    psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    psd.colorAttachments[0].blendingEnabled = YES;
+    psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    psd.colorAttachments[0].destinationRGBBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    psd.colorAttachments[0].destinationAlphaBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+
+    _vboPipelineUByte = [_device newRenderPipelineStateWithDescriptor:psd
+                                                                error:&error];
+    if (!_vboPipelineUByte) {
+      NSLog(@"RendererMetal: failed to create VBO UByte pipeline: %@", error);
+    }
+  }
+
+  // Create pipeline for Float4 color format:
+  // position: Float3 @ offset 0, normal: Float3 @ offset 12, color: Float4 @ offset 24
+  // stride = 40
+  {
+    MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+    vd.attributes[0].format = MTLVertexFormatFloat3;
+    vd.attributes[0].offset = 0;
+    vd.attributes[0].bufferIndex = 0;
+    vd.attributes[1].format = MTLVertexFormatFloat3;
+    vd.attributes[1].offset = 12;
+    vd.attributes[1].bufferIndex = 0;
+    vd.attributes[2].format = MTLVertexFormatFloat4;
+    vd.attributes[2].offset = 24;
+    vd.attributes[2].bufferIndex = 0;
+    vd.layouts[0].stride = 40;
+    vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+    MTLRenderPipelineDescriptor* psd =
+        [[MTLRenderPipelineDescriptor alloc] init];
+    psd.vertexFunction = _vboVertexFunc;
+    psd.fragmentFunction = _vboFragmentFunc;
+    psd.vertexDescriptor = vd;
+    psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    psd.colorAttachments[0].blendingEnabled = YES;
+    psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    psd.colorAttachments[0].destinationRGBBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    psd.colorAttachments[0].destinationAlphaBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+
+    _vboPipelineFloat = [_device newRenderPipelineStateWithDescriptor:psd
+                                                                error:&error];
+    if (!_vboPipelineFloat) {
+      NSLog(@"RendererMetal: failed to create VBO Float pipeline: %@", error);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - VBO Drawing
+// ---------------------------------------------------------------------------
+
+void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
+    const void* data, size_t dataSize, size_t stride,
+    int posOffset, int normalOffset, int colorOffset, int colorType)
+{
+  if (!data || dataSize == 0 || vertexCount <= 0) return;
+  ensureEncoder();
+  if (!_encoder) return;
+
+  // Create temporary Metal buffer from CPU data
+  id<MTLBuffer> vbo = [_device newBufferWithBytes:data
+                                           length:dataSize
+                                          options:MTLResourceStorageModeShared];
+  if (!vbo) return;
+
+  // Build a vertex descriptor matching the VBO layout
+  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+
+  // Position (attribute 0) — always Float3
+  if (posOffset >= 0) {
+    vd.attributes[0].format = MTLVertexFormatFloat3;
+    vd.attributes[0].offset = static_cast<NSUInteger>(posOffset);
+    vd.attributes[0].bufferIndex = 0;
+  }
+
+  // Normal (attribute 1) — always Float3
+  if (normalOffset >= 0) {
+    vd.attributes[1].format = MTLVertexFormatFloat3;
+    vd.attributes[1].offset = static_cast<NSUInteger>(normalOffset);
+    vd.attributes[1].bufferIndex = 0;
+  }
+
+  // Color (attribute 2)
+  if (colorOffset >= 0) {
+    vd.attributes[2].format = (colorType == 0)
+        ? MTLVertexFormatUChar4Normalized : MTLVertexFormatFloat4;
+    vd.attributes[2].offset = static_cast<NSUInteger>(colorOffset);
+    vd.attributes[2].bufferIndex = 0;
+  }
+
+  vd.layouts[0].stride = static_cast<NSUInteger>(stride);
+  vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+  // Build a pipeline for this specific layout. For common layouts, reuse
+  // pre-built pipelines.
+  id<MTLRenderPipelineState> pipeline = nil;
+
+  // Check if layout matches pre-built pipelines
+  if (posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
+    if (colorType == 0 && stride == 28 && _vboPipelineUByte) {
+      pipeline = _vboPipelineUByte;
+    } else if (colorType == 1 && stride == 40 && _vboPipelineFloat) {
+      pipeline = _vboPipelineFloat;
+    }
+  }
+
+  // Fallback: create pipeline on-the-fly (cached by Metal driver)
+  if (!pipeline && _vboVertexFunc && _vboFragmentFunc) {
+    MTLRenderPipelineDescriptor* psd =
+        [[MTLRenderPipelineDescriptor alloc] init];
+    psd.vertexFunction = _vboVertexFunc;
+    psd.fragmentFunction = _vboFragmentFunc;
+    psd.vertexDescriptor = vd;
+    psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    psd.colorAttachments[0].blendingEnabled = YES;
+    psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    psd.colorAttachments[0].destinationRGBBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    psd.colorAttachments[0].destinationAlphaBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+
+    NSError* error = nil;
+    pipeline = [_device newRenderPipelineStateWithDescriptor:psd error:&error];
+    if (!pipeline) {
+      NSLog(@"RendererMetal: VBO drawVBO pipeline creation failed: %@", error);
+      return;
+    }
+  }
+
+  if (!pipeline) return;
+
+  [_encoder setRenderPipelineState:pipeline];
+
+  // Apply depth/stencil
+  applyDepthStencilState();
+  if (_depthStencilState) {
+    [_encoder setDepthStencilState:_depthStencilState];
+  }
+
+  // Bind vertex buffer
+  [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
+
+  // Upload modelview and projection matrices as uniforms at buffer index 1
+  struct {
+    float modelview[16];
+    float projection[16];
+  } matrices;
+  std::memcpy(matrices.modelview, _modelviewMatrix.data(), 64);
+  std::memcpy(matrices.projection, _projectionMatrix.data(), 64);
+  [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
+
+  // Draw
+  [_encoder drawPrimitives:toMTL(mode)
+               vertexStart:0
+               vertexCount:static_cast<NSUInteger>(vertexCount)];
+}
+
+void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
+    const void* vertexData, size_t vertexDataSize, size_t stride,
+    int posOffset, int normalOffset, int colorOffset, int colorType,
+    const void* indexData, size_t indexDataSize)
+{
+  if (!vertexData || !indexData || vertexDataSize == 0 ||
+      indexDataSize == 0 || indexCount <= 0) return;
+  ensureEncoder();
+  if (!_encoder) return;
+
+  // Create temporary Metal buffers
+  id<MTLBuffer> vbo = [_device newBufferWithBytes:vertexData
+                                           length:vertexDataSize
+                                          options:MTLResourceStorageModeShared];
+  id<MTLBuffer> ibo = [_device newBufferWithBytes:indexData
+                                           length:indexDataSize
+                                          options:MTLResourceStorageModeShared];
+  if (!vbo || !ibo) return;
+
+  // Build vertex descriptor
+  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  if (posOffset >= 0) {
+    vd.attributes[0].format = MTLVertexFormatFloat3;
+    vd.attributes[0].offset = static_cast<NSUInteger>(posOffset);
+    vd.attributes[0].bufferIndex = 0;
+  }
+  if (normalOffset >= 0) {
+    vd.attributes[1].format = MTLVertexFormatFloat3;
+    vd.attributes[1].offset = static_cast<NSUInteger>(normalOffset);
+    vd.attributes[1].bufferIndex = 0;
+  }
+  if (colorOffset >= 0) {
+    vd.attributes[2].format = (colorType == 0)
+        ? MTLVertexFormatUChar4Normalized : MTLVertexFormatFloat4;
+    vd.attributes[2].offset = static_cast<NSUInteger>(colorOffset);
+    vd.attributes[2].bufferIndex = 0;
+  }
+  vd.layouts[0].stride = static_cast<NSUInteger>(stride);
+  vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+  // Select or create pipeline (same logic as drawVBO)
+  id<MTLRenderPipelineState> pipeline = nil;
+  if (posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
+    if (colorType == 0 && stride == 28 && _vboPipelineUByte) {
+      pipeline = _vboPipelineUByte;
+    } else if (colorType == 1 && stride == 40 && _vboPipelineFloat) {
+      pipeline = _vboPipelineFloat;
+    }
+  }
+  if (!pipeline && _vboVertexFunc && _vboFragmentFunc) {
+    MTLRenderPipelineDescriptor* psd =
+        [[MTLRenderPipelineDescriptor alloc] init];
+    psd.vertexFunction = _vboVertexFunc;
+    psd.fragmentFunction = _vboFragmentFunc;
+    psd.vertexDescriptor = vd;
+    psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    psd.colorAttachments[0].blendingEnabled = YES;
+    psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    psd.colorAttachments[0].destinationRGBBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    psd.colorAttachments[0].destinationAlphaBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+
+    NSError* error = nil;
+    pipeline = [_device newRenderPipelineStateWithDescriptor:psd error:&error];
+    if (!pipeline) {
+      NSLog(@"RendererMetal: VBO drawVBOIndexed pipeline failed: %@", error);
+      return;
+    }
+  }
+  if (!pipeline) return;
+
+  [_encoder setRenderPipelineState:pipeline];
+
+  applyDepthStencilState();
+  if (_depthStencilState) {
+    [_encoder setDepthStencilState:_depthStencilState];
+  }
+
+  [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
+
+  struct {
+    float modelview[16];
+    float projection[16];
+  } matrices;
+  std::memcpy(matrices.modelview, _modelviewMatrix.data(), 64);
+  std::memcpy(matrices.projection, _projectionMatrix.data(), 64);
+  [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
+
+  [_encoder drawIndexedPrimitives:toMTL(mode)
+                       indexCount:static_cast<NSUInteger>(indexCount)
+                        indexType:MTLIndexTypeUInt32
+                      indexBuffer:ibo
+                indexBufferOffset:0];
+}
+
+void RendererMetal::invalidateVBOCache(uint64_t key)
+{
+  _vboCache.erase(key);
 }
 
 } // namespace pymol

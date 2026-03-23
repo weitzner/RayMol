@@ -126,7 +126,15 @@ public:
    */
   void bufferReplaceData(std::size_t offset, pymol::span<const std::byte> data);
 
+  // CPU data access for non-GL renderers (Metal)
+  const std::byte* cpuData() const { return m_cpuData.data(); }
+  std::size_t cpuDataSize() const { return m_cpuData.size(); }
+  std::size_t cpuStride() const { return m_cpuStride; }
+  const BufferDataDesc& getDesc() const { return m_cpuDesc; }
+  bool hasCPUData() const { return !m_cpuData.empty(); }
+
 private:
+  void retainInterleavedCPUCopy();
 
   /**
    * @return Vertex buffer type (GL_ARRAY_BUFFER)
@@ -181,6 +189,11 @@ private:
   // m_locs is only for interleaved data
   std::vector<GLint> m_locs;
   std::vector<GLint> m_attribmask;
+
+  // CPU-side interleaved copy for non-GL renderers
+  std::vector<std::byte> m_cpuData;
+  std::size_t m_cpuStride{};
+  BufferDataDesc m_cpuDesc;
 };
 
 /**
@@ -215,7 +228,13 @@ public:
    */
   std::uint64_t getBufferID() const override;
 
+  // CPU data access for non-GL renderers (Metal)
+  const std::byte* cpuData() const { return m_cpuData.data(); }
+  std::size_t cpuDataSize() const { return m_cpuData.size(); }
+  bool hasCPUData() const { return !m_cpuData.empty(); }
+
 private:
   void bufferSubData(std::size_t offset, pymol::span<const std::byte> data);
   GLuint m_bufferID{};
+  std::vector<std::byte> m_cpuData;
 };

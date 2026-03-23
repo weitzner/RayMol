@@ -17,9 +17,74 @@
 #include "os_gl.h"
 #include "os_gl_cgo.h"
 
+#include "VertexFormat.h"
+
 #define VAR_FOR_NORMAL pl
 #define VERTEX_NORMAL_SIZE 3
 #define VAR_FOR_NORMAL_CNT_PLUS
+
+// Helper: extract attribute offsets from a VBO's CPU descriptor and draw
+// via the Renderer. Returns true if handled (Metal path), false if not.
+static bool drawVBOViaMetal(pymol::Renderer* renderer, VertexBufferGL* vbo,
+    pymol::PrimitiveType mode, int vertexCount)
+{
+  if (!renderer || !vbo || !vbo->hasCPUData()) return false;
+
+  const auto& desc = vbo->getDesc();
+  size_t stride = vbo->cpuStride();
+  int posOffset = -1, normalOffset = -1, colorOffset = -1;
+  int colorType = 0; // 0 = UByte4Norm, 1 = Float4
+
+  for (const auto& d : desc.descs) {
+    if (d.attr_name == "a_Vertex") {
+      posOffset = static_cast<int>(d.offset);
+    } else if (d.attr_name == "a_Normal") {
+      normalOffset = static_cast<int>(d.offset);
+    } else if (d.attr_name == "a_Color") {
+      colorOffset = static_cast<int>(d.offset);
+      if (d.m_format == VertexFormat::Float4) {
+        colorType = 1;
+      }
+    }
+  }
+
+  renderer->drawVBO(mode, vertexCount,
+      vbo->cpuData(), vbo->cpuDataSize(), stride,
+      posOffset, normalOffset, colorOffset, colorType);
+  return true;
+}
+
+static bool drawVBOIndexedViaMetal(pymol::Renderer* renderer,
+    VertexBufferGL* vbo, IndexBufferGL* ibo,
+    pymol::PrimitiveType mode, int indexCount)
+{
+  if (!renderer || !vbo || !vbo->hasCPUData() ||
+      !ibo || !ibo->hasCPUData()) return false;
+
+  const auto& desc = vbo->getDesc();
+  size_t stride = vbo->cpuStride();
+  int posOffset = -1, normalOffset = -1, colorOffset = -1;
+  int colorType = 0;
+
+  for (const auto& d : desc.descs) {
+    if (d.attr_name == "a_Vertex") {
+      posOffset = static_cast<int>(d.offset);
+    } else if (d.attr_name == "a_Normal") {
+      normalOffset = static_cast<int>(d.offset);
+    } else if (d.attr_name == "a_Color") {
+      colorOffset = static_cast<int>(d.offset);
+      if (d.m_format == VertexFormat::Float4) {
+        colorType = 1;
+      }
+    }
+  }
+
+  renderer->drawVBOIndexed(mode, indexCount,
+      vbo->cpuData(), vbo->cpuDataSize(), stride,
+      posOffset, normalOffset, colorOffset, colorType,
+      ibo->cpuData(), ibo->cpuDataSize());
+  return true;
+}
 
 #ifdef PURE_OPENGL_ES_2
 #define glVertexAttrib4ubv(loc, data) glVertexAttrib4f(loc, \
@@ -506,11 +571,18 @@ static void CGOReorderIndicesWithTransparentInfo(PyMOLGlobals* G, int nindices,
 
 static void CGO_gl_draw_buffers_indexed(CCGORenderer* I, CGO_op_data pc)
 {
-  // VBO-based rendering requires GL — skip when using a non-GL renderer
-  if (I->G->Renderer)
-    return;
-
   auto sp = reinterpret_cast<const cgo::draw::buffers_indexed*>(*pc);
+
+  // Metal path: draw indexed using retained CPU data through the Renderer
+  if (I->G->Renderer) {
+    if (I->isPicking) return; // picking not yet supported in Metal
+    auto* vbo = I->G->ShaderMgr->getGPUBuffer<VertexBufferGL>(sp->vboid);
+    auto* ibo = I->G->ShaderMgr->getGPUBuffer<IndexBufferGL>(sp->iboid);
+    drawVBOIndexedViaMetal(I->G->Renderer, vbo, ibo,
+        glModeToPrimitive(sp->mode), sp->nindices);
+    return;
+  }
+
   int mode = sp->mode, nindices = sp->nindices, nverts = sp->nverts,
       n_data = sp->n_data;
   size_t vboid = sp->vboid, iboid = sp->iboid;
@@ -591,12 +663,18 @@ static void CGO_gl_draw_buffers_indexed(CCGORenderer* I, CGO_op_data pc)
 
 static void CGO_gl_draw_buffers_not_indexed(CCGORenderer* I, CGO_op_data pc)
 {
-  // VBO-based rendering requires GL — skip when using a non-GL renderer
-  if (I->G->Renderer)
-    return;
-
   const cgo::draw::buffers_not_indexed* sp =
       reinterpret_cast<decltype(sp)>(*pc);
+
+  // Metal path: draw using retained CPU data through the Renderer
+  if (I->G->Renderer) {
+    if (I->isPicking) return; // picking not yet supported in Metal
+    auto* vbo = I->G->ShaderMgr->getGPUBuffer<VertexBufferGL>(sp->vboid);
+    drawVBOViaMetal(I->G->Renderer, vbo,
+        glModeToPrimitive(sp->mode), sp->nverts);
+    return;
+  }
+
   int mode = sp->mode;
 
   auto shaderPrg = I->G->ShaderMgr->Get_Current_Shader();
@@ -677,9 +755,20 @@ static void CGO_gl_bind_vbo_for_picking(CCGORenderer* I, CGO_op_data pc)
 
 static void CGO_gl_draw_custom(CCGORenderer* I, CGO_op_data pc)
 {
-  if (I->G->Renderer)
-    return;
   const cgo::draw::custom* sp = reinterpret_cast<decltype(sp)>(*pc);
+  if (I->G->Renderer) {
+    if (I->isPicking) return;
+    auto* vbo = I->G->ShaderMgr->getGPUBuffer<VertexBufferGL>(sp->vboid);
+    if (sp->iboid) {
+      auto* ibo = I->G->ShaderMgr->getGPUBuffer<IndexBufferGL>(sp->iboid);
+      drawVBOIndexedViaMetal(I->G->Renderer, vbo, ibo,
+          glModeToPrimitive(sp->mode), sp->nindices);
+    } else {
+      drawVBOViaMetal(I->G->Renderer, vbo,
+          glModeToPrimitive(sp->mode), sp->nverts);
+    }
+    return;
+  }
 
   auto shaderPrg = I->G->ShaderMgr->Get_Current_Shader();
   if (!shaderPrg) {

@@ -186,6 +186,60 @@ bool VertexBufferGL::seqBufferData() {
   return GLGenBuffer(m_interleavedID, bufferType(), pymol::span{buffer_data});
 }
 
+void VertexBufferGL::retainInterleavedCPUCopy()
+{
+  auto& descs = m_desc.descs;
+  const std::size_t bufferCount = descs.size();
+  if (bufferCount == 0) return;
+
+  // Find vertex count from first attribute with data
+  std::size_t count = 0;
+  for (size_t i = 0; i < bufferCount; ++i) {
+    if (descs[i].data_size > 0 && descs[i].data_ptr) {
+      count = descs[i].data_size / GetSizeOfVertexFormat(descs[i].m_format);
+      break;
+    }
+  }
+  if (count == 0) return;
+
+  // Compute interleaved stride and per-attribute offsets
+  std::size_t stride = 0;
+  std::vector<std::size_t> size_table(bufferCount);
+  std::vector<std::size_t> offsets(bufferCount);
+  std::vector<const uint8_t*> ptr_table(bufferCount);
+
+  m_cpuDesc.descs.clear();
+  m_cpuDesc.descs.reserve(bufferCount);
+
+  for (size_t i = 0; i < bufferCount; ++i) {
+    size_table[i] = GetSizeOfVertexFormat(descs[i].m_format);
+    offsets[i] = stride;
+    stride += size_table[i];
+    int m = stride % 4;
+    stride = (m ? (stride + (4 - m)) : stride);
+    ptr_table[i] = static_cast<const uint8_t*>(descs[i].data_ptr);
+
+    BufferDesc cpuD(descs[i].attr_name, descs[i].m_format,
+        count * size_table[i], nullptr, static_cast<uint32_t>(offsets[i]));
+    m_cpuDesc.descs.push_back(cpuD);
+  }
+  m_cpuDesc.stride = stride;
+  m_cpuStride = stride;
+
+  // Interleave into CPU buffer
+  std::size_t totalSize = count * stride;
+  m_cpuData.resize(totalSize, std::byte{0});
+
+  for (size_t v = 0; v < count; ++v) {
+    for (size_t i = 0; i < bufferCount; ++i) {
+      if (ptr_table[i]) {
+        auto dest = m_cpuData.data() + v * stride + offsets[i];
+        memcpy(dest, ptr_table[i] + v * size_table[i], size_table[i]);
+      }
+    }
+  }
+}
+
 bool VertexBufferGL::interleaveBufferData()
 {
   auto& descs = m_desc.descs;
@@ -244,6 +298,10 @@ bool VertexBufferGL::interleaveBufferData()
 
 bool VertexBufferGL::evaluate()
 {
+  // Retain an interleaved CPU copy for non-GL renderers (Metal).
+  // Must be called before GL upload since data_ptrs may be freed after.
+  retainInterleavedCPUCopy();
+
   switch (m_layout) {
   case VertexBufferLayout::Separate:
     return sepBufferData();
@@ -273,7 +331,21 @@ bool VertexBufferGL::bufferData(
   m_desc = std::move(desc);
   desc_glIDs = std::vector<GLuint>(m_desc.descs.size());
   m_layout = VertexBufferLayout::Interleaved;
-  m_stride = desc.stride.value_or(0);
+  m_stride = m_desc.stride.value_or(0);
+
+  // Retain CPU copy of pre-interleaved data
+  if (data && len > 0) {
+    auto bytes = static_cast<const std::byte*>(data);
+    m_cpuData.assign(bytes, bytes + len);
+    m_cpuStride = m_stride;
+    m_cpuDesc.descs = m_desc.descs;
+    m_cpuDesc.stride = m_stride;
+    // Clear data_ptrs in CPU desc (not valid after this call)
+    for (auto& d : m_cpuDesc.descs) {
+      d.data_ptr = nullptr;
+    }
+  }
+
   auto span = RawDataToByteSpan(data, len);
   return GLGenBuffer(m_interleavedID, bufferType(), span);
 }
@@ -316,7 +388,10 @@ void IndexBufferGL::bufferSubData(
 
 void IndexBufferGL::copyFrom(pymol::span<const std::uint32_t> data)
 {
+  // Retain CPU copy for non-GL renderers (Metal)
   auto bytesSpan = pymol::as_bytes(data);
+  m_cpuData.assign(bytesSpan.data(), bytesSpan.data() + bytesSpan.size());
+
   if (!m_bufferID) {
     GLGenBuffer(m_bufferID, bufferType(), bytesSpan);
   } else {

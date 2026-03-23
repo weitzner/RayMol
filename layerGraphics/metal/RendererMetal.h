@@ -119,6 +119,17 @@ public:
       int x, int y, int w, int h, int format, int type, void* pixels) override;
   void pixelStorei(int pname, int param) override;
 
+  // VBO rendering
+  void drawVBO(PrimitiveType mode, int vertexCount,
+      const void* data, size_t dataSize, size_t stride,
+      int posOffset, int normalOffset, int colorOffset,
+      int colorType) override;
+  void drawVBOIndexed(PrimitiveType mode, int indexCount,
+      const void* vertexData, size_t vertexDataSize, size_t stride,
+      int posOffset, int normalOffset, int colorOffset, int colorType,
+      const void* indexData, size_t indexDataSize) override;
+  void invalidateVBOCache(uint64_t key) override;
+
 private:
   // 4x4 matrix stored column-major
   using Mat4 = std::array<float, 16>;
@@ -131,6 +142,7 @@ private:
   void ensureEncoder();
   void applyDepthStencilState();
   MTLPrimitiveType toMTL(PrimitiveType t);
+  void buildVBOPipelines();
 
   // Vertex attribute description
   struct VertexAttrib {
@@ -171,6 +183,10 @@ private:
   // Pipeline state cache
   id<MTLRenderPipelineState> _currentPipeline;
   id<MTLRenderPipelineState> _batchPipeline;  // built-in batch shader pipeline
+  id<MTLRenderPipelineState> _vboPipelineUByte; // VBO with UByte4Norm color
+  id<MTLRenderPipelineState> _vboPipelineFloat; // VBO with Float4 color
+  id<MTLFunction> _vboVertexFunc;
+  id<MTLFunction> _vboFragmentFunc;
   uint32_t _currentProgram = 0;
 
   // Depth/stencil state
@@ -232,6 +248,9 @@ private:
   // Line width / point size
   float _lineWidth = 1.0f;
   float _pointSize = 1.0f;
+
+  // VBO buffer cache (maps external key → Metal buffer)
+  std::unordered_map<uint64_t, id<MTLBuffer>> _vboCache;
 };
 
 } // namespace pymol

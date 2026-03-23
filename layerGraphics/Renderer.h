@@ -159,6 +159,22 @@ public:
   virtual void readPixels(
       int x, int y, int w, int h, int format, int type, void* pixels) = 0;
   virtual void pixelStorei(int pname, int param) = 0;
+
+  // VBO rendering — draws interleaved vertex data with per-attribute offsets.
+  // attrOffsets: byte offsets within stride for [pos, normal, color].
+  // Use -1 for missing attributes.
+  // colorType: 0 = UByte4Norm, 1 = Float4
+  virtual void drawVBO(PrimitiveType mode, int vertexCount,
+      const void* data, size_t dataSize, size_t stride,
+      int posOffset, int normalOffset, int colorOffset, int colorType) {}
+  virtual void drawVBOIndexed(PrimitiveType mode, int indexCount,
+      const void* vertexData, size_t vertexDataSize, size_t stride,
+      int posOffset, int normalOffset, int colorOffset, int colorType,
+      const void* indexData, size_t indexDataSize) {}
+
+  // VBO buffer cache — returns a cached buffer ID for the given key,
+  // creating it from data if not already cached.
+  virtual void invalidateVBOCache(uint64_t key) {}
 };
 
 } // namespace pymol
