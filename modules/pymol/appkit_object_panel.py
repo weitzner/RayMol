@@ -353,7 +353,16 @@ def _poll_objects():
         except Exception:
             return
 
-    current = objects + ['|'] + selections
+    # Include selection counts in the comparison key so the panel
+    # updates when selection content changes (not just names)
+    sel_counts = []
+    for s in selections:
+        try:
+            sel_counts.append(_cmd.count_atoms(s))
+        except:
+            sel_counts.append(0)
+
+    current = objects + ['|'] + selections + ['#'] + [str(c) for c in sel_counts]
     if current == _prev_names:
         return
 

@@ -76,6 +76,8 @@ def pick_at(ndc_x, ndc_y, aspect):
             for radius in [3, 6, 10, 20]:
                 n = cmd.select('sele', 'byres ((all and not _pick_tmp) within %d of _pick_tmp)' % radius)
                 if n > 0:
+                    # Show the selection indicator
+                    cmd.enable('sele')
                     break
         finally:
             try:
