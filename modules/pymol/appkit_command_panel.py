@@ -581,3 +581,27 @@ class _FeedbackTimerTarget(AppKit.NSObject):
 
 
 _retained.append(None)  # placeholder; actual instance added in setup()
+
+
+def setup_buttons_only(container_view, cmd):
+    """Build only the button panel (no log/input) in the given container."""
+    global _cmd
+    _cmd = cmd
+    container_view.setWantsLayer_(True)
+    container_view.layer().setBackgroundColor_(_BG_COLOR.CGColor())
+    _build_button_panel(container_view)
+
+
+def setup_log_only(container_view, cmd):
+    """Build only the log area + command input in the given container."""
+    global _cmd, _feedback_timer
+    _cmd = cmd
+    container_view.setWantsLayer_(True)
+    container_view.layer().setBackgroundColor_(_BG_COLOR.CGColor())
+    _build_log_area(container_view)
+
+    # Start feedback polling timer
+    _feedback_timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        0.1, _FeedbackTimerTarget.alloc().init(), b'pollFeedback:', None, True)
+    AppKit.NSRunLoop.currentRunLoop().addTimer_forMode_(
+        _feedback_timer, AppKit.NSEventTrackingRunLoopMode)

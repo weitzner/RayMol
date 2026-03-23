@@ -84,6 +84,7 @@ static RendererBackend g_requestedBackend = kBackendAuto;
 @property (strong) NSView *chatContainer;
 @property (strong) NSView *commandPanelContainer;
 @property (strong) NSView *objectPanelContainer;
+@property (strong) NSView *logPanelContainer;
 @property (assign) BOOL chatVisible;
 @property (assign) BOOL usingMetal;
 - (void)toggleChatPanel;
@@ -303,12 +304,14 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     PyRun_SimpleString(
         "import AppKit\n"
         "from pymol import appkit_command_panel\n"
+        "_c = __import__('pymol').cmd\n"
         "for _win in AppKit.NSApp.windows():\n"
         "    if _win.title() == 'PyMOL Viewer':\n"
         "        for _sv in _win.contentView().subviews():\n"
         "            if _sv.identifier() == 'commandPanel':\n"
-        "                appkit_command_panel.setup(_sv, __import__('pymol').cmd)\n"
-        "                break\n"
+        "                appkit_command_panel.setup_buttons_only(_sv, _c)\n"
+        "            elif _sv.identifier() == 'logPanel':\n"
+        "                appkit_command_panel.setup_log_only(_sv, _c)\n"
         "        break\n"
     );
 
@@ -574,12 +577,14 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     PyRun_SimpleString(
         "import AppKit\n"
         "from pymol import appkit_command_panel\n"
+        "_c = __import__('pymol').cmd\n"
         "for _win in AppKit.NSApp.windows():\n"
         "    if _win.title() == 'PyMOL Viewer':\n"
         "        for _sv in _win.contentView().subviews():\n"
         "            if _sv.identifier() == 'commandPanel':\n"
-        "                appkit_command_panel.setup(_sv, __import__('pymol').cmd)\n"
-        "                break\n"
+        "                appkit_command_panel.setup_buttons_only(_sv, _c)\n"
+        "            elif _sv.identifier() == 'logPanel':\n"
+        "                appkit_command_panel.setup_log_only(_sv, _c)\n"
         "        break\n"
     );
 
@@ -865,8 +870,19 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     CGFloat centerX = kChatPanelWidth;
     CGFloat centerWidth = contentW - kChatPanelWidth - kObjectPanelWidth;
 
-    // Rendering view fills the center area (no separate command panel above)
-    CGFloat glHeight = contentH;
+    // Log panel at the top of the center area (log + command input)
+    static const CGFloat kLogPanelHeight = 150.0;
+    NSRect logFrame = NSMakeRect(centerX, contentH - kLogPanelHeight, centerWidth, kLogPanelHeight);
+    self.logPanelContainer = [[NSView alloc] initWithFrame:logFrame];
+    self.logPanelContainer.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    self.logPanelContainer.identifier = @"logPanel";
+    self.logPanelContainer.wantsLayer = YES;
+    self.logPanelContainer.layer.backgroundColor =
+        [[NSColor colorWithCalibratedRed:0.15 green:0.15 blue:0.17 alpha:1.0] CGColor];
+    [container addSubview:self.logPanelContainer];
+
+    // Rendering view below the log panel
+    CGFloat glHeight = contentH - kLogPanelHeight;
     NSRect glFrame = NSMakeRect(centerX, 0, centerWidth, glHeight);
 
     bool tryMetal = (g_requestedBackend != kBackendOpenGL);
@@ -934,16 +950,20 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     [self.commandPanelContainer setFrame:NSMakeRect(rightX, H - kButtonAreaHeight, objW, kButtonAreaHeight)];
     [self.objectPanelContainer setFrame:NSMakeRect(rightX, 0, objW, H - kButtonAreaHeight)];
 
+    static const CGFloat kLogPanelHeight = 150.0;
+
     if (self.chatVisible) {
         [self.chatContainer setHidden:NO];
         [self.chatContainer setFrame:NSMakeRect(0, 0, kChatPanelWidth, H)];
         CGFloat centerX = kChatPanelWidth;
         CGFloat centerW = W - kChatPanelWidth - objW;
-        [glView setFrame:NSMakeRect(centerX, 0, centerW, H)];
+        [self.logPanelContainer setFrame:NSMakeRect(centerX, H - kLogPanelHeight, centerW, kLogPanelHeight)];
+        [glView setFrame:NSMakeRect(centerX, 0, centerW, H - kLogPanelHeight)];
     } else {
         [self.chatContainer setHidden:YES];
         CGFloat centerW = W - objW;
-        [glView setFrame:NSMakeRect(0, 0, centerW, H)];
+        [self.logPanelContainer setFrame:NSMakeRect(0, H - kLogPanelHeight, centerW, kLogPanelHeight)];
+        [glView setFrame:NSMakeRect(0, 0, centerW, H - kLogPanelHeight)];
     }
 
     // Force reshape so PyMOL picks up the new viewport size
