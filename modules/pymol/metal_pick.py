@@ -50,13 +50,38 @@ def pick_at(ndc_x, ndc_y, aspect):
         wy = R[0][1] * px + R[1][1] * py + R[2][1] * pz + oy
         wz = R[0][2] * px + R[1][2] * py + R[2][2] * pz + oz
 
+        # Log the unprojected point for debugging
+        try:
+            center = cmd.get_position()
+            with open('/tmp/pymol_pick.log', 'a') as f:
+                f.write('pick: ndc=(%.2f,%.2f) world=(%.2f,%.2f,%.2f) center=%s\n' %
+                        (ndc_x, ndc_y, wx, wy, wz, center))
+                f.write('  view: tx=%.2f ty=%.2f tz=%.2f ox=%.2f oy=%.2f oz=%.2f\n' %
+                        (tx, ty, tz, ox, oy, oz))
+                f.write('  fov=%.1f dist=%.1f half_w=%.1f half_h=%.1f\n' %
+                        (fov, dist, half_w, half_h))
+        except:
+            pass
+
         # Create a temporary pseudoatom at the unprojected point,
-        # then select the nearest real atom within range
+        # then select the nearest real atom within range.
+        # Use try/finally to ensure cleanup.
+        try:
+            cmd.delete('_pick_tmp')
+        except:
+            pass
         cmd.pseudoatom('_pick_tmp', pos=[wx, wy, wz])
-        n = cmd.select('sele', 'first (all and not _pick_tmp) within 5 of _pick_tmp')
-        if n == 0:
-            n = cmd.select('sele', 'first (all and not _pick_tmp) within 10 of _pick_tmp')
-        cmd.delete('_pick_tmp')
+        try:
+            # Try increasingly large radii
+            for radius in [3, 6, 10, 20]:
+                n = cmd.select('sele', 'byres ((all and not _pick_tmp) within %d of _pick_tmp)' % radius)
+                if n > 0:
+                    break
+        finally:
+            try:
+                cmd.delete('_pick_tmp')
+            except:
+                pass
 
     except Exception as e:
         try:
