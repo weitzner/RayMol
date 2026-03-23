@@ -468,10 +468,18 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
         // Enable Retina
         self.layer.contentsScale = [[NSScreen mainScreen] backingScaleFactor];
 
-        // Initialize PyMOL
-        [self initPyMOL];
+        // PyMOL init is deferred to viewDidMoveToWindow so the
+        // window subview hierarchy (chatContainer, commandPanel) exists.
+        _initialized = NO;
     }
     return self;
+}
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    if (self.window && !_initialized) {
+        [self initPyMOL];
+    }
 }
 
 - (void)initPyMOL {
