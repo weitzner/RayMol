@@ -203,6 +203,12 @@ void SceneProjectionMatrix(PyMOLGlobals* G, float front, float back, float aspRa
  */
 void SceneRender(PyMOLGlobals* G, const SceneRenderInfo& renderInfo)
 {
+  // When Metal is active, skip the GL-heavy render pipeline.
+  // Metal rendering is handled by RendererMetal via drawInMTKView.
+  if (G->Renderer) {
+    return;
+  }
+
   /* think in terms of the camera's world */
   CScene* I = G->Scene;
   float normal[4] = {0.0, 0.0, 1.0, 0.0};

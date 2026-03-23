@@ -2317,22 +2317,25 @@ void PyMOL_DrawWithoutLock(CPyMOL * I)
       if (!G->Renderer) setup_gl_state();
 
       if(!I->DrawnFlag) {
-        SceneSetCardInfo(G, (char *) glGetString(GL_VENDOR),
-                         (char *) glGetString(GL_RENDERER),
-                         (char *) glGetString(GL_VERSION));
-        if(G->Option->show_splash && !G->Option->quiet) {
-
-          PRINTFB(G, FB_OpenGL, FB_Results)
-            " OpenGL graphics engine:\n"
-            "  GL_VENDOR:   %s\n"
-            "  GL_RENDERER: %s\n"
-            "  GL_VERSION:  %s\n",
-            (char *) glGetString(GL_VENDOR),
-            (char *) glGetString(GL_RENDERER),
-            (char *) glGetString(GL_VERSION) ENDFB(G);
-          if(Feedback(G, FB_OpenGL, FB_Blather)) {
-            printf("  GL_EXTENSIONS: %s\n", (char *) glGetString(GL_EXTENSIONS));
+        if (!G->Renderer) {
+          SceneSetCardInfo(G, (char *) glGetString(GL_VENDOR),
+                           (char *) glGetString(GL_RENDERER),
+                           (char *) glGetString(GL_VERSION));
+          if(G->Option->show_splash && !G->Option->quiet) {
+            PRINTFB(G, FB_OpenGL, FB_Results)
+              " OpenGL graphics engine:\n"
+              "  GL_VENDOR:   %s\n"
+              "  GL_RENDERER: %s\n"
+              "  GL_VERSION:  %s\n",
+              (char *) glGetString(GL_VENDOR),
+              (char *) glGetString(GL_RENDERER),
+              (char *) glGetString(GL_VERSION) ENDFB(G);
+            if(Feedback(G, FB_OpenGL, FB_Blather)) {
+              printf("  GL_EXTENSIONS: %s\n", (char *) glGetString(GL_EXTENSIONS));
+            }
           }
+        } else {
+          SceneSetCardInfo(G, "Apple", "Metal", "1.0");
         }
         I->DrawnFlag = true;
       }
