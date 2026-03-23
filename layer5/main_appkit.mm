@@ -520,24 +520,24 @@ static PyMOLOpenGLView *glView = nullptr;
         [[NSColor colorWithCalibratedRed:0.15 green:0.15 blue:0.17 alpha:1.0] CGColor];
     [container addSubview:self.chatContainer];
 
-    // Right side: GL viewport (top) + command panel (bottom)
+    // Right side: command panel (top) + GL viewport (bottom)
     CGFloat rightX = kChatPanelWidth;
     CGFloat rightWidth = contentBounds.size.width - kChatPanelWidth;
+    CGFloat contentH = contentBounds.size.height;
 
-    // Command panel container at the bottom of the right side
-    NSRect cmdFrame = NSMakeRect(rightX, 0, rightWidth, kCommandPanelHeight);
+    // Command panel container at the top of the right side
+    NSRect cmdFrame = NSMakeRect(rightX, contentH - kCommandPanelHeight, rightWidth, kCommandPanelHeight);
     self.commandPanelContainer = [[NSView alloc] initWithFrame:cmdFrame];
-    self.commandPanelContainer.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.commandPanelContainer.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     self.commandPanelContainer.identifier = @"commandPanel";
     self.commandPanelContainer.wantsLayer = YES;
     self.commandPanelContainer.layer.backgroundColor =
         [[NSColor colorWithCalibratedRed:0.15 green:0.15 blue:0.17 alpha:1.0] CGColor];
     [container addSubview:self.commandPanelContainer];
 
-    // GL view above the command panel
-    CGFloat glY = kCommandPanelHeight;
-    CGFloat glHeight = contentBounds.size.height - kCommandPanelHeight;
-    NSRect glFrame = NSMakeRect(rightX, glY, rightWidth, glHeight);
+    // GL view below the command panel
+    CGFloat glHeight = contentH - kCommandPanelHeight;
+    NSRect glFrame = NSMakeRect(rightX, 0, rightWidth, glHeight);
     glView = [[PyMOLOpenGLView alloc] initWithFrame:glFrame];
     glView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [container addSubview:glView];
@@ -565,22 +565,21 @@ static PyMOLOpenGLView *glView = nullptr;
 
     CGFloat cmdH = self.commandPanelContainer.isHidden ? 0 : kCommandPanelHeight;
 
+    CGFloat H = contentBounds.size.height;
+
     if (self.chatVisible) {
-        // Show the chat panel
         [self.chatContainer setHidden:NO];
-        NSRect chatFrame = NSMakeRect(0, 0, kChatPanelWidth, contentBounds.size.height);
-        [self.chatContainer setFrame:chatFrame];
+        [self.chatContainer setFrame:NSMakeRect(0, 0, kChatPanelWidth, H)];
 
         CGFloat rightX = kChatPanelWidth;
         CGFloat rightW = contentBounds.size.width - kChatPanelWidth;
-        [self.commandPanelContainer setFrame:NSMakeRect(rightX, 0, rightW, cmdH)];
-        [glView setFrame:NSMakeRect(rightX, cmdH, rightW, contentBounds.size.height - cmdH)];
+        [self.commandPanelContainer setFrame:NSMakeRect(rightX, H - cmdH, rightW, cmdH)];
+        [glView setFrame:NSMakeRect(rightX, 0, rightW, H - cmdH)];
     } else {
-        // Hide the chat panel
         [self.chatContainer setHidden:YES];
         CGFloat rightW = contentBounds.size.width;
-        [self.commandPanelContainer setFrame:NSMakeRect(0, 0, rightW, cmdH)];
-        [glView setFrame:NSMakeRect(0, cmdH, rightW, contentBounds.size.height - cmdH)];
+        [self.commandPanelContainer setFrame:NSMakeRect(0, H - cmdH, rightW, cmdH)];
+        [glView setFrame:NSMakeRect(0, 0, rightW, H - cmdH)];
     }
 
     // Force reshape so PyMOL picks up the new viewport size

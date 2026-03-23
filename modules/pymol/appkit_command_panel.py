@@ -134,10 +134,9 @@ def _poll_feedback_(timer):
 # Input field delegate
 # ---------------------------------------------------------------------------
 
-class InputDelegate(AppKit.NSObject):
+class CommandInputDelegate(AppKit.NSObject):
     """Handles Enter, Up/Down arrow, and Tab in the command input field."""
 
-    @objc.typedSelector(b'B@:@@')
     def control_textView_doCommandBySelector_(self, control, textView, sel):
         global _history_index
 
@@ -200,7 +199,7 @@ class InputDelegate(AppKit.NSObject):
 # Button action target
 # ---------------------------------------------------------------------------
 
-class ButtonTarget(AppKit.NSObject):
+class CommandButtonTarget(AppKit.NSObject):
     """ObjC target for button actions."""
 
     _command = objc.ivar('_command')
@@ -269,13 +268,91 @@ def _make_button(title, command, frame):
         title, attrs)
     btn.setAttributedTitle_(astr)
 
-    target = ButtonTarget.alloc().init()
+    target = CommandButtonTarget.alloc().init()
     target._pymol_command = command
     _retained.append(target)
     btn.setTarget_(target)
     btn.setAction_(b'buttonClicked:')
 
     return btn
+
+
+def _make_draw_ray_popup(frame):
+    """Create a popup button with Draw/Ray options."""
+    popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(frame, True)
+    popup.setFont_(AppKit.NSFont.systemFontOfSize_(10))
+    popup.setBezelStyle_(AppKit.NSBezelStyleSmallSquare)
+
+    # First item is the title (shown when pullsDown=True)
+    popup.addItemWithTitle_("Draw/Ray")
+    popup.addItemWithTitle_("Draw")
+    popup.addItemWithTitle_("Ray")
+    popup.addItemWithTitle_("Ray (High Quality)")
+    popup.addItemWithTitle_("Draw (Width x Height)")
+
+    target = _DrawRayTarget.alloc().init()
+    _retained.append(target)
+    popup.setTarget_(target)
+    popup.setAction_(b'menuSelected:')
+
+    return popup
+
+
+class _DrawRayTarget(AppKit.NSObject):
+    """Target for the Draw/Ray popup button."""
+
+    def menuSelected_(self, sender):
+        idx = sender.indexOfSelectedItem()
+        if idx == 1:    # Draw
+            _do("draw")
+        elif idx == 2:  # Ray
+            _do("ray async=1")
+        elif idx == 3:  # Ray (High Quality)
+            _do("ray async=1, renderer=0")
+        elif idx == 4:  # Draw (Width x Height)
+            # Show a dialog for custom dimensions
+            self._showDimensionDialog()
+
+    def _showDimensionDialog(self):
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("Draw/Ray with Custom Size")
+        alert.setInformativeText_("Enter width and height in pixels:")
+        alert.addButtonWithTitle_("Ray")
+        alert.addButtonWithTitle_("Draw")
+        alert.addButtonWithTitle_("Cancel")
+
+        # Create accessory view with width/height fields
+        container = AppKit.NSView.alloc().initWithFrame_(
+            AppKit.NSMakeRect(0, 0, 200, 60))
+
+        wLabel = AppKit.NSTextField.labelWithString_("Width:")
+        wLabel.setFrame_(AppKit.NSMakeRect(0, 32, 50, 22))
+        container.addSubview_(wLabel)
+
+        wField = AppKit.NSTextField.alloc().initWithFrame_(
+            AppKit.NSMakeRect(55, 32, 140, 22))
+        wField.setStringValue_("1920")
+        container.addSubview_(wField)
+
+        hLabel = AppKit.NSTextField.labelWithString_("Height:")
+        hLabel.setFrame_(AppKit.NSMakeRect(0, 4, 50, 22))
+        container.addSubview_(hLabel)
+
+        hField = AppKit.NSTextField.alloc().initWithFrame_(
+            AppKit.NSMakeRect(55, 4, 140, 22))
+        hField.setStringValue_("1080")
+        container.addSubview_(hField)
+
+        alert.setAccessoryView_(container)
+        alert.window().setInitialFirstResponder_(wField)
+
+        result = alert.runModal()
+        w = wField.stringValue().strip()
+        h = hField.stringValue().strip()
+        if result == AppKit.NSAlertFirstButtonReturn:
+            _do(f"ray {w}, {h}, async=1")
+        elif result == AppKit.NSAlertSecondButtonReturn:
+            _do(f"draw {w}, {h}")
 
 
 def _build_button_panel(parent_view):
@@ -289,16 +366,16 @@ def _build_button_panel(parent_view):
     parent_view.layer().setBackgroundColor_(_BG_COLOR.CGColor())
 
     # Button definitions: rows of (title, command)
+    # Matches the PyMOL internal GUI button layout
     rows = [
         [("Reset", "reset"), ("Zoom", "zoom animate=-1"),
-         ("Ray", "ray async=1"), ("Rock", "rock")],
+         ("Orient", "orient animate=1"), ("Draw/Ray", "__draw_ray_popup__")],
         [("Unpick", "unpick"), ("Deselect", "deselect"),
-         (None, None), ("Get View", "__get_view__")],
-        [("|<", "rewind"), ("<", "backward"), ("Stop", "mstop"),
-         ("Play", "mplay"), (">", "forward"), (">|", "ending"),
-         ("MClear", "mclear")],
-        [("Command", "__toggle_log__"), (None, None),
-         ("Builder", "wizard demo")],
+         ("Rock", "rock"), ("Get View", "__get_view__")],
+        [("|<", "rewind"), ("Stop", "mstop"),
+         ("Play", "mplay"), (">|", "ending"), ("MClear", "mclear")],
+        [("Builder", "wizard demo"), ("Properties", "set_key F1"),
+         ("Rebuild", "rebuild")],
     ]
 
     btn_h = 26
@@ -320,7 +397,10 @@ def _build_button_panel(parent_view):
 
         for title, command in active:
             frame = ((x, y), (btn_w, btn_h))
-            btn = _make_button(title, command, frame)
+            if command == '__draw_ray_popup__':
+                btn = _make_draw_ray_popup(frame)
+            else:
+                btn = _make_button(title, command, frame)
             btn.setAutoresizingMask_(AppKit.NSViewWidthSizable)
             parent_view.addSubview_(btn)
             x += btn_w + padding
@@ -373,7 +453,7 @@ def _build_log_area(parent_view):
     _input_field.setAutoresizingMask_(
         AppKit.NSViewWidthSizable)
 
-    _delegate = InputDelegate.alloc().init()
+    _delegate = CommandInputDelegate.alloc().init()
     _retained.append(_delegate)
     _input_field.setDelegate_(_delegate)
     parent_view.addSubview_(_input_field)
