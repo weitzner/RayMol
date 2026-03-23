@@ -800,7 +800,7 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     static const CGFloat kChatPanelWidth = 320.0;
     static const CGFloat kCommandPanelHeight = 200.0;
-    static const CGFloat kObjectPanelWidth = 220.0;
+    static const CGFloat kObjectPanelWidth = 280.0;
 
     // Create window
     NSRect frame = NSMakeRect(100, 100, 1280, 768);
@@ -918,7 +918,7 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 - (void)toggleChatPanel {
     static const CGFloat kChatPanelWidth = 320.0;
     static const CGFloat kCommandPanelHeight = 200.0;
-    static const CGFloat kObjectPanelWidth = 220.0;
+    static const CGFloat kObjectPanelWidth = 280.0;
     NSRect contentBounds = [[self.window contentView] bounds];
 
     self.chatVisible = !self.chatVisible;

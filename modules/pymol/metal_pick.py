@@ -72,11 +72,22 @@ def pick_at(ndc_x, ndc_y, aspect):
             pass
         cmd.pseudoatom('_pick_tmp', pos=[wx, wy, wz])
         try:
-            # Try increasingly large radii
+            # Try increasingly large radii to find nearest atoms
             for radius in [3, 6, 10, 20]:
-                n = cmd.select('sele', 'byres ((all and not _pick_tmp) within %d of _pick_tmp)' % radius)
-                if n > 0:
-                    # Show the selection indicator
+                # Check if sele already exists and has atoms — add to it
+                try:
+                    existing = cmd.count_atoms('sele')
+                except:
+                    existing = 0
+
+                if existing > 0:
+                    # Accumulate: add new residue to existing selection
+                    n = cmd.select('sele', 'sele or byres ((all and not _pick_tmp) within %d of _pick_tmp)' % radius)
+                else:
+                    # First pick: create new selection
+                    n = cmd.select('sele', 'byres ((all and not _pick_tmp) within %d of _pick_tmp)' % radius)
+
+                if n > existing:
                     cmd.enable('sele')
                     break
         finally:
