@@ -666,7 +666,7 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
         PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
         extern void SceneRotate(PyMOLGlobals*, float, float, float, float, bool);
         SceneRotate(G, dx, 0.0f, 1.0f, 0.0f, true);  // horizontal = Y rotation
-        SceneRotate(G, dy, 1.0f, 0.0f, 0.0f, true);  // vertical = X rotation
+        SceneRotate(G, -dy, 1.0f, 0.0f, 0.0f, true);  // vertical = X rotation (inverted)
     }
 }
 - (void)rightMouseDown:(NSEvent *)e  {
