@@ -280,9 +280,7 @@ static PyMOLOpenGLView *glView = nullptr;
     NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
     // Convert to backing (pixel) coordinates for Retina
     loc = [self convertPointToBacking:loc];
-    // PyMOL uses top-left origin; backing coords use bottom-left
-    NSRect pixelBounds = [self convertRectToBacking:[self bounds]];
-    loc.y = pixelBounds.size.height - loc.y;
+    // NSView uses bottom-left origin, same as OpenGL/PyMOL mouse coords
     return loc;
 }
 
