@@ -7,6 +7,8 @@
 #include "Feedback.h"
 #include "GLVertexBuffer.h"
 #include "GraphicsUtil.h"
+#include "Renderer.h"
+#include "RendererGL.h"
 #include "Scene.h"
 #include "SceneDef.h"
 #include "ShaderMgr.h"
@@ -30,6 +32,25 @@ constexpr unsigned VERTEX_PICKCOLOR_SIZE = VERTEX_PICKCOLOR_RGBA_SIZE + //
 constexpr unsigned VERTEX_ACCESSIBILITY_SIZE = 1;
 
 /* ======== GL Rendering ======== */
+
+static pymol::Renderer& getBatchRenderer()
+{
+  static pymol::RendererGL instance;
+  return instance;
+}
+
+static pymol::PrimitiveType glModeToPrimitive(int mode)
+{
+  switch (mode) {
+  case GL_POINTS: return pymol::PrimitiveType::Points;
+  case GL_LINES: return pymol::PrimitiveType::Lines;
+  case GL_LINE_STRIP: return pymol::PrimitiveType::LineStrip;
+  case GL_TRIANGLES: return pymol::PrimitiveType::Triangles;
+  case GL_TRIANGLE_STRIP: return pymol::PrimitiveType::TriangleStrip;
+  case GL_TRIANGLE_FAN: return pymol::PrimitiveType::TriangleFan;
+  default: return pymol::PrimitiveType::Triangles;
+  }
+}
 
 static int CGO_gl_begin_WARNING_CALLED = false,
            CGO_gl_end_WARNING_CALLED = false,
@@ -375,28 +396,30 @@ static void CGO_gl_draw_arrays(CCGORenderer* I, CGO_op_data pc)
       mode = CGOConvertDebugMode(I->debug, mode);
     }
 
-    glBegin(mode);
+    auto& batch = getBatchRenderer();
+    batch.beginBatch(glModeToPrimitive(mode));
     for (pl = 0, pla = 0, plc = 0; pl < nverts; pl++, pla += 3, plc += 4) {
       if (pickColorVals) {
         tmp_pc_ptr =
             &pickColorVals[plc]; /* the pick colors are saved with rgba */
-        glColor4ub(tmp_pc_ptr[0], tmp_pc_ptr[1], tmp_pc_ptr[2], tmp_pc_ptr[3]);
+        batch.batchColor4ub(
+            tmp_pc_ptr[0], tmp_pc_ptr[1], tmp_pc_ptr[2], tmp_pc_ptr[3]);
       } else {
         if (colorVals) {
           tmp_ptr = &colorVals[plc];
-          glColor4f(tmp_ptr[0], tmp_ptr[1], tmp_ptr[2], alpha);
+          batch.batchColor4f(tmp_ptr[0], tmp_ptr[1], tmp_ptr[2], alpha);
         }
         if (normalVals) {
           tmp_ptr = &normalVals[pla];
-          glNormal3fv(&normalVals[pla]);
+          batch.batchNormal3fv(&normalVals[pla]);
         }
       }
       if (vertexVals) {
         tmp_ptr = &vertexVals[pla];
-        glVertex3fv(&vertexVals[pla]);
+        batch.batchVertex3fv(&vertexVals[pla]);
       }
     }
-    glEnd();
+    batch.endBatch();
   }
 #endif
 }
@@ -2527,46 +2550,52 @@ void CGORenderGLAlpha(CGO* I, RenderInfo* info, bool calcDepth)
 
         /* now render by bin */
 #ifndef PURE_OPENGL_ES_2
-        glBegin(mode);
-        for (int i = 0; i < i_size; i++) {
-          int ii = *start;
-          start += delta;
-          while (ii) {
-            const float* pc = base + ii;
-            glColor4fv(pc + 23);
-            glNormal3fv(pc + 14);
-            glVertex3fv(pc + 5);
-            glColor4fv(pc + 27);
-            glNormal3fv(pc + 17);
-            glVertex3fv(pc + 8);
-            glColor4fv(pc + 31);
-            glNormal3fv(pc + 20);
-            glVertex3fv(pc + 11);
+        {
+          auto& batch = getBatchRenderer();
+          batch.beginBatch(glModeToPrimitive(mode));
+          for (int i = 0; i < i_size; i++) {
+            int ii = *start;
+            start += delta;
+            while (ii) {
+              const float* pc = base + ii;
+              batch.batchColor4fv(pc + 23);
+              batch.batchNormal3fv(pc + 14);
+              batch.batchVertex3fv(pc + 5);
+              batch.batchColor4fv(pc + 27);
+              batch.batchNormal3fv(pc + 17);
+              batch.batchVertex3fv(pc + 8);
+              batch.batchColor4fv(pc + 31);
+              batch.batchNormal3fv(pc + 20);
+              batch.batchVertex3fv(pc + 11);
 
-            ii = CGO_get_int(pc);
+              ii = CGO_get_int(pc);
+            }
           }
+          batch.endBatch();
         }
-        glEnd();
 #endif
       }
     } else {
 #ifndef PURE_OPENGL_ES_2
-      glBegin(mode);
-      for (auto it = I->begin(); !it.is_stop(); ++it) {
-        if (it.op_code() == CGO_ALPHA_TRIANGLE) {
-          float* const pc = it.data();
-          glColor4fv(pc + 23);
-          glNormal3fv(pc + 14);
-          glVertex3fv(pc + 5);
-          glColor4fv(pc + 27);
-          glNormal3fv(pc + 17);
-          glVertex3fv(pc + 8);
-          glColor4fv(pc + 31);
-          glNormal3fv(pc + 20);
-          glVertex3fv(pc + 11);
+      {
+        auto& batch = getBatchRenderer();
+        batch.beginBatch(glModeToPrimitive(mode));
+        for (auto it = I->begin(); !it.is_stop(); ++it) {
+          if (it.op_code() == CGO_ALPHA_TRIANGLE) {
+            float* const pc = it.data();
+            batch.batchColor4fv(pc + 23);
+            batch.batchNormal3fv(pc + 14);
+            batch.batchVertex3fv(pc + 5);
+            batch.batchColor4fv(pc + 27);
+            batch.batchNormal3fv(pc + 17);
+            batch.batchVertex3fv(pc + 8);
+            batch.batchColor4fv(pc + 31);
+            batch.batchNormal3fv(pc + 20);
+            batch.batchVertex3fv(pc + 11);
+          }
         }
+        batch.endBatch();
       }
-      glEnd();
 #endif
     }
   }

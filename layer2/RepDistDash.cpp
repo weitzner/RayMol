@@ -263,54 +263,7 @@ static void RepDistDashRenderPick(RepDistDash* I, RenderInfo* info)
   /* NO-OP */
 }
 
-static void RepDistDashRenderImmediate(RepDistDash* I, RenderInfo* info,
-    std::optional<float> dash_transparency, float line_width, int color)
-{
-  auto G = I->G;
-  bool t_mode_3 = SettingGet<int>(G, nullptr, I->ds->Obj->Setting.get(),
-                      cSetting_transparency_mode) == 3;
-
-  if (I->shaderCGO) {
-    CGOFree(I->shaderCGO);
-    I->shaderCGO = nullptr;
-  }
-
-#ifndef PURE_OPENGL_ES_2
-  if (info->width_scale_flag) {
-    glLineWidth(line_width * info->width_scale);
-  } else {
-    glLineWidth(line_width);
-  }
-  SceneResetNormal(G, true);
-
-  if (color >= 0) {
-    if (dash_transparency) {
-      const float* col = ColorGet(G, color);
-      glColor4f(col[0], col[1], col[2], 1.f - *dash_transparency);
-    } else {
-      glColor3fv(ColorGet(G, color));
-    }
-  }
-  auto v = I->V;
-  auto c = I->N;
-  if (dash_transparency && !t_mode_3)
-    glDisable(GL_DEPTH_TEST);
-  if (!info->line_lighting)
-    glDisable(GL_LIGHTING);
-  glBegin(GL_LINES);
-  while (c > 0) {
-    glVertex3fv(v);
-    v += 3;
-    glVertex3fv(v);
-    v += 3;
-    c -= 2;
-  }
-  glEnd();
-  glEnable(GL_LIGHTING);
-  if (dash_transparency && !t_mode_3)
-    glEnable(GL_DEPTH_TEST);
-#endif
-}
+// Immediate mode rendering removed — shader path is always used
 
 void RepDistDash::render(RenderInfo* info)
 {
@@ -356,14 +309,7 @@ void RepDistDash::render(RenderInfo* info)
     return;
   }
 
-  bool use_shader = SettingGet<bool>(G, cSetting_dash_use_shader) &
-                    SettingGet<bool>(G, cSetting_use_shaders);
-
-  if (use_shader) {
-    RepDistDashRenderRaster(I, info, dash_transparency_opt);
-    return;
-  }
-  RepDistDashRenderImmediate(I, info, dash_transparency_opt, line_width, color);
+  RepDistDashRenderRaster(I, info, dash_transparency_opt);
 }
 
 Rep *RepDistDashNew(DistSet * ds, int state)

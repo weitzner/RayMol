@@ -32,6 +32,7 @@ Z* -------------------------------------------------------------------
 #include "Executive.h"
 #include "Ortho.h"
 #include "CGO.h"
+#include "ImmediateHelper.h"
 
 static int SeqFindRowCol(PyMOLGlobals * G, int x, int y, int *row_num_ptr,
                          int *col_num_ptr, int fixed_row)
@@ -471,12 +472,13 @@ void CSeq::draw(CGO* orthoCGO)
 		  CGOVertex(orthoCGO, xx + pix_wid, yy + DIP2PIXEL(I->LineHeight) - 1, 0.f);
 		  CGOEnd(orthoCGO);
 		} else {
-		  glBegin(GL_POLYGON);
-		  glVertex2i(xx, yy);
-		  glVertex2i(xx, yy + DIP2PIXEL(I->LineHeight) - 1);
-		  glVertex2i(xx + pix_wid, yy + DIP2PIXEL(I->LineHeight) - 1);
-		  glVertex2i(xx + pix_wid, yy);
-		  glEnd();
+		  ImmBatch batch;
+		  batch.begin(GL_POLYGON);
+		  batch.vertex2i(xx, yy);
+		  batch.vertex2i(xx, yy + DIP2PIXEL(I->LineHeight) - 1);
+		  batch.vertex2i(xx + pix_wid, yy + DIP2PIXEL(I->LineHeight) - 1);
+		  batch.vertex2i(xx + pix_wid, yy);
+		  batch.end();
 		}
                 TextSetColor(G, black);
               }
@@ -551,12 +553,13 @@ void CSeq::draw(CGO* orthoCGO)
 	      CGOVertex(orthoCGO, xx2, yy);
 	      CGOEnd(orthoCGO);*/
 	    } else {
-	      glBegin(GL_LINE_LOOP);
-	      glVertex2i(xx, yy);
-	      glVertex2i(xx, yy + DIP2PIXEL(I->LineHeight) - 2);
-	      glVertex2i(xx2, yy + DIP2PIXEL(I->LineHeight) - 2);
-	      glVertex2i(xx2, yy);
-	      glEnd();
+	      ImmBatch batch;
+	      batch.begin(GL_LINE_LOOP);
+	      batch.vertex2i(xx, yy);
+	      batch.vertex2i(xx, yy + DIP2PIXEL(I->LineHeight) - 2);
+	      batch.vertex2i(xx2, yy + DIP2PIXEL(I->LineHeight) - 2);
+	      batch.vertex2i(xx2, yy);
+	      batch.end();
 	    }
 	  }
 	}
@@ -613,13 +616,14 @@ void CSeq::draw(CGO* orthoCGO)
 		  CGOVertex(orthoCGO, stop, top, 0.f);
 		  CGOEnd(orthoCGO);
 		} else {
-		  glColor3fv(cur_color);
-		  glBegin(GL_POLYGON);
-		  glVertex2f(start, bot);
-		  glVertex2f(start, top);
-		  glVertex2f(stop, top);
-		  glVertex2f(stop, bot);
-		  glEnd();
+		  ImmBatch batch;
+		  batch.begin(GL_POLYGON);
+		  batch.color3fv(cur_color);
+		  batch.vertex2f(start, bot);
+		  batch.vertex2f(start, top);
+		  batch.vertex2f(stop, top);
+		  batch.vertex2f(stop, bot);
+		  batch.end();
 		}
                 mode = 0;
               } else if(col->inverse && mode) {
@@ -644,13 +648,14 @@ void CSeq::draw(CGO* orthoCGO)
 		    CGOVertex(orthoCGO, stop, top, 0.f);
 		    CGOEnd(orthoCGO);
 		  } else {
-		    glColor3fv(cur_color);
-		    glBegin(GL_POLYGON);
-		    glVertex2f(start, bot);
-		    glVertex2f(start, top);
-		    glVertex2f(stop, top);
-		    glVertex2f(stop, bot);
-		    glEnd();
+		    ImmBatch batch;
+		    batch.begin(GL_POLYGON);
+		    batch.color3fv(cur_color);
+		    batch.vertex2f(start, bot);
+		    batch.vertex2f(start, top);
+		    batch.vertex2f(stop, top);
+		    batch.vertex2f(stop, bot);
+		    batch.end();
 		  }
                   start = (width * col->offset) / max_len;
                   last_color = col->color;
@@ -680,13 +685,14 @@ void CSeq::draw(CGO* orthoCGO)
 		CGOVertex(orthoCGO, stop, top, 0.f);
 		CGOEnd(orthoCGO);
 	      } else {
-		glColor3fv(cur_color);
-		glBegin(GL_POLYGON);
-		glVertex2f(start, bot);
-		glVertex2f(start, top);
-		glVertex2f(stop, top);
-		glVertex2f(stop, bot);
-		glEnd();
+		ImmBatch batch;
+		batch.begin(GL_POLYGON);
+		batch.color3fv(cur_color);
+		batch.vertex2f(start, bot);
+		batch.vertex2f(start, top);
+		batch.vertex2f(stop, top);
+		batch.vertex2f(stop, bot);
+		batch.end();
 	      }
 	    }
           }

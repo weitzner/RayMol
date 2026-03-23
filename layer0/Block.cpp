@@ -22,6 +22,7 @@ Z* -------------------------------------------------------------------
 #include"Block.h"
 #include"main.h"
 #include"CGO.h"
+#include"ImmediateHelper.h"
 
 int Block::getWidth() const {
     return rect.right - rect.left;
@@ -44,12 +45,13 @@ void Block::fill(CGO *orthoCGO)
       CGOVertex(orthoCGO, rect.left, rect.bottom, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.right, rect.top);
-      glVertex2i(rect.right, rect.bottom);
-      glVertex2i(rect.left, rect.bottom);
-      glVertex2i(rect.left, rect.top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.vertex2i(rect.right, rect.top);
+      batch.vertex2i(rect.right, rect.bottom);
+      batch.vertex2i(rect.left, rect.bottom);
+      batch.vertex2i(rect.left, rect.top);
+      batch.end();
     }
   }
 }
@@ -69,11 +71,12 @@ void Block::drawLeftEdge(CGO *orthoCGO)
       CGOEnd(orthoCGO);
     } else {
       if(m_G->HaveGUI && m_G->ValidContext) {
-	glColor3f(0.3, 0.3, 0.3);
-	glBegin(GL_LINES);
-	glVertex2i(rect.left, rect.bottom);
-	glVertex2i(rect.left, rect.top);
-	glEnd();
+	ImmBatch batch;
+	batch.begin(GL_LINES);
+	batch.color3f(0.3, 0.3, 0.3);
+	batch.vertex2i(rect.left, rect.bottom);
+	batch.vertex2i(rect.left, rect.top);
+	batch.end();
       }
     }
   }
@@ -84,11 +87,12 @@ void Block::drawTopEdge()
 {
 #ifndef PURE_OPENGL_ES_2
   if(m_G->HaveGUI && m_G->ValidContext) {
-    glColor3f(0.3, 0.3, 0.3);
-    glBegin(GL_LINES);
-    glVertex2i(rect.right, rect.top);
-    glVertex2i(rect.left, rect.top);
-    glEnd();
+    ImmBatch batch;
+    batch.begin(GL_LINES);
+    batch.color3f(0.3, 0.3, 0.3);
+    batch.vertex2i(rect.right, rect.top);
+    batch.vertex2i(rect.left, rect.top);
+    batch.end();
   }
 #endif
 }

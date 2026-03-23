@@ -54,6 +54,7 @@ Z* -------------------------------------------------------------------
 #include "Version.h"
 #include "Wizard.h"
 #include "main.h"
+#include "ImmediateHelper.h"
 
 #ifdef _PYMOL_OPENVR
 #include "OpenVRMode.h"
@@ -656,13 +657,16 @@ void OrthoBusyDraw(PyMOLGlobals* G, int force)
             }
 
 #ifndef PURE_OPENGL_ES_2
-            glColor3f(0.f, 0.f, 0.f); // black
-            glBegin(GL_TRIANGLE_STRIP);
-            glVertex2i(0, I->Height);
-            glVertex2i(cBusyWidth, I->Height);
-            glVertex2i(0, I->Height - cBusyHeight);
-            glVertex2i(cBusyWidth, I->Height - cBusyHeight);
-            glEnd();
+            {
+              ImmBatch batch;
+              batch.begin(GL_TRIANGLE_STRIP);
+              batch.color3f(0.f, 0.f, 0.f);
+              batch.vertex2i(0, I->Height);
+              batch.vertex2i(cBusyWidth, I->Height);
+              batch.vertex2i(0, I->Height - cBusyHeight);
+              batch.vertex2i(cBusyWidth, I->Height - cBusyHeight);
+              batch.end();
+            }
             glColor3fv(white);
 #endif
             y = I->Height - cBusyMargin;
@@ -675,43 +679,56 @@ void OrthoBusyDraw(PyMOLGlobals* G, int force)
             }
 
             if (I->BusyStatus[1]) {
-              glBegin(GL_LINE_LOOP);
-              glVertex2i(cBusyMargin, y);
-              glVertex2i(cBusyWidth - cBusyMargin, y);
-              glVertex2i(cBusyWidth - cBusyMargin, y - cBusyBar);
-              glVertex2i(cBusyMargin, y - cBusyBar);
-              glEnd();
-              glColor3fv(white);
+              {
+                ImmBatch batch;
+                batch.begin(GL_LINE_LOOP);
+                batch.color3fv(white);
+                batch.vertex2i(cBusyMargin, y);
+                batch.vertex2i(cBusyWidth - cBusyMargin, y);
+                batch.vertex2i(cBusyWidth - cBusyMargin, y - cBusyBar);
+                batch.vertex2i(cBusyMargin, y - cBusyBar);
+                batch.end();
+              }
               x = (I->BusyStatus[0] * (cBusyWidth - 2 * cBusyMargin) /
                       I->BusyStatus[1]) +
                   cBusyMargin;
-              glBegin(GL_TRIANGLE_STRIP);
-              glVertex2i(cBusyMargin, y);
-              glVertex2i(x, y);
-              glVertex2i(cBusyMargin, y - cBusyBar);
-              glVertex2i(x, y - cBusyBar);
-              glEnd();
+              {
+                ImmBatch batch;
+                batch.begin(GL_TRIANGLE_STRIP);
+                batch.color3fv(white);
+                batch.vertex2i(cBusyMargin, y);
+                batch.vertex2i(x, y);
+                batch.vertex2i(cBusyMargin, y - cBusyBar);
+                batch.vertex2i(x, y - cBusyBar);
+                batch.end();
+              }
               y -= cBusySpacing;
             }
 
             if (I->BusyStatus[3]) {
-              glColor3fv(white);
-              glBegin(GL_LINE_LOOP);
-              glVertex2i(cBusyMargin, y);
-              glVertex2i(cBusyWidth - cBusyMargin, y);
-              glVertex2i(cBusyWidth - cBusyMargin, y - cBusyBar);
-              glVertex2i(cBusyMargin, y - cBusyBar);
-              glEnd();
+              {
+                ImmBatch batch;
+                batch.begin(GL_LINE_LOOP);
+                batch.color3fv(white);
+                batch.vertex2i(cBusyMargin, y);
+                batch.vertex2i(cBusyWidth - cBusyMargin, y);
+                batch.vertex2i(cBusyWidth - cBusyMargin, y - cBusyBar);
+                batch.vertex2i(cBusyMargin, y - cBusyBar);
+                batch.end();
+              }
               x = (I->BusyStatus[2] * (cBusyWidth - 2 * cBusyMargin) /
                       I->BusyStatus[3]) +
                   cBusyMargin;
-              glColor3fv(white);
-              glBegin(GL_TRIANGLE_STRIP);
-              glVertex2i(cBusyMargin, y);
-              glVertex2i(x, y);
-              glVertex2i(cBusyMargin, y - cBusyBar);
-              glVertex2i(x, y - cBusyBar);
-              glEnd();
+              {
+                ImmBatch batch;
+                batch.begin(GL_TRIANGLE_STRIP);
+                batch.color3fv(white);
+                batch.vertex2i(cBusyMargin, y);
+                batch.vertex2i(x, y);
+                batch.vertex2i(cBusyMargin, y - cBusyBar);
+                batch.vertex2i(x, y - cBusyBar);
+                batch.end();
+              }
               y -= cBusySpacing;
             }
             if (!draw_both)
@@ -1527,13 +1544,14 @@ static void OrthoDrawInternalFeedbackBG(PyMOLGlobals* G, CGO* orthoCGO,
       CGOEnd(orthoCGO);
 #ifndef PURE_OPENGL_ES_2
     } else {
-      glColor3f(0.0, 0.0, 0.0);
-      glBegin(GL_POLYGON);
-      glVertex2i(I->Width - rightSceneMargin, height - 1);
-      glVertex2i(I->Width - rightSceneMargin, 0);
-      glVertex2i(0, 0);
-      glVertex2i(0, height - 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.0, 0.0, 0.0);
+      batch.vertex2i(I->Width - rightSceneMargin, height - 1);
+      batch.vertex2i(I->Width - rightSceneMargin, 0);
+      batch.vertex2i(0, 0);
+      batch.vertex2i(0, height - 1);
+      batch.end();
 #endif
     }
     /* deliberate fall-through */
@@ -1548,11 +1566,12 @@ static void OrthoDrawInternalFeedbackBG(PyMOLGlobals* G, CGO* orthoCGO,
       CGOEnd(orthoCGO);
 #ifndef PURE_OPENGL_ES_2
     } else {
-      glColor3f(0.3, 0.3, 0.3);
-      glBegin(GL_LINES);
-      glVertex2i(1 + I->Width - rightSceneMargin, height - 1);
-      glVertex2i(-1, height - 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_LINES);
+      batch.color3f(0.3, 0.3, 0.3);
+      batch.vertex2i(1 + I->Width - rightSceneMargin, height - 1);
+      batch.vertex2i(-1, height - 1);
+      batch.end();
 #endif
     }
     break;
@@ -1581,11 +1600,12 @@ static void OrthoDrawInternalGUIBG(
       CGOEnd(orthoCGO);
 #ifndef PURE_OPENGL_ES_2
     } else {
-      glColor3f(0.3, 0.3, 0.3);
-      glBegin(GL_LINES);
-      glVertex2i(I->Width - internal_gui_width, 0);
-      glVertex2i(I->Width - internal_gui_width, I->Height);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_LINES);
+      batch.color3f(0.3, 0.3, 0.3);
+      batch.vertex2i(I->Width - internal_gui_width, 0);
+      batch.vertex2i(I->Width - internal_gui_width, I->Height);
+      batch.end();
 #endif
     }
   }
@@ -1739,14 +1759,15 @@ static void OrthoDrawLoop(PyMOLGlobals* G, CGO* orthoCGO)
     CGOEnd(orthoCGO);*/
 #ifndef PURE_OPENGL_ES_2
   } else {
-    glColor3f(vc[0], vc[1], vc[2]);
-    glBegin(GL_LINE_LOOP);
-    glVertex2i(I->LoopRect.left, I->LoopRect.top);
-    glVertex2i(I->LoopRect.right, I->LoopRect.top);
-    glVertex2i(I->LoopRect.right, I->LoopRect.bottom);
-    glVertex2i(I->LoopRect.left, I->LoopRect.bottom);
-    glVertex2i(I->LoopRect.left, I->LoopRect.top);
-    glEnd();
+    ImmBatch batch;
+    batch.begin(GL_LINE_LOOP);
+    batch.color3f(vc[0], vc[1], vc[2]);
+    batch.vertex2i(I->LoopRect.left, I->LoopRect.top);
+    batch.vertex2i(I->LoopRect.right, I->LoopRect.top);
+    batch.vertex2i(I->LoopRect.right, I->LoopRect.bottom);
+    batch.vertex2i(I->LoopRect.left, I->LoopRect.bottom);
+    batch.vertex2i(I->LoopRect.left, I->LoopRect.top);
+    batch.end();
 #endif
   }
 }
@@ -2214,17 +2235,18 @@ void OrthoDrawWizardPrompt(PyMOLGlobals* G, CGO* orthoCGO)
           CGOVertex(orthoCGO, rect.left, rect.bottom, 0.f);
           CGOEnd(orthoCGO);
         } else {
+          ImmBatch batch;
+          batch.begin(GL_POLYGON);
           if (gui_mode != InternalGUIMode::Default) {
-            glColor3f(1.0, 1.0F, 1.0F);
+            batch.color3f(1.0, 1.0F, 1.0F);
           } else {
-            glColor3fv(I->WizardBackColor);
+            batch.color3fv(I->WizardBackColor);
           }
-          glBegin(GL_POLYGON);
-          glVertex2i(rect.right, rect.top);
-          glVertex2i(rect.right, rect.bottom);
-          glVertex2i(rect.left, rect.bottom);
-          glVertex2i(rect.left, rect.top);
-          glEnd();
+          batch.vertex2i(rect.right, rect.top);
+          batch.vertex2i(rect.right, rect.bottom);
+          batch.vertex2i(rect.left, rect.bottom);
+          batch.vertex2i(rect.left, rect.top);
+          batch.end();
         }
       }
       if (orthoCGO)

@@ -21,6 +21,7 @@
 #include "Util.h"
 #include "main.h"
 #include "pymol/utility.h"
+#include "ImmediateHelper.h"
 
 #ifdef _PYMOL_OPENVR
 #include "OpenVRMode.h"
@@ -1728,31 +1729,32 @@ void SceneDrawStencilInBuffer(PyMOLGlobals* G, CScene* I, int stereo_mode)
     switch (stereo_mode) {
     case cStereo_stencil_by_row: {
       int parity = I->StencilParity;
-      int y;
-      glBegin(GL_LINES);
-      for (y = 0; y < h; y += 2) {
-        glVertex2i(0, y + parity);
-        glVertex2i(w, y + parity);
+      ImmBatch batch;
+      batch.begin(GL_LINES);
+      for (int y = 0; y < h; y += 2) {
+        batch.vertex2i(0, y + parity);
+        batch.vertex2i(w, y + parity);
       }
-      glEnd();
+      batch.end();
     } break;
     case cStereo_stencil_by_column: {
-      int x;
-      glBegin(GL_LINES);
-      for (x = 0; x < w; x += 2) {
-        glVertex2i(x, 0);
-        glVertex2i(x, h);
+      ImmBatch batch;
+      batch.begin(GL_LINES);
+      for (int x = 0; x < w; x += 2) {
+        batch.vertex2i(x, 0);
+        batch.vertex2i(x, h);
       }
-      glEnd();
+      batch.end();
     } break;
     case cStereo_stencil_checkerboard: {
-      int i, m = 2 * ((h > w) ? h : w);
-      glBegin(GL_LINES);
-      for (i = 0; i < m; i += 2) {
-        glVertex2i(i, 0);
-        glVertex2i(0, i);
+      int m = 2 * ((h > w) ? h : w);
+      ImmBatch batch;
+      batch.begin(GL_LINES);
+      for (int i = 0; i < m; i += 2) {
+        batch.vertex2i(i, 0);
+        batch.vertex2i(0, i);
       }
-      glEnd();
+      batch.end();
     } break;
     }
   }

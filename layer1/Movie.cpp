@@ -36,6 +36,7 @@ Z* -------------------------------------------------------------------
 #include"Parse.h"
 #include"PyMOL.h"
 #include"ScrollBar.h"
+#include"ImmediateHelper.h"
 #include"Menu.h"
 #include"View.h"
 #include"Seq.h"
@@ -1761,13 +1762,14 @@ void CMovie::draw(CGO* orthoCGO)
 	  CGOVertex(orthoCGO, rect.right, tmpRect.top, 0.f);
 	  CGOEnd(orthoCGO);
 	} else {
-	  glColor3fv(black);
-	  glBegin(GL_POLYGON);
-	  glVertex2f(tmpRect.right, tmpRect.bottom);
-	  glVertex2f(tmpRect.right, tmpRect.top);
-	  glVertex2f(rect.right, tmpRect.top);
-	  glVertex2f(rect.right, tmpRect.bottom);
-	  glEnd();
+	  ImmBatch batch;
+	  batch.begin(GL_POLYGON);
+	  batch.color3fv(black);
+	  batch.vertex2f(tmpRect.right, tmpRect.bottom);
+	  batch.vertex2f(tmpRect.right, tmpRect.top);
+	  batch.vertex2f(rect.right, tmpRect.top);
+	  batch.vertex2f(rect.right, tmpRect.bottom);
+	  batch.end();
 	}
       }
 

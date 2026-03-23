@@ -97,7 +97,6 @@ static int RepMeshCGOGenerate(RepMesh * I, RenderInfo * info)
 
   ok &= CGOResetNormal(I->shaderCGO, true);
 
-#ifndef PURE_OPENGL_ES_2
   int lighting =
     SettingGet_i(G, I->cs->Setting.get(), I->obj->Setting.get(), cSetting_mesh_lighting);
   if(!lighting) {
@@ -105,7 +104,6 @@ static int RepMeshCGOGenerate(RepMesh * I, RenderInfo * info)
       CGODisable(I->shaderCGO, GL_LIGHTING);
     }
   }
-#endif
   if (ok){
     switch (I->mesh_type) {
     case cIsomeshMode::isomesh:
@@ -197,12 +195,7 @@ static int RepMeshCGOGenerate(RepMesh * I, RenderInfo * info)
     }
     break;
   case cIsomeshMode::isodot:
-#ifdef PURE_OPENGL_ES_2
-    /* TODO */
-#else
-    glPointSize(SettingGet_f
-		(G, I->cs->Setting.get(), I->obj->Setting.get(), cSetting_dot_width));
-#endif
+    /* TODO: dot_width point size for isodot mode */
     if(ok && n) {
       if(I->oneColorFlag) {
 	while(ok && *n) {
@@ -393,94 +386,7 @@ static void RepMeshRenderImmediate(
     CGOFree(I->shaderCGO);
     I->shaderCGO = nullptr;
   }
-#ifndef PURE_OPENGL_ES_2
-  int lighting = SettingGet_i(
-      G, I->cs->Setting.get(), I->obj->Setting.get(), cSetting_mesh_lighting);
-  if (!lighting && !info->line_lighting) {
-    glDisable(GL_LIGHTING);
-  }
-  switch (I->mesh_type) {
-  case cIsomeshMode::isomesh:
-    if (info->width_scale_flag)
-      glLineWidth(line_width * info->width_scale);
-    else
-      glLineWidth(line_width);
-    break;
-  case cIsomeshMode::isodot:
-    if (info->width_scale_flag)
-      glPointSize(SettingGet_f(G, I->cs->Setting.get(), I->obj->Setting.get(),
-                      cSetting_dot_width) *
-                  info->width_scale);
-    else
-      glPointSize(SettingGet_f(
-          G, I->cs->Setting.get(), I->obj->Setting.get(), cSetting_dot_width));
-    break;
-  }
-  SceneResetNormal(G, false);
-  switch (I->mesh_type) {
-  case cIsomeshMode::isomesh:
-    if (n) {
-      if (I->oneColorFlag) {
-        while (*n) {
-          glColor3fv(ColorGet(G, I->oneColor));
-          int c = *(n++);
-          glBegin(GL_LINE_STRIP);
-          while (c--) {
-            glVertex3fv(v);
-            v += 3;
-          }
-          glEnd();
-        }
-      } else {
-        while (*n) {
-          int c = *(n++);
-          glBegin(GL_LINE_STRIP);
-          while (c--) {
-            glColor3fv(vc);
-            vc += 3;
-            glVertex3fv(v);
-            v += 3;
-          }
-          glEnd();
-        }
-      }
-    }
-    break;
-  case cIsomeshMode::isodot:
-    glPointSize(SettingGet_f(
-        G, I->cs->Setting.get(), I->obj->Setting.get(), cSetting_dot_width));
-    if (n) {
-      if (I->oneColorFlag) {
-        while (*n) {
-          glColor3fv(ColorGet(G, I->oneColor));
-          int c = *(n++);
-          glBegin(GL_POINTS);
-          while (c--) {
-            glVertex3fv(v);
-            v += 3;
-          }
-          glEnd();
-        }
-      } else {
-        while (*n) {
-          int c = *(n++);
-          glBegin(GL_POINTS);
-          while (c--) {
-            glColor3fv(vc);
-            vc += 3;
-            glVertex3fv(v);
-            v += 3;
-          }
-          glEnd();
-        }
-      }
-    }
-    break;
-  }
-  if (!lighting) {
-    glEnable(GL_LIGHTING);
-  }
-#endif
+  /* Immediate mode rendering removed — use shader path */
 }
 
 void RepMeshRasterRender(RepMesh* I, RenderInfo* info)

@@ -370,6 +370,17 @@ void RendererGL::batchColor4f(float r, float g, float b, float a)
   m_curA = a;
 }
 
+void RendererGL::batchColor4fv(const float* c)
+{
+  batchColor4f(c[0], c[1], c[2], c[3]);
+}
+
+void RendererGL::batchColor4ub(
+    unsigned char r, unsigned char g, unsigned char b, unsigned char a)
+{
+  batchColor4f(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
+}
+
 void RendererGL::batchNormal3fv(const float* n)
 {
   m_curNX = n[0];

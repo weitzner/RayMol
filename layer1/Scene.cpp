@@ -18,6 +18,7 @@ Z* -------------------------------------------------------------------
 #include"os_std.h"
 #include"os_gl.h"
 #include"os_python.h"
+#include"ImmediateHelper.h"
 #include"os_numpy.h"
 
 #include"Util.h"
@@ -2789,13 +2790,14 @@ static void draw_button(int x2, int y2, int z, int w, int h, float *light, float
     CGOVertex(orthoCGO, x2 + w, y2 + h, z);
     CGOEnd(orthoCGO);
   } else {
-    glColor3fv(light);
-    glBegin(GL_POLYGON);
-    glVertex3i(x2, y2, z);
-    glVertex3i(x2, y2 + h, z);
-    glVertex3i(x2 + w, y2 + h, z);
-    glVertex3i(x2 + w, y2, z);
-    glEnd();
+    ImmBatch batch;
+    batch.begin(GL_POLYGON);
+    batch.color3fv(light);
+    batch.vertex3i(x2, y2, z);
+    batch.vertex3i(x2, y2 + h, z);
+    batch.vertex3i(x2 + w, y2 + h, z);
+    batch.vertex3i(x2 + w, y2, z);
+    batch.end();
   }
 
   if (orthoCGO){
@@ -2807,13 +2809,14 @@ static void draw_button(int x2, int y2, int z, int w, int h, float *light, float
     CGOVertex(orthoCGO, x2 + w, y2 + h - 1, z);
     CGOEnd(orthoCGO);
   } else {
-    glColor3fv(dark);
-    glBegin(GL_POLYGON);
-    glVertex3i(x2 + 1, y2, z);
-    glVertex3i(x2 + 1, y2 + h - 1, z);
-    glVertex3i(x2 + w, y2 + h - 1, z);
-    glVertex3i(x2 + w, y2, z);
-    glEnd();
+    ImmBatch batch;
+    batch.begin(GL_POLYGON);
+    batch.color3fv(dark);
+    batch.vertex3i(x2 + 1, y2, z);
+    batch.vertex3i(x2 + 1, y2 + h - 1, z);
+    batch.vertex3i(x2 + w, y2 + h - 1, z);
+    batch.vertex3i(x2 + w, y2, z);
+    batch.end();
   }
 
   if(inside) {
@@ -2826,13 +2829,14 @@ static void draw_button(int x2, int y2, int z, int w, int h, float *light, float
       CGOVertex(orthoCGO, x2 + w - 1, y2 + h - 1, z);
       CGOEnd(orthoCGO);
     } else {
-      glColor3fv(inside);
-      glBegin(GL_POLYGON);
-      glVertex3i(x2 + 1, y2 + 1, z);
-      glVertex3i(x2 + 1, y2 + h - 1, z);
-      glVertex3i(x2 + w - 1, y2 + h - 1, z);
-      glVertex3i(x2 + w - 1, y2 + 1, z);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3fv(inside);
+      batch.vertex3i(x2 + 1, y2 + 1, z);
+      batch.vertex3i(x2 + 1, y2 + h - 1, z);
+      batch.vertex3i(x2 + w - 1, y2 + h - 1, z);
+      batch.vertex3i(x2 + w - 1, y2 + 1, z);
+      batch.end();
     }
   } else {                      /* rainbow */
     if (orthoCGO){
@@ -2847,16 +2851,17 @@ static void draw_button(int x2, int y2, int z, int w, int h, float *light, float
       CGOVertex(orthoCGO, x2 + w - 1, y2 + 1, z);
       CGOEnd(orthoCGO);
     } else {
-      glBegin(GL_POLYGON);
-      glColor3f(1.0F, 0.1F, 0.1F);
-      glVertex3i(x2 + 1, y2 + 1, z);
-      glColor3f(0.1F, 1.0F, 0.1F);
-      glVertex3i(x2 + 1, y2 + h - 1, z);
-      glColor3f(1.0F, 1.0F, 0.1F);
-      glVertex3i(x2 + w - 1, y2 + h - 1, z);
-      glColor3f(0.1F, 0.1F, 1.0F);
-      glVertex3i(x2 + w - 1, y2 + 1, z);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(1.0F, 0.1F, 0.1F);
+      batch.vertex3i(x2 + 1, y2 + 1, z);
+      batch.color3f(0.1F, 1.0F, 0.1F);
+      batch.vertex3i(x2 + 1, y2 + h - 1, z);
+      batch.color3f(1.0F, 1.0F, 0.1F);
+      batch.vertex3i(x2 + w - 1, y2 + h - 1, z);
+      batch.color3f(0.1F, 0.1F, 1.0F);
+      batch.vertex3i(x2 + w - 1, y2 + 1, z);
+      batch.end();
     }
   }
 }

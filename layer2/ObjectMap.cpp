@@ -1783,52 +1783,7 @@ void ObjectMap::render(RenderInfo * info)
           ray->sausage3fv(corner + 3 * 5, corner + 3 * 7, radius, vc, vc);
         } else if(G->HaveGUI && G->ValidContext) {
           if(pick) {
-#ifndef PURE_OPENGL_ES_2
-          } else if (!info->use_shaders) {
-            // immediate
-            ObjectUseColor(I);
-            glDisable(GL_LIGHTING);
-            glBegin(GL_LINES);
-            glVertex3fv(corner + 3 * 0);
-            glVertex3fv(corner + 3 * 1);
-
-            glVertex3fv(corner + 3 * 0);
-            glVertex3fv(corner + 3 * 2);
-
-            glVertex3fv(corner + 3 * 2);
-            glVertex3fv(corner + 3 * 3);
-
-            glVertex3fv(corner + 3 * 1);
-            glVertex3fv(corner + 3 * 3);
-
-            glVertex3fv(corner + 3 * 0);
-            glVertex3fv(corner + 3 * 4);
-
-            glVertex3fv(corner + 3 * 1);
-            glVertex3fv(corner + 3 * 5);
-
-            glVertex3fv(corner + 3 * 2);
-            glVertex3fv(corner + 3 * 6);
-
-            glVertex3fv(corner + 3 * 3);
-            glVertex3fv(corner + 3 * 7);
-
-            glVertex3fv(corner + 3 * 4);
-            glVertex3fv(corner + 3 * 5);
-
-            glVertex3fv(corner + 3 * 4);
-            glVertex3fv(corner + 3 * 6);
-
-            glVertex3fv(corner + 3 * 6);
-            glVertex3fv(corner + 3 * 7);
-
-            glVertex3fv(corner + 3 * 5);
-            glVertex3fv(corner + 3 * 7);
-
-            glEnd();
-            glEnable(GL_LIGHTING);
           } else {
-#endif
             // shader
             if (!ms->shaderCGO) {
               ms->shaderCGO.reset(ObjectMapCGOGenerate(G, corner));
@@ -1923,53 +1878,6 @@ void ObjectMap::render(RenderInfo * info)
               }
             } else if(G->HaveGUI && G->ValidContext) {
               if(pick) {
-              } else if (ALWAYS_IMMEDIATE_OR(!info->use_shaders)) {
-                if(gradients) {
-                  raw_gradient = (float *) gradients->data.data();
-                } else {
-                  glDisable(GL_LIGHTING);
-                }
-                {
-                  int ramped = ColorCheckRamped(G, I->Color);
-                  float vc[3];
-                  int color = I->Color;
-                  float gt[3];
-
-                  glPointSize(width);
-                  glDisable(GL_POINT_SMOOTH);
-                  glBegin(GL_POINTS);
-                  ObjectUseColor(I);
-                  for(a = 0; a < cnt; a++) {
-                    float f_val = *(raw_data++);
-                    RAW_POINT_TRANSFORM(raw_point_ptr, raw_point);
-                    if(f_val >= high_cut) {
-                      if(raw_gradient) {
-                        normalize23f(raw_gradient, gt);
-                        invert3f(gt);
-                        glNormal3fv(gt);
-                      }
-                      if(ramped) {
-                        ColorGetRamped(G, color, raw_point, vc, state);
-                        glColor3fv(vc);
-                      }
-                      glVertex3fv(raw_point);
-                    } else if(f_val <= low_cut) {
-                      if(raw_gradient) {
-                        normalize23f(raw_gradient, gt);
-                        glNormal3fv(gt);
-                      }
-                      if(ramped) {
-                        ColorGetRamped(G, color, raw_point, vc, state);
-                        glColor3fv(vc);
-                      }
-                      glVertex3fv(raw_point);
-                    }
-                    if(raw_gradient)
-                      raw_gradient += 3;
-                  }
-                  glEnd();
-                glEnable(GL_POINT_SMOOTH);
-                }
               }
             }
           }

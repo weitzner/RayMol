@@ -153,51 +153,7 @@ static int RepAngleCGOGenerate(RepAngle * I, RenderInfo * info)
   return ok;
 }
 
-static void RepAngleRenderImmediate(RepAngle * I, RenderInfo * info, int color, 
-                                    short dash_transparency_enabled, float dash_transparency)
-{
-#ifndef PURE_OPENGL_ES_2
-  PyMOLGlobals *G = I->G;
-  const float* v = I->V.data();
-  int c = I->N;
-  float line_width;
-  bool t_mode_3 =
-    SettingGet_i(G, nullptr, I->ds->Obj->Setting.get(), cSetting_transparency_mode) == 3;
-  line_width = 
-    SettingGet_f(G, nullptr, I->ds->Obj->Setting.get(), cSetting_dash_width);
-  line_width = SceneGetDynamicLineWidth(info, line_width);
-
-  if(info->width_scale_flag) {
-    glLineWidth(line_width * info->width_scale);
-  } else {
-    glLineWidth(line_width);
-  }
-  SceneResetNormal(G, true);
-  
-  if (dash_transparency_enabled){
-    const float *col = ColorGet(G, color);
-    glColor4f(col[0], col[1], col[2], 1.f-dash_transparency);
-  } else {
-    glColor3fv(ColorGet(G, color));
-  }
-  if (dash_transparency_enabled && !t_mode_3)
-    glDisable(GL_DEPTH_TEST);	
-  if(!info->line_lighting)
-    glDisable(GL_LIGHTING);
-  glBegin(GL_LINES);
-  while(c > 0) {
-    glVertex3fv(v);
-    v += 3;
-    glVertex3fv(v);
-    v += 3;
-    c -= 2;
-  }
-  glEnd();
-  glEnable(GL_LIGHTING);
-  if (dash_transparency_enabled && !t_mode_3)
-    glEnable(GL_DEPTH_TEST);	
-#endif
-}
+// Immediate mode rendering removed — shader path is always used
 
 void RepAngle::render(RenderInfo* info)
 {
@@ -288,9 +244,7 @@ void RepAngle::render(RenderInfo* info)
 	}
       }
 
-      if (!generate_shader_cgo) {
-	RepAngleRenderImmediate(I, info, color, dash_transparency_enabled, dash_transparency);
-      } else {
+      if (generate_shader_cgo) {
 	CGORender(I->shaderCGO, nullptr, nullptr, nullptr, info, I);
       }
     }

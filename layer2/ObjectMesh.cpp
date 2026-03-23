@@ -1004,48 +1004,7 @@ static void ObjectMeshRenderImmediate(
 
   SceneResetNormal(I->G, false);
 
-#ifdef PURE_OPENGL_ES_2
-  /* TODO */
-#else
-  if (info && !info->line_lighting) {
-    glDisable(GL_LIGHTING);
-  }
-  auto vc = ms->VC.data();
-
-  if (!vc)
-    glColor3fv(ColorGet(I->G, ms->OneColor));
-  if (ms->MeshMode == cIsomeshMode::isodot) {
-    glPointSize(
-        SettingGet_f(I->G, I->Setting.get(), nullptr, cSetting_dot_width));
-  } else {
-    glLineWidth(line_width);
-  }
-
-  auto v = ms->V.data();
-  auto n = ms->N.data();
-
-  while (*n) {
-    auto c = *(n++);
-    if (ms->MeshMode == cIsomeshMode::isodot)
-      glBegin(GL_POINTS);
-    else
-      glBegin(GL_LINE_STRIP);
-    while (c--) {
-      if (vc) {
-        glColor3fv(vc);
-        vc += 3;
-      }
-      glVertex3fv(v);
-      v += 3;
-    }
-    glEnd();
-  }
-  if (info && !info->line_lighting) {
-    glEnable(GL_LIGHTING);
-  }
-#endif
-
-  // Render Unit Cell Immediately
+  // Render Unit Cell
   if (ms->UnitCellCGO) {
     const float* color = ColorGet(I->G, I->Color);
     CGORender(

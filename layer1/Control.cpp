@@ -32,6 +32,7 @@ Z* -------------------------------------------------------------------
 #include "Util.h"
 #include "Ortho.h"
 #include "CGO.h"
+#include "ImmediateHelper.h"
 
 #define cControlBoxSize DIP2PIXEL(17)
 #define cControlLeftMargin DIP2PIXEL(8)
@@ -505,29 +506,30 @@ static void draw_button(int x2, int y2, int w, int h, float *light, float *dark,
     CGOVertex(orthoCGO, x2 + w - 1, y2 + h - 1, 0.f);
     CGOEnd(orthoCGO);
   } else {
-    glColor3fv(light);
-    glBegin(GL_POLYGON);
-    glVertex2i(x2, y2);
-    glVertex2i(x2, y2 + h);
-    glVertex2i(x2 + w, y2 + h);
-    glVertex2i(x2 + w, y2);
-    glEnd();
-    
-    glColor3fv(dark);
-    glBegin(GL_POLYGON);
-    glVertex2i(x2 + 1, y2);
-    glVertex2i(x2 + 1, y2 + h - 1);
-    glVertex2i(x2 + w, y2 + h - 1);
-    glVertex2i(x2 + w, y2);
-    glEnd();
-    
-    glColor3fv(inside);
-    glBegin(GL_POLYGON);
-    glVertex2i(x2 + 1, y2 + 1);
-    glVertex2i(x2 + 1, y2 + h - 1);
-    glVertex2i(x2 + w - 1, y2 + h - 1);
-    glVertex2i(x2 + w - 1, y2 + 1);
-    glEnd();
+    ImmBatch batch;
+    batch.begin(GL_POLYGON);
+    batch.color3fv(light);
+    batch.vertex2i(x2, y2);
+    batch.vertex2i(x2, y2 + h);
+    batch.vertex2i(x2 + w, y2 + h);
+    batch.vertex2i(x2 + w, y2);
+    batch.end();
+
+    batch.begin(GL_POLYGON);
+    batch.color3fv(dark);
+    batch.vertex2i(x2 + 1, y2);
+    batch.vertex2i(x2 + 1, y2 + h - 1);
+    batch.vertex2i(x2 + w, y2 + h - 1);
+    batch.vertex2i(x2 + w, y2);
+    batch.end();
+
+    batch.begin(GL_POLYGON);
+    batch.color3fv(inside);
+    batch.vertex2i(x2 + 1, y2 + 1);
+    batch.vertex2i(x2 + 1, y2 + h - 1);
+    batch.vertex2i(x2 + w - 1, y2 + h - 1);
+    batch.vertex2i(x2 + w - 1, y2 + 1);
+    batch.end();
   }
 }
 
@@ -596,30 +598,30 @@ void CControl::draw(CGO* orthoCGO)
 	CGOVertex(orthoCGO, left + 1, bottom + 1, 0.f);
 	CGOEnd(orthoCGO);
       } else {
-	glColor3f(0.8F, 0.8F, 0.8F);
-	glBegin(GL_POLYGON);
-	glVertex2i(right, top);
-	glVertex2i(right, bottom);
-	glVertex2i(left, bottom);
-	glVertex2i(left, top);
-	glEnd();
-	
-	glColor3f(0.3F, 0.3F, 0.3F);
-	glBegin(GL_POLYGON);
-	glVertex2i(right, top - 1);
-	glVertex2i(right, bottom);
-	glVertex2i(left + 1, bottom);
-	glVertex2i(left + 1, top - 1);
-	glEnd();
-	
-	glColor3fv(I->ButtonColor);
-	
-	glBegin(GL_POLYGON);
-	glVertex2i(right - 1, top - 1);
-	glVertex2i(right - 1, bottom + 1);
-	glVertex2i(left + 1, bottom + 1);
-	glVertex2i(left + 1, top - 1);
-	glEnd();
+	ImmBatch batch;
+	batch.begin(GL_POLYGON);
+	batch.color3f(0.8F, 0.8F, 0.8F);
+	batch.vertex2i(right, top);
+	batch.vertex2i(right, bottom);
+	batch.vertex2i(left, bottom);
+	batch.vertex2i(left, top);
+	batch.end();
+
+	batch.begin(GL_POLYGON);
+	batch.color3f(0.3F, 0.3F, 0.3F);
+	batch.vertex2i(right, top - 1);
+	batch.vertex2i(right, bottom);
+	batch.vertex2i(left + 1, bottom);
+	batch.vertex2i(left + 1, top - 1);
+	batch.end();
+
+	batch.begin(GL_POLYGON);
+	batch.color3fv(I->ButtonColor);
+	batch.vertex2i(right - 1, top - 1);
+	batch.vertex2i(right - 1, bottom + 1);
+	batch.vertex2i(left + 1, bottom + 1);
+	batch.vertex2i(left + 1, top - 1);
+	batch.end();
       }
 
     y = rect.top - cControlTopMargin;
@@ -680,18 +682,19 @@ void CControl::draw(CGO* orthoCGO)
 	    CGOVertex(orthoCGO, x + cControlInnerMargin-1.f, y - (cControlBoxSize - 1) + cControlInnerMargin, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_TRIANGLES);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    ImmBatch batch;
+	    batch.begin(GL_TRIANGLES);
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glVertex2i(x + cControlInnerMargin, y - (cControlBoxSize / 2));
-	    glEnd();
-	    glBegin(GL_LINES);
-	    glVertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
-	    glVertex2i(x + cControlInnerMargin,
+	    batch.vertex2i(x + cControlInnerMargin, y - (cControlBoxSize / 2));
+	    batch.end();
+	    batch.begin(GL_LINES);
+	    batch.vertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
+	    batch.vertex2i(x + cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glEnd();
+	    batch.end();
 	  }
           break;
         case 1:
@@ -707,14 +710,15 @@ void CControl::draw(CGO* orthoCGO)
 	    CGOVertex(orthoCGO, x + cControlBoxSize / 2 + 2, y - (cControlBoxSize / 2), 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_POLYGON);
-	    glVertex2i(x + cControlBoxSize / 2 + 2, y - (cControlBoxSize / 2));
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.vertex2i(x + cControlBoxSize / 2 + 2, y - (cControlBoxSize / 2));
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - cControlInnerMargin);
-	    glVertex2i(x + cControlInnerMargin, y - (cControlBoxSize / 2));
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    batch.vertex2i(x + cControlInnerMargin, y - (cControlBoxSize / 2));
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glEnd();
+	    batch.end();
 	  }
           break;
         case 2:
@@ -729,15 +733,16 @@ void CControl::draw(CGO* orthoCGO)
 		       y - (cControlBoxSize - 1) + cControlInnerMargin, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_POLYGON);
-	    glVertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
-	    glVertex2i(x + cControlInnerMargin,
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.vertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
+	    batch.vertex2i(x + cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - cControlInnerMargin);
-	    glEnd();
+	    batch.end();
 	  }
           break;
         case 3:
@@ -750,13 +755,14 @@ void CControl::draw(CGO* orthoCGO)
 		      y - (cControlBoxSize / 2), 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_TRIANGLES);
-	    glVertex2i(x + cControlInnerMargin, y - cControlInnerMargin + 1);
-	    glVertex2i(x + cControlInnerMargin,
+	    ImmBatch batch;
+	    batch.begin(GL_TRIANGLES);
+	    batch.vertex2i(x + cControlInnerMargin, y - cControlInnerMargin + 1);
+	    batch.vertex2i(x + cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin - 1);
-	    glVertex2i(x + (cControlBoxSize) - cControlInnerMargin,
+	    batch.vertex2i(x + (cControlBoxSize) - cControlInnerMargin,
 		       y - (cControlBoxSize / 2));
-	    glEnd();
+	    batch.end();
 	  }
           break;
         case 4:
@@ -773,14 +779,15 @@ void CControl::draw(CGO* orthoCGO)
 	    CGOVertex(orthoCGO, x + cControlBoxSize / 2 - 2, y - (cControlBoxSize / 2), 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_POLYGON);
-	    glVertex2i(x + cControlBoxSize / 2 - 2, y - (cControlBoxSize / 2));
-	    glVertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.vertex2i(x + cControlBoxSize / 2 - 2, y - (cControlBoxSize / 2));
+	    batch.vertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - (cControlBoxSize / 2));
-	    glVertex2i(x + cControlInnerMargin,
+	    batch.vertex2i(x + cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glEnd();
+	    batch.end();
 	  }
           break;
         case 5:
@@ -800,19 +807,20 @@ void CControl::draw(CGO* orthoCGO)
 	    CGOVertex(orthoCGO, x + (cControlBoxSize - 1) - cControlInnerMargin - 1.f, y - (cControlBoxSize - 1) + cControlInnerMargin, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_TRIANGLES);
-	    glVertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
-	    glVertex2i(x + cControlInnerMargin,
+	    ImmBatch batch;
+	    batch.begin(GL_TRIANGLES);
+	    batch.vertex2i(x + cControlInnerMargin, y - cControlInnerMargin);
+	    batch.vertex2i(x + cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - (cControlBoxSize / 2));
-	    glEnd();
-	    glBegin(GL_LINES);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    batch.end();
+	    batch.begin(GL_LINES);
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
+	    batch.vertex2i(x + (cControlBoxSize - 1) - cControlInnerMargin,
 		       y - (cControlBoxSize - 1) + cControlInnerMargin);
-	    glEnd();
+	    batch.end();
 	  }
           break;
         case 6:
@@ -829,12 +837,13 @@ void CControl::draw(CGO* orthoCGO)
 	    CGOVertex(orthoCGO, x + (cControlBoxSize / 2) - cControlSpread, y - cControlInnerMargin, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_POLYGON);
-	    glVertex2i(x + (cControlBoxSize / 2) + cControlSpread, y - cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize / 2),
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.vertex2i(x + (cControlBoxSize / 2) + cControlSpread, y - cControlInnerMargin);
+	    batch.vertex2i(x + (cControlBoxSize / 2),
 		       y - (cControlBoxSize) + cControlInnerMargin);
-	    glVertex2i(x + (cControlBoxSize / 2) - cControlSpread, y - cControlInnerMargin);
-	    glEnd();
+	    batch.vertex2i(x + (cControlBoxSize / 2) - cControlSpread, y - cControlInnerMargin);
+	    batch.end();
 	  }
           break;
         case 8:

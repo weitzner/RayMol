@@ -35,6 +35,7 @@ Z* -------------------------------------------------------------------
 #include "PyMOL.h"
 #include "CGO.h"
 #include "Block.h"
+#include "ImmediateHelper.h"
 
 #define cPopUpLineHeight DIP2PIXEL(17)
 #define cPopUpTitleHeight DIP2PIXEL(19)
@@ -633,13 +634,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.right + 2, rect.bottom + 1, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.2F, 0.2F, 0.4F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.left - 2, rect.bottom - 2);
-      glVertex2i(rect.right + 2, rect.bottom - 2);
-      glVertex2i(rect.right + 2, rect.bottom + 1);
-      glVertex2i(rect.left - 2, rect.bottom + 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.2F, 0.2F, 0.4F);
+      batch.vertex2i(rect.left - 2, rect.bottom - 2);
+      batch.vertex2i(rect.right + 2, rect.bottom - 2);
+      batch.vertex2i(rect.right + 2, rect.bottom + 1);
+      batch.vertex2i(rect.left - 2, rect.bottom + 1);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -651,13 +653,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.right + 1, rect.bottom + 1, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.4F, 0.4F, 0.6F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.left - 1, rect.bottom - 1);
-      glVertex2i(rect.right + 1, rect.bottom - 1);
-      glVertex2i(rect.right + 1, rect.bottom + 1);
-      glVertex2i(rect.left - 1, rect.bottom + 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.4F, 0.4F, 0.6F);
+      batch.vertex2i(rect.left - 1, rect.bottom - 1);
+      batch.vertex2i(rect.right + 1, rect.bottom - 1);
+      batch.vertex2i(rect.right + 1, rect.bottom + 1);
+      batch.vertex2i(rect.left - 1, rect.bottom + 1);
+      batch.end();
     }
     /* right */
 
@@ -670,13 +673,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.right + 2, rect.top, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.2F, 0.2F, 0.4F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.right, rect.bottom - 2);
-      glVertex2i(rect.right + 2, rect.bottom - 2);
-      glVertex2i(rect.right + 2, rect.top);
-      glVertex2i(rect.right, rect.top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.2F, 0.2F, 0.4F);
+      batch.vertex2i(rect.right, rect.bottom - 2);
+      batch.vertex2i(rect.right + 2, rect.bottom - 2);
+      batch.vertex2i(rect.right + 2, rect.top);
+      batch.vertex2i(rect.right, rect.top);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -688,13 +692,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.right + 1, rect.top, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.4F, 0.4F, 0.6F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.right, rect.bottom - 1);
-      glVertex2i(rect.right + 1, rect.bottom - 1);
-      glVertex2i(rect.right + 1, rect.top);
-      glVertex2i(rect.right, rect.top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.4F, 0.4F, 0.6F);
+      batch.vertex2i(rect.right, rect.bottom - 1);
+      batch.vertex2i(rect.right + 1, rect.bottom - 1);
+      batch.vertex2i(rect.right + 1, rect.top);
+      batch.vertex2i(rect.right, rect.top);
+      batch.end();
     }
     /* top */
 
@@ -707,13 +712,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.right + 2, rect.top, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.5F, 0.5F, 0.7F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.left - 2, rect.top + 2);
-      glVertex2i(rect.right + 2, rect.top + 2);
-      glVertex2i(rect.right + 2, rect.top);
-      glVertex2i(rect.left - 2, rect.top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.5F, 0.5F, 0.7F);
+      batch.vertex2i(rect.left - 2, rect.top + 2);
+      batch.vertex2i(rect.right + 2, rect.top + 2);
+      batch.vertex2i(rect.right + 2, rect.top);
+      batch.vertex2i(rect.left - 2, rect.top);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -725,13 +731,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.right + 1, rect.top, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.6F, 0.6F, 0.8F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.left - 1, rect.top + 1);
-      glVertex2i(rect.right + 1, rect.top + 1);
-      glVertex2i(rect.right + 1, rect.top);
-      glVertex2i(rect.left - 1, rect.top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.6F, 0.6F, 0.8F);
+      batch.vertex2i(rect.left - 1, rect.top + 1);
+      batch.vertex2i(rect.right + 1, rect.top + 1);
+      batch.vertex2i(rect.right + 1, rect.top);
+      batch.vertex2i(rect.left - 1, rect.top);
+      batch.end();
     }
 
     /* left */
@@ -744,13 +751,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.left, rect.top, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.5F, 0.5F, 0.7F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.left - 2, rect.bottom - 2);
-      glVertex2i(rect.left, rect.bottom);
-      glVertex2i(rect.left, rect.top);
-      glVertex2i(rect.left - 2, rect.top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.5F, 0.5F, 0.7F);
+      batch.vertex2i(rect.left - 2, rect.bottom - 2);
+      batch.vertex2i(rect.left, rect.bottom);
+      batch.vertex2i(rect.left, rect.top);
+      batch.vertex2i(rect.left - 2, rect.top);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -762,13 +770,14 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, rect.left - 1, rect.top, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.6F, 0.6F, 0.8F);
-      glBegin(GL_POLYGON);
-      glVertex2i(rect.left - 1, rect.bottom - 1);
-      glVertex2i(rect.left, rect.bottom - 1);
-      glVertex2i(rect.left, rect.top);
-      glVertex2i(rect.left - 1, rect.top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.6F, 0.6F, 0.8F);
+      batch.vertex2i(rect.left - 1, rect.bottom - 1);
+      batch.vertex2i(rect.left, rect.bottom - 1);
+      batch.vertex2i(rect.left, rect.top);
+      batch.vertex2i(rect.left - 1, rect.top);
+      batch.end();
     }
 
     if (orthoCGO)
@@ -800,12 +809,13 @@ void CPopUp::draw(CGO* orthoCGO)
       CGOVertex(orthoCGO, x + I->Width - 1, y - (cPopUpLineHeight + 3), 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glBegin(GL_POLYGON);
-      glVertex2i(x, y);
-      glVertex2i(x + I->Width - 1, y);
-      glVertex2i(x + I->Width - 1, y - (cPopUpLineHeight + 3));
-      glVertex2i(x, y - (cPopUpLineHeight + 3));
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.vertex2i(x, y);
+      batch.vertex2i(x + I->Width - 1, y);
+      batch.vertex2i(x + I->Width - 1, y - (cPopUpLineHeight + 3));
+      batch.vertex2i(x, y - (cPopUpLineHeight + 3));
+      batch.end();
     }
     }
     if(I->Code[0] == 2) {       /* menu name */
@@ -834,12 +844,13 @@ void CPopUp::draw(CGO* orthoCGO)
 	CGOVertex(orthoCGO, x + I->Width, y - (cPopUpLineHeight + cPopUpCharMargin), 0.f);
 	CGOEnd(orthoCGO);
       } else {
-	glBegin(GL_POLYGON);
-	glVertex2i(x, y);
-	glVertex2i(x + I->Width, y);
-	glVertex2i(x + I->Width, y - (cPopUpLineHeight + cPopUpCharMargin));
-	glVertex2i(x, y - (cPopUpLineHeight + cPopUpCharMargin));
-	glEnd();
+	ImmBatch batch;
+	batch.begin(GL_POLYGON);
+	batch.vertex2i(x, y);
+	batch.vertex2i(x + I->Width, y);
+	batch.vertex2i(x + I->Width, y - (cPopUpLineHeight + cPopUpCharMargin));
+	batch.vertex2i(x, y - (cPopUpLineHeight + cPopUpCharMargin));
+	batch.end();
       }
 
       if (orthoCGO){
@@ -851,11 +862,12 @@ void CPopUp::draw(CGO* orthoCGO)
 	CGOVertex(orthoCGO, x, y - (cPopUpLineHeight + cPopUpCharMargin) - 1.f, 0.f);
 	CGOEnd(orthoCGO);
       } else {
-	glColor3f(0.2F, 0.2F, 0.4F);
-	glBegin(GL_LINES);
-	glVertex2i(x + I->Width - 1, y - (cPopUpLineHeight + cPopUpCharMargin));
-	glVertex2i(x, y - (cPopUpLineHeight + cPopUpCharMargin));
-	glEnd();
+	ImmBatch batch;
+	batch.begin(GL_LINES);
+	batch.color3f(0.2F, 0.2F, 0.4F);
+	batch.vertex2i(x + I->Width - 1, y - (cPopUpLineHeight + cPopUpCharMargin));
+	batch.vertex2i(x, y - (cPopUpLineHeight + cPopUpCharMargin));
+	batch.end();
       }
     }
 
@@ -893,15 +905,16 @@ void CPopUp::draw(CGO* orthoCGO)
 	    CGOVertex(orthoCGO, rect.left, y + 1, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_POLYGON);
-	    glColor3f(0.4F, 0.4F, 0.4F);
-	    glVertex2i(rect.left - 3, y + 1);
-	    glColor3f(0.1F, 0.1F, 0.1F);
-	    glVertex2i(rect.left, y + 1);
-	    glVertex2i(rect.left, y + ((cPopUpLineHeight)) - 4);
-	    glColor3f(0.4F, 0.4F, 0.4F);
-	    glVertex2i(rect.left - 3, y + ((cPopUpLineHeight)) - 4);
-	    glEnd();
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.color3f(0.4F, 0.4F, 0.4F);
+	    batch.vertex2i(rect.left - 3, y + 1);
+	    batch.color3f(0.1F, 0.1F, 0.1F);
+	    batch.vertex2i(rect.left, y + 1);
+	    batch.vertex2i(rect.left, y + ((cPopUpLineHeight)) - 4);
+	    batch.color3f(0.4F, 0.4F, 0.4F);
+	    batch.vertex2i(rect.left - 3, y + ((cPopUpLineHeight)) - 4);
+	    batch.end();
 	  }
 	  if (orthoCGO){
 	    CGOBegin(orthoCGO, GL_TRIANGLE_STRIP);
@@ -915,15 +928,16 @@ void CPopUp::draw(CGO* orthoCGO)
 	    CGOVertex(orthoCGO, rect.right + 3, y + ((cPopUpLineHeight)) - 4, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_POLYGON);
-	    glColor3f(0.1F, 0.2F, 0.2F);
-	    glVertex2i(rect.right, y + 1);
-	    glColor3f(0.4F, 0.4F, 0.4F);
-	    glVertex2i(rect.right + 3, y + 1);
-	    glVertex2i(rect.right + 3, y + ((cPopUpLineHeight)) - 4);
-	    glColor3f(0.1F, 0.2F, 0.2F);
-	    glVertex2i(rect.right, y + ((cPopUpLineHeight)) - 4);
-	    glEnd();
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.color3f(0.1F, 0.2F, 0.2F);
+	    batch.vertex2i(rect.right, y + 1);
+	    batch.color3f(0.4F, 0.4F, 0.4F);
+	    batch.vertex2i(rect.right + 3, y + 1);
+	    batch.vertex2i(rect.right + 3, y + ((cPopUpLineHeight)) - 4);
+	    batch.color3f(0.1F, 0.2F, 0.2F);
+	    batch.vertex2i(rect.right, y + ((cPopUpLineHeight)) - 4);
+	    batch.end();
 	  }
         }
 
@@ -956,18 +970,19 @@ void CPopUp::draw(CGO* orthoCGO)
 		      y + ((cPopUpLineHeight + cPopUpCharMargin) / 2) + 4, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_LINES);
-	    glColor3f(0.3F, 0.3F, 0.5F);
-	    glVertex2i(rect.left,
+	    ImmBatch batch;
+	    batch.begin(GL_LINES);
+	    batch.color3f(0.3F, 0.3F, 0.5F);
+	    batch.vertex2i(rect.left,
 		       y + ((cPopUpLineHeight + cPopUpCharMargin) / 2) + 3);
-	    glVertex2i(rect.right,
+	    batch.vertex2i(rect.right,
 		       y + ((cPopUpLineHeight + cPopUpCharMargin) / 2) + 3);
-	    glColor3f(0.6F, 0.6F, 0.8F);
-	    glVertex2i(rect.left,
+	    batch.color3f(0.6F, 0.6F, 0.8F);
+	    batch.vertex2i(rect.left,
 		       y + ((cPopUpLineHeight + cPopUpCharMargin) / 2) + 4);
-	    glVertex2i(rect.right,
+	    batch.vertex2i(rect.right,
 		       y + ((cPopUpLineHeight + cPopUpCharMargin) / 2) + 4);
-	    glEnd();
+	    batch.end();
 	  }
         y -= cPopUpBarHeight;
       }

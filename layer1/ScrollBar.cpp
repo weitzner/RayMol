@@ -20,6 +20,7 @@ Z* -------------------------------------------------------------------
 #include"Ortho.h"
 #include"ScrollBar.h"
 #include"CGO.h"
+#include"ImmediateHelper.h"
 
 bool ScrollBar::isMaxed() const
 {
@@ -57,7 +58,7 @@ void ScrollBar::fill(CGO* orthoCGO)
     CGOColorv(orthoCGO, BackColor);
 #ifndef PURE_OPENGL_ES_2
   else
-    glColor3fv(BackColor);
+    glColor4f(BackColor[0], BackColor[1], BackColor[2], 1.0f);
 #endif
   Block::fill(orthoCGO);
 }
@@ -100,13 +101,14 @@ void ScrollBar::drawImpl(bool bFill, CGO* orthoCGO)
       CGOVertex(orthoCGO, left, bottom + 1, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.8F, 0.8F, 0.8F);
-      glBegin(GL_POLYGON);
-      glVertex2i(right, top);
-      glVertex2i(right, bottom + 1);
-      glVertex2i(left, bottom + 1);
-      glVertex2i(left, top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.8F, 0.8F, 0.8F);
+      batch.vertex2i(right, top);
+      batch.vertex2i(right, bottom + 1);
+      batch.vertex2i(left, bottom + 1);
+      batch.vertex2i(left, top);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -118,13 +120,14 @@ void ScrollBar::drawImpl(bool bFill, CGO* orthoCGO)
       CGOVertex(orthoCGO, left + 1, bottom, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.3F, 0.3F, 0.3F);
-      glBegin(GL_POLYGON);
-      glVertex2i(right, top - 1);
-      glVertex2i(right, bottom);
-      glVertex2i(left + 1, bottom);
-      glVertex2i(left + 1, top - 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.3F, 0.3F, 0.3F);
+      batch.vertex2i(right, top - 1);
+      batch.vertex2i(right, bottom);
+      batch.vertex2i(left + 1, bottom);
+      batch.vertex2i(left + 1, top - 1);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -136,13 +139,14 @@ void ScrollBar::drawImpl(bool bFill, CGO* orthoCGO)
       CGOVertex(orthoCGO, left, bottom, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3f(0.3F, 0.3F, 0.3F);
-      glBegin(GL_POLYGON);
-      glVertex2i(right, bottom + 1);
-      glVertex2i(right, bottom);
-      glVertex2i(left, bottom);
-      glVertex2i(left, bottom + 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3f(0.3F, 0.3F, 0.3F);
+      batch.vertex2i(right, bottom + 1);
+      batch.vertex2i(right, bottom);
+      batch.vertex2i(left, bottom);
+      batch.vertex2i(left, bottom + 1);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -154,13 +158,14 @@ void ScrollBar::drawImpl(bool bFill, CGO* orthoCGO)
       CGOVertex(orthoCGO, left + 1, bottom + 1, 0.f);
       CGOEnd(orthoCGO);
     } else {
-      glColor3fv(m_BarColor);
-      glBegin(GL_POLYGON);
-      glVertex2i(right - 1, top - 1);
-      glVertex2i(right - 1, bottom + 1);
-      glVertex2i(left + 1, bottom + 1);
-      glVertex2i(left + 1, top - 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color3fv(m_BarColor);
+      batch.vertex2i(right - 1, top - 1);
+      batch.vertex2i(right - 1, bottom + 1);
+      batch.vertex2i(left + 1, bottom + 1);
+      batch.vertex2i(left + 1, top - 1);
+      batch.end();
     }
   }
 }
@@ -198,13 +203,14 @@ void ScrollBar::drawHandle(float alpha, CGO* orthoCGO)
       CGOEnd(orthoCGO);
       CGOAlpha(orthoCGO, 1.f);
     } else {
-      glColor4f(0.8F, 0.8F, 0.8F, alpha);
-      glBegin(GL_POLYGON);
-      glVertex2i(right, top);
-      glVertex2i(right, bottom + 1);
-      glVertex2i(left, bottom + 1);
-      glVertex2i(left, top);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color4f(0.8F, 0.8F, 0.8F, alpha);
+      batch.vertex2i(right, top);
+      batch.vertex2i(right, bottom + 1);
+      batch.vertex2i(left, bottom + 1);
+      batch.vertex2i(left, top);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -218,13 +224,14 @@ void ScrollBar::drawHandle(float alpha, CGO* orthoCGO)
       CGOEnd(orthoCGO);
       CGOAlpha(orthoCGO, 1.f);
     } else {
-      glColor4f(0.3F, 0.3F, 0.3F, alpha);
-      glBegin(GL_POLYGON);
-      glVertex2i(right, top - 1);
-      glVertex2i(right, bottom);
-      glVertex2i(left + 1, bottom);
-      glVertex2i(left + 1, top - 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color4f(0.3F, 0.3F, 0.3F, alpha);
+      batch.vertex2i(right, top - 1);
+      batch.vertex2i(right, bottom);
+      batch.vertex2i(left + 1, bottom);
+      batch.vertex2i(left + 1, top - 1);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -238,13 +245,14 @@ void ScrollBar::drawHandle(float alpha, CGO* orthoCGO)
       CGOEnd(orthoCGO);
       CGOAlpha(orthoCGO, 1.f);
     } else {
-      glColor4f(0.3F, 0.3F, 0.3F, alpha);
-      glBegin(GL_POLYGON);
-      glVertex2i(right, bottom + 1);
-      glVertex2i(right, bottom);
-      glVertex2i(left, bottom);
-      glVertex2i(left, bottom + 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color4f(0.3F, 0.3F, 0.3F, alpha);
+      batch.vertex2i(right, bottom + 1);
+      batch.vertex2i(right, bottom);
+      batch.vertex2i(left, bottom);
+      batch.vertex2i(left, bottom + 1);
+      batch.end();
     }
 
     if (orthoCGO){
@@ -258,13 +266,14 @@ void ScrollBar::drawHandle(float alpha, CGO* orthoCGO)
       CGOEnd(orthoCGO);
       CGOAlpha(orthoCGO, 1.f);
     } else {
-      glColor4f(m_BarColor[0], m_BarColor[1], m_BarColor[2], alpha);
-      glBegin(GL_POLYGON);
-      glVertex2i(right - 1, top - 1);
-      glVertex2i(right - 1, bottom + 1);
-      glVertex2i(left + 1, bottom + 1);
-      glVertex2i(left + 1, top - 1);
-      glEnd();
+      ImmBatch batch;
+      batch.begin(GL_POLYGON);
+      batch.color4f(m_BarColor[0], m_BarColor[1], m_BarColor[2], alpha);
+      batch.vertex2i(right - 1, top - 1);
+      batch.vertex2i(right - 1, bottom + 1);
+      batch.vertex2i(left + 1, bottom + 1);
+      batch.vertex2i(left + 1, top - 1);
+      batch.end();
     }
     glDisable(GL_BLEND);
   }

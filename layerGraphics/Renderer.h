@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 namespace pymol {
@@ -141,6 +142,9 @@ public:
   virtual void batchColor3f(float r, float g, float b) = 0;
   virtual void batchColor3fv(const float* c) = 0;
   virtual void batchColor4f(float r, float g, float b, float a) = 0;
+  virtual void batchColor4fv(const float* c) = 0;
+  virtual void batchColor4ub(
+      unsigned char r, unsigned char g, unsigned char b, unsigned char a) = 0;
   virtual void batchNormal3fv(const float* n) = 0;
   virtual void endBatch() = 0;
 

@@ -53,67 +53,7 @@ RepNonbonded::~RepNonbonded()
 
 void RepNonbondedRenderImmediate(CoordSet * cs, RenderInfo * info)
 {
-#ifndef PURE_OPENGL_ES_2
-  PyMOLGlobals *G = cs->G;
-  if(info->ray || info->pick || (!(G->HaveGUI && G->ValidContext)))
-    return;
-  else {
-    int active = false;
-    ObjectMolecule *obj = cs->Obj;
-    float line_width =
-      SettingGet_f(G, cs->Setting.get(), obj->Setting.get(), cSetting_line_width);
-    float nonbonded_size =
-      SettingGet_f(G, cs->Setting.get(), obj->Setting.get(), cSetting_nonbonded_size);
-
-    if(info->width_scale_flag)
-      glLineWidth(line_width * info->width_scale);
-    else
-      glLineWidth(line_width);
-
-    SceneResetNormal(G, true);
-
-    if(!info->line_lighting)
-      glDisable(GL_LIGHTING);
-    glBegin(GL_LINES);
-    {
-      int a;
-      int nIndex = cs->NIndex;
-      const AtomInfoType* atomInfo = obj->AtomInfo.data();
-      const int* i2a = cs->IdxToAtm.data();
-      int last_color = -1;
-      const float *v = cs->Coord;
-
-      for(a = 0; a < nIndex; a++) {
-        const AtomInfoType* ai = atomInfo + *(i2a++);
-        if((!ai->bonded) && (ai->visRep & cRepNonbondedBit)) {
-          int c = ai->color;
-          float v0 = v[0];
-          float v1 = v[1];
-          float v2 = v[2];
-          active = true;
-          if(c != last_color) {
-            last_color = c;
-            glColor3fv(ColorGet(G, c));
-          }
-
-          glVertex3f(v0 - nonbonded_size, v1, v2);
-          glVertex3f(v0 + nonbonded_size, v1, v2);
-
-          glVertex3f(v0, v1 - nonbonded_size, v2);
-          glVertex3f(v0, v1 + nonbonded_size, v2);
-
-          glVertex3f(v0, v1, v2 - nonbonded_size);
-          glVertex3f(v0, v1, v2 + nonbonded_size);
-        }
-        v += 3;
-      }
-    }
-    glEnd();
-    glEnable(GL_LIGHTING);
-    if(!active)
-      cs->Active[cRepNonbonded] = false;
-  }
-#endif
+  // TODO: convert to VBO/shader path
 }
 
 static int RepNonbondedCGOGenerate(RepNonbonded * I, RenderInfo * info)

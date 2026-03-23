@@ -202,38 +202,7 @@ void RepDot::render(RenderInfo * info)
 		    been rendered */
 	}
       } else {
-	if(!normals)
-	  SceneResetNormal(G, true);
-        int lighting =
-          SettingGet_i(G, I->cs->Setting.get(), I->obj->Setting.get(), cSetting_dot_lighting);
-	if(!lighting) {
-	  if(!info->line_lighting)
-	    glDisable(GL_LIGHTING);
-	}
-
-	if(info->width_scale_flag)
-	  glPointSize(I->Width * info->width_scale);
-	else
-	  glPointSize(I->Width);
-
-        glBegin(GL_POINTS);
-        while(c--) {
-          if(!cc) {             /* load up the current vertex color */
-            cc = (int) (*(v++));
-            glColor3fv(v);
-            v += 3;
-          }
-          if(normals)
-            glNormal3fv(v);
-          v += 3;
-          glVertex3fv(v);
-          v += 3;
-          cc--;
-        }
-        glEnd();
-
-        if(!lighting)
-          glEnable(GL_LIGHTING);
+        // TODO: convert to VBO/shader path
       }
     }
   }

@@ -89,6 +89,9 @@ public:
   void batchColor3f(float r, float g, float b) override;
   void batchColor3fv(const float* c) override;
   void batchColor4f(float r, float g, float b, float a) override;
+  void batchColor4fv(const float* c) override;
+  void batchColor4ub(
+      unsigned char r, unsigned char g, unsigned char b, unsigned char a) override;
   void batchNormal3fv(const float* n) override;
   void endBatch() override;
 

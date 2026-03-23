@@ -17,6 +17,7 @@ Z* -------------------------------------------------------------------
 #include"os_python.h"
 
 #include"os_gl.h"
+#include"ImmediateHelper.h"
 
 #include"Base.h"
 #include"main.h"
@@ -131,25 +132,27 @@ void ViewElemDrawBox(PyMOLGlobals *G, BlockRect *rect, int first, int last,
 	CGOEnd(orthoCGO);
 	CGOAlpha(orthoCGO, prevAlpha);
       } else {
-	glColor4fv(color4);
-	glBegin(GL_POLYGON);
-	glVertex2f(start, bot);
-	glVertex2f(start, top);
-	glVertex2f(stop, top);
-	glVertex2f(stop, bot);
-	glEnd();
+	ImmBatch batch;
+	batch.begin(GL_POLYGON);
+	batch.color4f(color4[0], color4[1], color4[2], color4[3]);
+	batch.vertex2f(start, bot);
+	batch.vertex2f(start, top);
+	batch.vertex2f(stop, top);
+	batch.vertex2f(stop, bot);
+	batch.end();
       }
       glDisable(GL_BLEND);
     } else {
       if (orthoCGO){
 	CGOLineAsTriangleStrips(orthoCGO, start, bot, stop, top);
       } else {
-	glBegin(GL_LINE_LOOP);
-	glVertex2f(start, bot);
-	glVertex2f(start, top);
-	glVertex2f(stop, top);
-	glVertex2f(stop, bot);
-	glEnd();
+	ImmBatch batch;
+	batch.begin(GL_LINE_LOOP);
+	batch.vertex2f(start, bot);
+	batch.vertex2f(start, top);
+	batch.vertex2f(stop, top);
+	batch.vertex2f(stop, bot);
+	batch.end();
       }
     }
   }
@@ -196,13 +199,14 @@ void ViewElemDraw(PyMOLGlobals *G,
 	    CGOVertex(orthoCGO, stop, mid_top, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glColor3fv(bar_color);
-	    glBegin(GL_POLYGON);
-	    glVertex2f(start, mid_bot);
-	    glVertex2f(start, mid_top);
-	    glVertex2f(stop, mid_top);
-	    glVertex2f(stop, mid_bot);
-	    glEnd();
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.color3fv(bar_color);
+	    batch.vertex2f(start, mid_bot);
+	    batch.vertex2f(start, mid_top);
+	    batch.vertex2f(stop, mid_top);
+	    batch.vertex2f(stop, mid_bot);
+	    batch.end();
 	  }
 	  if (orthoCGO){
 	    CGOBegin(orthoCGO, GL_TRIANGLE_STRIP);
@@ -220,14 +224,15 @@ void ViewElemDraw(PyMOLGlobals *G,
 	    CGOVertex(orthoCGO, stop, mid_bot, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glColor3fv(key_color);
-	    glBegin(GL_LINES);
-	    glVertex2f(start,mid_top);
-	    glVertex2f(stop,mid_top);
-	    glColor3fv(bot_color);
-	    glVertex2f(start,mid_bot-1);
-	    glVertex2f(stop,mid_bot-1);
-	    glEnd();
+	    ImmBatch batch;
+	    batch.begin(GL_LINES);
+	    batch.color3fv(key_color);
+	    batch.vertex2f(start,mid_top);
+	    batch.vertex2f(stop,mid_top);
+	    batch.color3fv(bot_color);
+	    batch.vertex2f(start,mid_bot-1);
+	    batch.vertex2f(stop,mid_bot-1);
+	    batch.end();
 	  }
           break;
         case 2:
@@ -242,13 +247,14 @@ void ViewElemDraw(PyMOLGlobals *G,
 	    CGOVertex(orthoCGO, stop, top, 0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glColor3fv(key_color);
-	    glBegin(GL_POLYGON);
-	    glVertex2f(start, bot);
-	    glVertex2f(start, top);
-	    glVertex2f(stop, top);
-	    glVertex2f(stop, bot);
-	    glEnd();
+	    ImmBatch batch;
+	    batch.begin(GL_POLYGON);
+	    batch.color3fv(key_color);
+	    batch.vertex2f(start, bot);
+	    batch.vertex2f(start, top);
+	    batch.vertex2f(stop, top);
+	    batch.vertex2f(stop, bot);
+	    batch.end();
 	  }
 
 	  if (orthoCGO){
@@ -281,18 +287,19 @@ void ViewElemDraw(PyMOLGlobals *G,
 	    CGOVertex(orthoCGO, start+1,top,0.f);
 	    CGOEnd(orthoCGO);
 	  } else {
-	    glBegin(GL_LINES);
-	    glColor3fv(bot_color);
-	    glVertex2f(start,bot-1);
-	    glVertex2f(stop,bot-1);
-	    glVertex2f(stop,bot);
-	    glVertex2f(stop,top);
-	    glColor3fv(top_color);
-	    glVertex2f(start,top);
-	    glVertex2f(stop,top);
-	    glVertex2f(start,bot);
-	    glVertex2f(start,top);
-	    glEnd();
+	    ImmBatch batch;
+	    batch.begin(GL_LINES);
+	    batch.color3fv(bot_color);
+	    batch.vertex2f(start,bot-1);
+	    batch.vertex2f(stop,bot-1);
+	    batch.vertex2f(stop,bot);
+	    batch.vertex2f(stop,top);
+	    batch.color3fv(top_color);
+	    batch.vertex2f(start,top);
+	    batch.vertex2f(stop,top);
+	    batch.vertex2f(start,bot);
+	    batch.vertex2f(start,top);
+	    batch.end();
 	  }
           break;
         }
