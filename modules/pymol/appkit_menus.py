@@ -31,43 +31,49 @@ _radio_map = {}
 
 
 # ---------------------------------------------------------------------------
+# Command execution
+# ---------------------------------------------------------------------------
+# Menu actions and the render timer both run on the main thread's run loop,
+# so they can't overlap. When a menu action fires, the render timer isn't
+# running and the GIL/API lock is free. We can call _cmd.do() directly.
+
+def _do(cmd_str):
+    """Execute a PyMOL command string, handling errors gracefully."""
+    try:
+        _cmd.do(cmd_str)
+    except Exception as e:
+        print(f"[appkit_menus] error: {e}")
+
+
+# ---------------------------------------------------------------------------
 # ObjC helper classes
 # ---------------------------------------------------------------------------
 
 class _MenuTarget(AppKit.NSObject):
     """Receives actions from simple command menu items."""
 
-    @objc.python_method
-    def _do(self, cmd_str):
-        try:
-            _cmd.do(cmd_str)
-        except Exception as e:
-            print(f"[appkit_menus] command error: {e}")
-
     def doCommand_(self, sender):
         tag = sender.tag()
         cmd_str = _command_map.get(tag, '')
         if cmd_str:
-            self._do(cmd_str)
+            _do(cmd_str)
 
     def doToggle_(self, sender):
         tag = sender.tag()
         setting = _toggle_map.get(tag)
         if setting:
-            try:
-                cur = _cmd.get_setting_int(setting)
-                _cmd.set(setting, 1 - cur)
-            except Exception:
-                _cmd.do(f"set {setting}, toggle")
+            _do(f"set {setting}, toggle")
 
     def doRadio_(self, sender):
         tag = sender.tag()
         info = _radio_map.get(tag)
         if info:
             setting, value = info
-            _cmd.set(setting, value)
+            _do(f"set {setting}, {value}")
 
     # --- File dialogs ---
+    # Dialogs run their own modal event loop, so the render timer continues.
+    # The actual _cmd call after the dialog is deferred.
 
     def openFile_(self, sender):
         panel = AppKit.NSOpenPanel.openPanel()
@@ -77,7 +83,7 @@ class _MenuTarget(AppKit.NSObject):
         if panel.runModal() == AppKit.NSModalResponseOK:
             for url in panel.URLs():
                 path = str(url.path())
-                _cmd.load(path)
+                _do(f"load {path}")
 
     def saveSession_(self, sender):
         panel = AppKit.NSSavePanel.savePanel()
@@ -85,17 +91,17 @@ class _MenuTarget(AppKit.NSObject):
         panel.setNameFieldStringValue_("session.pse")
         if panel.runModal() == AppKit.NSModalResponseOK:
             path = str(panel.URL().path())
-            _cmd.save(path)
+            _do(f"save {path}")
 
     def saveSessionQuick_(self, sender):
         try:
             fn = _cmd.get("session_file")
             if fn:
-                _cmd.save(fn)
-            else:
-                self.saveSession_(sender)
+                _do(f"save {fn}")
+                return
         except Exception:
-            self.saveSession_(sender)
+            pass
+        self.saveSession_(sender)
 
     def exportPNG_(self, sender):
         panel = AppKit.NSSavePanel.savePanel()
@@ -103,7 +109,7 @@ class _MenuTarget(AppKit.NSObject):
         panel.setNameFieldStringValue_("image.png")
         if panel.runModal() == AppKit.NSModalResponseOK:
             path = str(panel.URL().path())
-            _cmd.png(path)
+            _do(f"png {path}")
 
     def runScript_(self, sender):
         panel = AppKit.NSOpenPanel.openPanel()
@@ -113,11 +119,11 @@ class _MenuTarget(AppKit.NSObject):
         if panel.runModal() == AppKit.NSModalResponseOK:
             path = str(panel.URL().path())
             if path.endswith('.pml'):
-                _cmd.do(f"@{path}")
+                _do(f"@{path}")
             elif path.endswith(('.pse', '.psw')):
-                _cmd.load(path)
+                _do(f"load {path}")
             else:
-                _cmd.do(f"run {path}")
+                _do(f"run {path}")
 
     def fetchPDB_(self, sender):
         alert = AppKit.NSAlert.alloc().init()
@@ -135,7 +141,7 @@ class _MenuTarget(AppKit.NSObject):
         if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
             code = str(field.stringValue()).strip()
             if code:
-                _cmd.fetch(code)
+                _do(f"fetch {code}")
 
     def openURL_(self, sender):
         tag = sender.tag()

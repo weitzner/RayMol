@@ -150,6 +150,7 @@ target_compile_definitions(PyMOL PRIVATE
     _PYMOL_OSX
     _PYMOL_NO_MAIN
     _PYMOL_APPKIT
+    _PYMOL_EMBEDDED
     PYMOL_CURVE_VALIDATE
 )
 

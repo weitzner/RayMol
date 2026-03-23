@@ -26,10 +26,7 @@ extern "C" PyObject* PyInit__cmd(void);
 // Defined in P.cpp (declared in P.h, but we can't include P.h here
 // because it pulls in GLEW which conflicts with the OpenGL framework headers)
 extern void PInit(PyMOLGlobals * G, int global_instance);
-extern void PBlock(PyMOLGlobals * G);
 extern void PUnblock(PyMOLGlobals * G);
-extern int PLockAPIAsGlut(PyMOLGlobals * G, int block_if_busy);
-extern void PUnlockAPIAsGlut(PyMOLGlobals * G);
 
 // Defined in Ortho.cpp
 extern int OrthoButton(PyMOLGlobals * G, int button, int state, int x, int y, int mod);
@@ -167,7 +164,7 @@ static PyMOLOpenGLView *glView = nullptr;
     );
 
     // Release the GIL
-    PUnblock(G);
+
 
     // Compute Retina scale factor and set via the setting system
     NSRect pointBounds = [self bounds];
@@ -214,9 +211,8 @@ static PyMOLOpenGLView *glView = nullptr;
 
     [[self openGLContext] makeCurrentContext];
 
-    if (!PLockAPIAsGlut(G, false)) return;
-
-    // Process idle work
+    // Process idle work (no API lock needed — render timer and mouse events
+    // are serialized on the main thread by the NSRunLoop)
     PyMOL_Idle(pymolInstance);
 
     // Handle pending reshapes — GetReshapeInfo returns point dimensions
@@ -238,8 +234,6 @@ static PyMOLOpenGLView *glView = nullptr;
         PyMOL_Draw(pymolInstance);
         PyMOL_PopValidContext(pymolInstance);
     }
-
-    PUnlockAPIAsGlut(G);
 
     // Swap if needed (may also be handled by swap callback)
     if (PyMOL_GetSwap(pymolInstance, 1)) {
@@ -299,7 +293,6 @@ static PyMOLOpenGLView *glView = nullptr;
 - (void)mouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     int button = PYMOL_BUTTON_LEFT;
@@ -307,93 +300,84 @@ static PyMOLOpenGLView *glView = nullptr;
         button = PYMOL_BUTTON_MIDDLE;
     }
     OrthoButton(G, button, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)mouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_LEFT, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)mouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)rightMouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)rightMouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)rightMouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)otherMouseDown:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)otherMouseUp:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoButton(G, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_UP, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)otherMouseDragged:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     OrthoDrag(G, (int)pt.x, (int)pt.y, mods);
-    PUnblock(G);
+
 }
 
 - (void)scrollWheel:(NSEvent *)event {
     if (!pymolInstance) return;
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
-    PBlock(G);
     NSPoint pt = [self pymolPointFromEvent:event];
     int mods = [self pymolModifiersFromEvent:event];
     float dy = [event deltaY];
@@ -402,7 +386,7 @@ static PyMOLOpenGLView *glView = nullptr;
     } else if (dy < 0.0f) {
         OrthoButton(G, PYMOL_BUTTON_SCROLL_REVERSE, PYMOL_BUTTON_DOWN, (int)pt.x, (int)pt.y, mods);
     }
-    PUnblock(G);
+
 }
 
 // ---------------------------------------------------------------------------
