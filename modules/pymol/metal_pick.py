@@ -1,14 +1,15 @@
-"""Screen-to-world unprojection for Metal picking."""
+"""Screen-to-world unprojection for Metal picking.
+
+Used by the Metal backend where GL picking (SceneDoXYPick) is unavailable.
+Unprojects screen coordinates to world space, finds the nearest atom, creates
+a selection. Selection indicators are rendered in C++ by
+SceneRenderMetalSelections() in SceneRender.cpp.
+"""
 import math
 
-def pick_at(ndc_x, ndc_y, aspect):
-    """Select the nearest atom to the screen position.
 
-    Args:
-        ndc_x: normalized device coordinate X [-1, 1]
-        ndc_y: normalized device coordinate Y [-1, 1]
-        aspect: viewport width / height
-    """
+def pick_at(ndc_x, ndc_y, aspect):
+    """Select the nearest atom/residue to the screen position."""
     from pymol import cmd
 
     try:
@@ -16,89 +17,92 @@ def pick_at(ndc_x, ndc_y, aspect):
         if not v:
             return
 
-        # Rotation matrix (3x3, row-major in PyMOL's get_view)
         R = [
             [v[0], v[1], v[2]],
             [v[3], v[4], v[5]],
             [v[6], v[7], v[8]],
         ]
-
-        # Camera position in eye space (translation after rotation)
         tx, ty, tz = v[9], v[10], v[11]
-
-        # Origin (center of rotation) in world space
         ox, oy, oz = v[12], v[13], v[14]
 
-        # Compute eye-space offset from screen coordinates
         fov = cmd.get_setting_float('field_of_view')
         dist = abs(tz)
         half_h = dist * math.tan(math.radians(fov / 2.0))
         half_w = half_h * aspect
 
-        # Eye-space point (offset from camera along near plane)
-        ex = ndc_x * half_w
-        ey = ndc_y * half_h
+        px = ndc_x * half_w - tx
+        py = ndc_y * half_h - ty
+        pz = 0.0
 
-        # Eye-to-world transform:
-        # Point in eye space relative to camera
-        px = ex - tx
-        py = ey - ty
-        pz = 0.0  # on the focal plane (z = -tz + tz = 0 relative to origin depth)
-
-        # Rotate by inverse (transpose) of R to get world offset
         wx = R[0][0] * px + R[1][0] * py + R[2][0] * pz + ox
         wy = R[0][1] * px + R[1][1] * py + R[2][1] * pz + oy
         wz = R[0][2] * px + R[1][2] * py + R[2][2] * pz + oz
 
-        # Log the unprojected point for debugging
-        try:
-            center = cmd.get_position()
-            with open('/tmp/pymol_pick.log', 'a') as f:
-                f.write('pick: ndc=(%.2f,%.2f) world=(%.2f,%.2f,%.2f) center=%s\n' %
-                        (ndc_x, ndc_y, wx, wy, wz, center))
-                f.write('  view: tx=%.2f ty=%.2f tz=%.2f ox=%.2f oy=%.2f oz=%.2f\n' %
-                        (tx, ty, tz, ox, oy, oz))
-                f.write('  fov=%.1f dist=%.1f half_w=%.1f half_h=%.1f\n' %
-                        (fov, dist, half_w, half_h))
-        except:
-            pass
-
-        # Create a temporary pseudoatom at the unprojected point,
-        # then select the nearest real atom within range.
-        # Use try/finally to ensure cleanup.
         try:
             cmd.delete('_pick_tmp')
-        except:
+        except Exception:
             pass
+
         cmd.pseudoatom('_pick_tmp', pos=[wx, wy, wz])
         try:
-            # Try increasingly large radii to find nearest atoms
+            nearest = None
             for radius in [3, 6, 10, 20]:
-                # Check if sele already exists and has atoms — add to it
-                try:
-                    existing = cmd.count_atoms('sele')
-                except:
-                    existing = 0
-
-                if existing > 0:
-                    # Accumulate: add new residue to existing selection
-                    n = cmd.select('sele', 'sele or byres ((all and not _pick_tmp) within %d of _pick_tmp)' % radius)
-                else:
-                    # First pick: create new selection
-                    n = cmd.select('sele', 'byres ((all and not _pick_tmp) within %d of _pick_tmp)' % radius)
-
-                if n > existing:
-                    cmd.enable('sele')
+                atoms = cmd.get_model(
+                    '(all and not _pick_tmp) within %d of _pick_tmp' % radius)
+                if atoms and atoms.atom:
+                    best_dist = float('inf')
+                    for at in atoms.atom:
+                        d = math.sqrt(
+                            (at.coord[0] - wx)**2 +
+                            (at.coord[1] - wy)**2 +
+                            (at.coord[2] - wz)**2)
+                        if d < best_dist:
+                            best_dist = d
+                            nearest = at
                     break
+
+            if nearest:
+                chain = nearest.chain or ''
+                resi = nearest.resi
+
+                ident = '/%s/%s/%s`%s/%s' % (
+                    nearest.segi or chain, chain,
+                    nearest.resn, resi, nearest.name)
+                print(' You clicked %s' % ident)
+
+                # Build selection expression
+                obj_list = cmd.get_names('objects')
+                sele_expr = None
+                for obj in obj_list:
+                    if obj.startswith('_'):
+                        continue
+                    try:
+                        n = cmd.count_atoms(
+                            '(%s and chain %s and resi %s)' % (
+                                obj, repr(chain), resi))
+                        if n > 0:
+                            sele_expr = '(%s and chain %s and resi %s)' % (
+                                obj, repr(chain), resi)
+                            break
+                    except Exception:
+                        continue
+
+                if sele_expr:
+                    try:
+                        existing = cmd.count_atoms('sele')
+                    except Exception:
+                        existing = 0
+
+                    if existing > 0:
+                        cmd.select('sele', 'sele or %s' % sele_expr)
+                    else:
+                        cmd.select('sele', sele_expr)
+                    cmd.enable('sele')
         finally:
             try:
                 cmd.delete('_pick_tmp')
-            except:
+            except Exception:
                 pass
 
     except Exception as e:
-        try:
-            with open('/tmp/pymol_pick.log', 'a') as f:
-                f.write('pick_at error: %s\n' % e)
-        except:
-            pass
+        print('metal_pick error: %s' % e)

@@ -1885,20 +1885,6 @@ void SceneRenderMetal(PyMOLGlobals* G)
     G->Renderer->loadMatrixf(proj);
     G->Renderer->matrixMode(0x1700); // GL_MODELVIEW = 0x1700
     G->Renderer->loadMatrixf(mv);
-
-    static int logCount = 0;
-    static float lastMV12 = 0;
-    if (!I->Obj.empty() && (logCount < 3 || fabsf(mv[12] - lastMV12) > 0.001f)) {
-      lastMV12 = mv[12];
-      FILE* f = fopen("/tmp/pymol_metal_render.log", "a");
-      if (f) {
-        fprintf(f, "Scene matrices [%d]: MV=%.4f %.4f %.4f %.4f P=%.4f %.4f %.4f %.4f mv12-14=%.2f %.2f %.2f\n",
-                logCount, mv[0], mv[5], mv[10], mv[15], proj[0], proj[5], proj[10], proj[15],
-                mv[12], mv[13], mv[14]);
-        fclose(f);
-      }
-      logCount++;
-    }
   }
 
   // --- Scene state needed by RenderInfo ---
@@ -1941,26 +1927,41 @@ void SceneRenderMetal(PyMOLGlobals* G)
   }
 
   // --- Render objects: opaque, then transparent ---
-  {
-    static int logOnce = 0;
-    if (!logOnce && !I->Obj.empty()) {
-      FILE* f = fopen("/tmp/pymol_metal_render.log", "w");
-      if (f) {
-        fprintf(f, "SceneRenderMetal: nObjects=%d use_shaders=%d\n",
-                (int)I->Obj.size(),
-                SettingGetGlobal_b(G, cSetting_use_shaders));
-        fprintf(f, "winX=%d winY=%d aspRat=%f\n", G->Option->winX, G->Option->winY, aspRat);
-        for (auto* obj : I->Obj) {
-          fprintf(f, "  obj: %s type=%d\n", obj->Name, obj->type);
-        }
-        fclose(f);
-      }
-      logOnce = 1;
-    }
-  }
   for (auto pass : {RenderPass::Opaque, RenderPass::Antialias,
                     RenderPass::Transparent}) {
     SceneRenderAll(G, &context, normal, nullptr, pass, false, 0.0f,
         &I->grid, 0, SceneRenderWhich::All, SceneRenderOrder::GadgetsLast);
   }
+
+  // --- Render selection indicators ---
+  // Collect selected atom positions and draw them as pink points
+  // through the Metal renderer (the GL indicator pipeline is unavailable).
+  SceneRenderMetalSelections(G);
+}
+
+void SceneRenderMetalSelections(PyMOLGlobals* G)
+{
+  if (!G->Renderer)
+    return;
+
+  // Collect selected atom coordinates via Executive helper
+  std::vector<float> coords;
+  ExecutiveGetSelectionCoords(G, coords);
+
+  if (coords.empty())
+    return;
+
+  int nPoints = (int)(coords.size() / 3);
+
+  // Render selection indicators as pink squares (overlay, no depth test).
+  G->Renderer->disable(pymol::Capability::DepthTest);
+  G->Renderer->pointSize(12.0f);  // Retina: need ~2x for visible size
+
+  G->Renderer->beginBatch(pymol::PrimitiveType::Points);
+  G->Renderer->batchColor4f(1.0f, 0.2f, 0.6f, 1.0f);
+  for (int i = 0; i < nPoints; i++)
+    G->Renderer->batchVertex3f(coords[i*3], coords[i*3+1], coords[i*3+2]);
+  G->Renderer->endBatch();
+
+  G->Renderer->enable(pymol::Capability::DepthTest);
 }

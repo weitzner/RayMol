@@ -8599,6 +8599,47 @@ private:
   GLfloat alpha_ref_before;
 };
 
+void ExecutiveGetSelectionCoords(PyMOLGlobals* G, std::vector<float>& coords)
+{
+  auto I = G->Executive;
+  bool vis_only = SettingGet<bool>(G, cSetting_selection_visible_only);
+
+  for (auto& rec : pymol::make_list_adapter(I->Spec)) {
+    if (rec.type != cExecSelection || !rec.visible)
+      continue;
+
+    int sele = SelectorIndexByName(G, rec.name);
+    if (sele < 0)
+      continue;
+
+    for (auto& rec1 : pymol::make_list_adapter(I->Spec)) {
+      if (rec1.type != cExecObject || rec1.obj->type != cObjectMolecule)
+        continue;
+
+      auto* obj = static_cast<ObjectMolecule*>(rec1.obj);
+      int curState = obj->getCurrentState();
+      if (curState < 0) curState = 0;
+      if (curState >= obj->NCSet) continue;
+
+      auto* cs = obj->CSet[curState];
+      if (!cs) continue;
+
+      for (int atIdx = 0; atIdx < obj->NAtom; atIdx++) {
+        if (!SelectorIsMember(G, obj->AtomInfo[atIdx].selEntry, sele))
+          continue;
+
+        int coordIdx = cs->atmToIdx(atIdx);
+        if (coordIdx < 0) continue;
+
+        const float* v = cs->coordPtr(coordIdx);
+        coords.push_back(v[0]);
+        coords.push_back(v[1]);
+        coords.push_back(v[2]);
+      }
+    }
+  }
+}
+
 void ExecutiveRenderSelections(
     PyMOLGlobals* G, int curState, int slot, GridInfo* grid)
 {

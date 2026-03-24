@@ -19,6 +19,7 @@ Z* -------------------------------------------------------------------
 
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "os_python.h"
 #include "pymol/zstring_view.h"
@@ -553,6 +554,7 @@ void ExecutiveInvalidateSelectionIndicatorsCGO(PyMOLGlobals* G);
  * @param slot slot to render
  * @param grid grid info
  */
+void ExecutiveGetSelectionCoords(PyMOLGlobals* G, std::vector<float>& coords);
 void ExecutiveRenderSelections(
     PyMOLGlobals* G, int curState, int slot, GridInfo* grid);
 void ExecutiveHideSelections(PyMOLGlobals* G);

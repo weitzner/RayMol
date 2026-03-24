@@ -148,11 +148,14 @@ struct BatchVertexIn {
 struct BatchUniforms {
   float4x4 modelview;
   float4x4 projection;
+  float pointSize;
+  float _pad[3];
 };
 
 struct BatchVertexOut {
   float4 position [[position]];
   float4 color;
+  float pointSize [[point_size]];
 };
 
 vertex BatchVertexOut batch_vertex(
@@ -162,6 +165,7 @@ vertex BatchVertexOut batch_vertex(
   BatchVertexOut out;
   out.position = uniforms.projection * uniforms.modelview * float4(in.position, 1.0);
   out.color = in.color;
+  out.pointSize = uniforms.pointSize;
   return out;
 }
 
@@ -1025,14 +1029,18 @@ void RendererMetal::endBatch()
   // Bind batch VBO at buffer index 0
   [_encoder setVertexBuffer:tmpVBO offset:0 atIndex:0];
 
-  // Upload modelview and projection matrices as uniforms at buffer index 1
+  // Upload modelview, projection matrices, and point size as uniforms
   struct {
     float modelview[16];
     float projection[16];
-  } matrices;
-  std::memcpy(matrices.modelview, _modelviewMatrix.data(), 64);
-  std::memcpy(matrices.projection, _projectionMatrix.data(), 64);
-  [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
+    float pointSize;
+    float _pad[3];
+  } uniforms;
+  std::memcpy(uniforms.modelview, _modelviewMatrix.data(), 64);
+  std::memcpy(uniforms.projection, _projectionMatrix.data(), 64);
+  uniforms.pointSize = _pointSize > 0.0f ? _pointSize : 1.0f;
+  uniforms._pad[0] = uniforms._pad[1] = uniforms._pad[2] = 0.0f;
+  [_encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
 
   // Use the current pipeline if set, otherwise fall back to the built-in
   // batch pipeline (simple position+color, no lighting).
@@ -1381,30 +1389,18 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   // Bind vertex buffer
   [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
 
-  // Upload modelview and projection matrices as uniforms at buffer index 1
+  // Upload modelview, projection matrices, and point size as uniforms
   struct {
     float modelview[16];
     float projection[16];
-  } matrices;
-  std::memcpy(matrices.modelview, _modelviewMatrix.data(), 64);
-  std::memcpy(matrices.projection, _projectionMatrix.data(), 64);
-  [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
-
-  {
-    static int logOnce = 0;
-    if (!logOnce) {
-      FILE* f = fopen("/tmp/pymol_metal_render.log", "a");
-      if (f) {
-        fprintf(f, "drawVBO draw: MV diag=%.2f %.2f %.2f %.2f P diag=%.2f %.2f %.2f %.2f\n",
-                matrices.modelview[0], matrices.modelview[5], matrices.modelview[10], matrices.modelview[15],
-                matrices.projection[0], matrices.projection[5], matrices.projection[10], matrices.projection[15]);
-        fprintf(f, "  posOff=%d normOff=%d colOff=%d colType=%d stride=%zu verts=%d pipeline=%p\n",
-                posOffset, normalOffset, colorOffset, colorType, stride, vertexCount, (void*)pipeline);
-        fclose(f);
-      }
-      logOnce = 1;
-    }
-  }
+    float pointSize;
+    float _pad[3];
+  } uniforms;
+  std::memcpy(uniforms.modelview, _modelviewMatrix.data(), 64);
+  std::memcpy(uniforms.projection, _projectionMatrix.data(), 64);
+  uniforms.pointSize = _pointSize > 0.0f ? _pointSize : 1.0f;
+  uniforms._pad[0] = uniforms._pad[1] = uniforms._pad[2] = 0.0f;
+  [_encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
 
   // Draw
   [_encoder drawPrimitives:toMTL(mode)

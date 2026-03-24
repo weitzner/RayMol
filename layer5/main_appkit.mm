@@ -78,6 +78,7 @@ int MainFromPyList(PyMOLGlobals *, PyObject *) { return 0; }
 // Backend preference: 0 = auto (Metal first), 1 = force Metal, 2 = force OpenGL
 enum RendererBackend { kBackendAuto = 0, kBackendMetal = 1, kBackendOpenGL = 2 };
 static RendererBackend g_requestedBackend = kBackendAuto;
+static NSOpenGLContext *g_dummyGLContext = nil;  // Metal's dummy GL context for picking
 
 @interface PyMOLAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property (strong) NSWindow *window;
@@ -114,8 +115,23 @@ static NSPoint pymolPoint(NSView *view, NSEvent *event) {
     return loc;
 }
 
+static void ensureGLContext(NSView *view) {
+    // SceneDoXYPick (atom picking) does GL rendering for the picking pass,
+    // so a GL context must be current when processing mouse events.
+    if ([view isKindOfClass:[NSOpenGLView class]]) {
+        [[(NSOpenGLView *)view openGLContext] makeCurrentContext];
+    }
+#if PYMOL_HAS_METAL
+    else if (g_dummyGLContext) {
+        // Metal view: use the dummy GL context for picking
+        [g_dummyGLContext makeCurrentContext];
+    }
+#endif
+}
+
 static void handleMouseButton(NSView *view, NSEvent *event, int button, int state) {
     if (!pymolInstance) return;
+    ensureGLContext(view);
     NSPoint pt = pymolPoint(view, event);
     int mods = pymolModifiers(event);
     PyMOL_Button(pymolInstance, button, state, (int)pt.x, (int)pt.y, mods);
@@ -123,6 +139,7 @@ static void handleMouseButton(NSView *view, NSEvent *event, int button, int stat
 
 static void handleMouseDrag(NSView *view, NSEvent *event) {
     if (!pymolInstance) return;
+    ensureGLContext(view);
     NSPoint pt = pymolPoint(view, event);
     int mods = pymolModifiers(event);
     PyMOL_Drag(pymolInstance, (int)pt.x, (int)pt.y, mods);
@@ -130,6 +147,7 @@ static void handleMouseDrag(NSView *view, NSEvent *event) {
 
 static void handleScrollWheel(NSView *view, NSEvent *event) {
     if (!pymolInstance) return;
+    ensureGLContext(view);
     PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
     NSPoint pt = pymolPoint(view, event);
     int mods = pymolModifiers(event);
@@ -471,9 +489,8 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     id<MTLCommandQueue> _commandQueue;
     BOOL _initialized;
     NSPoint _lastDragPoint;
-    NSPoint _mouseDownPoint;   // point-space coordinates at mouseDown
-    NSTimeInterval _mouseDownTime;
-    BOOL _isDragging;          // true once movement exceeds threshold
+    NSPoint _mouseDownPoint;
+    BOOL _isDragging;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -513,6 +530,11 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     // has GL calls scattered throughout object render() methods.
     NSOpenGLPixelFormatAttribute attrs[] = {
         NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersionLegacy,
+        NSOpenGLPFADoubleBuffer,
+        NSOpenGLPFADepthSize, 24,
+        NSOpenGLPFAStencilSize, 8,
+        NSOpenGLPFAColorSize, 32,
+        NSOpenGLPFAAccelerated,
         0
     };
     NSOpenGLPixelFormat *pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
@@ -520,8 +542,35 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     [dummyGL makeCurrentContext];
     // Initialize GLEW so extension function pointers (glGenBuffers etc.) work
     initGLEWForDummyContext();
+
+    // Create an offscreen FBO for GL picking renders.
+    // SceneDoXYPick calls SceneRender in picking mode which needs a real
+    // framebuffer to render into and glReadPixels from.
+    {
+        CGSize sz = self.drawableSize;
+        int w = (int)sz.width, h = (int)sz.height;
+        if (w < 1) w = 1024;
+        if (h < 1) h = 768;
+
+        GLuint fbo, colorRB, depthRB;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+        glGenRenderbuffers(1, &colorRB);
+        glBindRenderbuffer(GL_RENDERBUFFER, colorRB);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, colorRB);
+
+        glGenRenderbuffers(1, &depthRB);
+        glBindRenderbuffer(GL_RENDERBUFFER, depthRB);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthRB);
+
+        glViewport(0, 0, w, h);
+    }
+
     // Keep a strong reference so it stays alive
-    objc_setAssociatedObject(self, "dummyGL", dummyGL, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    g_dummyGLContext = dummyGL;  // keep strong ref in global
 
     CPyMOLOptions *options = PyMOLOptions_New();
     options->show_splash = 1;
@@ -639,13 +688,13 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     // Hand the drawable to the renderer and begin the frame
     renderer->setDrawable(drawable, passDesc);
 
+    // Process idle work BEFORE beginning the Metal frame
+    PyMOL_Idle(pymolInstance);
+
     // Set viewport to match drawable size
     CGSize sz = self.drawableSize;
     renderer->viewport(0, 0, (int)sz.width, (int)sz.height);
     renderer->beginFrame();
-
-    // Process idle work
-    PyMOL_Idle(pymolInstance);
 
     // Handle pending reshapes
     if (PyMOL_GetReshape(pymolInstance)) {
@@ -684,78 +733,48 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
 
-// Mouse and keyboard — click-vs-drag detection for left button.
-// Short clicks (< 3px movement) trigger picking via OrthoButton;
-// longer movements start a drag (rotation via SceneRotate).
+// Mouse handling for Metal backend:
+// - Single clicks use metal_pick.py (NDC-to-world unprojection) for selection
+//   because GL picking (SceneDoXYPick) requires a full GL scene which the
+//   Metal backend doesn't have.
+// - Drags use direct SceneRotate/SceneTranslate.
 - (void)mouseDown:(NSEvent *)e {
     _mouseDownPoint = [self convertPoint:[e locationInWindow] fromView:nil];
     _lastDragPoint = _mouseDownPoint;
-    _mouseDownTime = [e timestamp];
     _isDragging = NO;
-    // Don't send button-down yet — wait for drag threshold or mouseUp
 }
 - (void)mouseUp:(NSEvent *)e {
     if (!_isDragging) {
-        // Short click — route through OrthoButton for picking
-        [self performPickAtPoint:_mouseDownPoint withEvent:e];
+        // Single click — pick via Python unprojection
+        [self performPickAtPoint:_mouseDownPoint];
     }
-    // Always send button-up so PyMOL state stays consistent
-    handleMouseButton(self, e, PYMOL_BUTTON_LEFT, PYMOL_BUTTON_UP);
 }
 - (void)mouseDragged:(NSEvent *)e {
     NSPoint cur = [self convertPoint:[e locationInWindow] fromView:nil];
-    float dx = cur.x - _mouseDownPoint.x;
-    float dy = cur.y - _mouseDownPoint.y;
-
     if (!_isDragging) {
-        // Only start dragging after 3px movement threshold
+        float dx = cur.x - _mouseDownPoint.x;
+        float dy = cur.y - _mouseDownPoint.y;
         if (sqrtf(dx * dx + dy * dy) < 3.0f) return;
         _isDragging = YES;
         _lastDragPoint = cur;
         return;
     }
-
-    // Continue rotating (existing behavior)
     float ddx = cur.x - _lastDragPoint.x;
     float ddy = cur.y - _lastDragPoint.y;
     _lastDragPoint = cur;
     if (pymolInstance) {
         PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
         extern void SceneRotate(PyMOLGlobals*, float, float, float, float, bool);
-        SceneRotate(G, ddx, 0.0f, 1.0f, 0.0f, true);  // horizontal = Y rotation
-        SceneRotate(G, -ddy, 1.0f, 0.0f, 0.0f, true);  // vertical = X rotation (inverted)
+        SceneRotate(G, ddx, 0.0f, 1.0f, 0.0f, true);
+        SceneRotate(G, -ddy, 1.0f, 0.0f, 0.0f, true);
     }
 }
-
-// Picking via the dummy GL context.
-// Makes the offscreen GL context current, sets up viewport to match
-// the Metal scene, then sends a button press/release through OrthoButton
-// which triggers SceneClick → SceneDoXYPick → GL picking render → selection.
-- (void)performPickAtPoint:(NSPoint)point withEvent:(NSEvent *)event {
-    if (!pymolInstance) return;
-
-    // Convert screen point to normalized [-1, 1] coordinates
-    NSRect bounds = [self bounds];
-    float ndcX = (point.x / bounds.size.width) * 2.0f - 1.0f;
-    float ndcY = (point.y / bounds.size.height) * 2.0f - 1.0f;
-
-    float aspect = bounds.size.width / bounds.size.height;
-
-    // Use a separate Python module to avoid string escaping issues
-    char script[256];
-    snprintf(script, sizeof(script),
-        "from pymol.metal_pick import pick_at; pick_at(%f, %f, %f)",
-        ndcX, ndcY, aspect);
-    PyRun_SimpleString(script);
-}
-
-- (void)rightMouseDown:(NSEvent *)e  {
+- (void)rightMouseDown:(NSEvent *)e {
     _lastDragPoint = [self convertPoint:[e locationInWindow] fromView:nil];
     handleMouseButton(self, e, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_DOWN);
 }
 - (void)rightMouseUp:(NSEvent *)e    { handleMouseButton(self, e, PYMOL_BUTTON_RIGHT, PYMOL_BUTTON_UP); }
 - (void)rightMouseDragged:(NSEvent *)e {
-    // Right-drag = translate
     NSPoint cur = [self convertPoint:[e locationInWindow] fromView:nil];
     float dx = cur.x - _lastDragPoint.x;
     float dy = cur.y - _lastDragPoint.y;
@@ -768,9 +787,18 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
 }
 - (void)otherMouseDown:(NSEvent *)e  { handleMouseButton(self, e, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_DOWN); }
 - (void)otherMouseUp:(NSEvent *)e    { handleMouseButton(self, e, PYMOL_BUTTON_MIDDLE, PYMOL_BUTTON_UP); }
-- (void)otherMouseDragged:(NSEvent *)e { handleMouseDrag(self, e); }
+- (void)otherMouseDragged:(NSEvent *)e {
+    NSPoint cur = [self convertPoint:[e locationInWindow] fromView:nil];
+    float dx = cur.x - _lastDragPoint.x;
+    float dy = cur.y - _lastDragPoint.y;
+    _lastDragPoint = cur;
+    if (pymolInstance) {
+        PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+        extern void SceneTranslate(PyMOLGlobals*, float, float, float);
+        SceneTranslate(G, dx * 0.1f, dy * 0.1f, 0.0f);
+    }
+}
 - (void)scrollWheel:(NSEvent *)e {
-    // Scroll = zoom (translate Z)
     if (pymolInstance) {
         float dy = [e deltaY];
         PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
@@ -779,6 +807,28 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     }
 }
 - (void)keyDown:(NSEvent *)e         { handleKeyDown(self, e); }
+
+// Picking via NDC-to-world unprojection (GL picking is unavailable on Metal).
+- (void)performPickAtPoint:(NSPoint)point {
+    if (!pymolInstance) return;
+    NSRect bounds = [self bounds];
+    float ndcX = (point.x / bounds.size.width) * 2.0f - 1.0f;
+    float ndcY = (point.y / bounds.size.height) * 2.0f - 1.0f;
+    float aspect = bounds.size.width / bounds.size.height;
+
+    char script[256];
+    snprintf(script, sizeof(script),
+        "from pymol.metal_pick import pick_at; pick_at(%f, %f, %f)",
+        ndcX, ndcY, aspect);
+
+    // Use PBlock/PUnblock (PyMOL's GIL management) rather than
+    // PyGILState_Ensure which can conflict with PyMOL's GIL state.
+    PyMOLGlobals *G = PyMOL_GetGlobals(pymolInstance);
+    extern void PBlock(PyMOLGlobals *);
+    PBlock(G);
+    PyRun_SimpleString(script);
+    PUnblock(G);
+}
 - (void)flagsChanged:(NSEvent *)event {}
 
 - (void)dealloc {
