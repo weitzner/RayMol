@@ -688,8 +688,17 @@ static void handleKeyDown(NSView *view, NSEvent *event) {
     // Hand the drawable to the renderer and begin the frame
     renderer->setDrawable(drawable, passDesc);
 
-    // Process idle work BEFORE beginning the Metal frame
+    // Process idle work (needs GIL for Python callbacks)
     PyMOL_Idle(pymolInstance);
+
+    // Briefly release/reacquire the GIL so background Python threads
+    // (AI chat HTTP requests, etc.) get a chance to run.
+    {
+        PyGILState_STATE gstate = PyGILState_Ensure();
+        Py_BEGIN_ALLOW_THREADS
+        Py_END_ALLOW_THREADS
+        PyGILState_Release(gstate);
+    }
 
     // Set viewport to match drawable size
     CGSize sz = self.drawableSize;

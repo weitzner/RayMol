@@ -34,6 +34,11 @@ _streaming_view = None  # the NSView currently being streamed into
 _streaming_label = None  # the NSTextField inside the streaming view
 _streaming_active = False
 
+# Busy / cancel state
+_busy = False
+_cancel_requested = False
+_send_button = None     # reference to the send button for appearance changes
+
 # ---------------------------------------------------------------------------
 # Colors
 # ---------------------------------------------------------------------------
@@ -81,23 +86,25 @@ def _ensure_colors():
 # Main-thread dispatch helper
 # ---------------------------------------------------------------------------
 
+# Module-level storage for main-thread dispatch (PyObjC class variables
+# don't work reliably for storing Python callables on NSObject subclasses).
+_mt_func = None
+_mt_result = None
+_mt_event = None
+
+
 class _MainThreadExecutor(AppKit.NSObject):
     """NSObject that executes a stored callable on the main thread."""
-    _func = None
-    _result = None   # [value, exception]
-    _event = None    # threading.Event
 
     def doExecute_(self, _ignored):
-        func = _MainThreadExecutor._func
-        result = _MainThreadExecutor._result
-        event = _MainThreadExecutor._event
+        global _mt_func, _mt_result, _mt_event
         try:
-            result[0] = func()
+            _mt_result[0] = _mt_func()
         except Exception as exc:
-            result[1] = exc
+            _mt_result[1] = exc
         finally:
-            if event is not None:
-                event.set()
+            if _mt_event is not None:
+                _mt_event.set()
 
 
 def run_on_main_thread(func, timeout=10.0):
@@ -112,11 +119,12 @@ def run_on_main_thread(func, timeout=10.0):
     if threading.current_thread() is threading.main_thread():
         return func()
 
+    global _mt_func, _mt_result, _mt_event
     result = [None, None]  # [value, exception]
     event = threading.Event()
-    _MainThreadExecutor._func = func
-    _MainThreadExecutor._result = result
-    _MainThreadExecutor._event = event
+    _mt_func = func
+    _mt_result = result
+    _mt_event = event
     executor = _MainThreadExecutor.alloc().init()
     executor.performSelectorOnMainThread_withObject_waitUntilDone_(
         'doExecute:', None, False)
@@ -153,8 +161,8 @@ def begin_streaming_message():
     max_text_width = container_width - 2 * margin
 
     font = AppKit.NSFont.systemFontOfSize_(13.0)
-    # Start with a placeholder
-    label = _create_text_label("...", font, _COLOR_ASSISTANT_TEXT, max_text_width)
+    # Start with empty text — will be filled as streaming text arrives
+    label = _create_text_label(" ", font, _COLOR_ASSISTANT_TEXT, max_text_width)
     label_size = label.frame().size
 
     wrapper = AppKit.NSView.alloc().initWithFrame_(
@@ -280,7 +288,11 @@ class _QuestionDispatcher(AppKit.NSObject):
 
 
 def _do_show_question_buttons(questions):
-    """Actually create and add question button views (must run on main thread)."""
+    """Actually create and add question button views (must run on main thread).
+
+    Builds all question groups, then adds ONE submit button at the bottom
+    that collects answers from all groups.
+    """
     global _question_targets
 
     if _message_container is None or _scroll_view is None:
@@ -290,72 +302,22 @@ def _do_show_question_buttons(questions):
 
     container_width = _scroll_view.contentView().bounds().size.width
     margin = 12.0
+    available_width = container_width - 2 * margin
+
+    # Collect all checkbox/radio groups so the single Submit can read them
+    all_groups = []  # list of (question_text, buttons_list, is_single)
 
     for q in questions:
         question_text = q.get('text', '')
         options = q.get('options', [])
+        q_type = q.get('type', 'single')
         if not options:
             continue
 
-        # Create a wrapper view for this question group
-        btn_height = 28.0
-        btn_spacing = 8.0
-        row_height = btn_height + btn_spacing
-
-        # Calculate total height: optional question label + buttons
-        total_height = 0.0
-        if question_text:
-            total_height += 22.0  # label height + spacing
-
-        # Lay out buttons in rows
-        x_cursor = 0.0
-        available_width = container_width - 2 * margin
-        rows = 1
-        for opt in options:
-            btn_w = max(len(opt) * 8.0 + 24.0, 60.0)
-            if x_cursor + btn_w > available_width and x_cursor > 0:
-                rows += 1
-                x_cursor = 0.0
-            x_cursor += btn_w + btn_spacing
-        total_height += rows * row_height
-
-        wrapper = AppKit.NSView.alloc().initWithFrame_(
-            AppKit.NSMakeRect(margin, 0, available_width, total_height))
-
-        cur_y = total_height
-
-        # Optional question label
-        if question_text:
-            cur_y -= 20.0
-            qlabel = AppKit.NSTextField.labelWithString_(question_text)
-            qlabel.setFrame_(AppKit.NSMakeRect(0, cur_y, available_width, 18))
-            qlabel.setFont_(AppKit.NSFont.systemFontOfSize_(11.0))
-            qlabel.setTextColor_(_COLOR_STATUS_TEXT)
-            wrapper.addSubview_(qlabel)
-            cur_y -= 4.0
-
-        # Buttons
-        x_cursor = 0.0
-        cur_y -= btn_height
-        for opt in options:
-            btn_w = max(len(opt) * 8.0 + 24.0, 60.0)
-            if x_cursor + btn_w > available_width and x_cursor > 0:
-                x_cursor = 0.0
-                cur_y -= row_height
-
-            btn = AppKit.NSButton.alloc().initWithFrame_(
-                AppKit.NSMakeRect(x_cursor, cur_y, btn_w, btn_height))
-            btn.setTitle_(opt)
-            btn.setBezelStyle_(AppKit.NSBezelStyleRounded)
-            btn.setFont_(AppKit.NSFont.systemFontOfSize_(12.0))
-
-            target = _QuestionButtonTarget.alloc().init()
-            btn.setTarget_(target)
-            btn.setAction_('buttonClicked:')
-            _question_targets.append(target)
-
-            wrapper.addSubview_(btn)
-            x_cursor += btn_w + btn_spacing
+        is_single = (q_type != 'multiple')
+        wrapper, buttons = _build_choice_group(
+            question_text, options, available_width, is_single)
+        all_groups.append((question_text, buttons, is_single))
 
         # Position below last message
         y_offset = 0.0
@@ -367,8 +329,105 @@ def _do_show_question_buttons(questions):
         _message_container.addSubview_(wrapper)
         _message_views.append(wrapper)
 
+    # Add ONE submit button at the bottom for all groups
+    if all_groups:
+        submit_height = 32.0
+        submit_wrapper = AppKit.NSView.alloc().initWithFrame_(
+            AppKit.NSMakeRect(margin, 0, available_width, submit_height))
+
+        submit_btn = AppKit.NSButton.alloc().initWithFrame_(
+            AppKit.NSMakeRect(0, 0, 100, submit_height))
+        submit_btn.setTitle_("Submit")
+        submit_btn.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        submit_btn.setFont_(AppKit.NSFont.boldSystemFontOfSize_(13.0))
+
+        target = _ChoiceSubmitTarget.alloc().init()
+        _ChoiceSubmitTarget._all_groups = all_groups
+        submit_btn.setTarget_(target)
+        submit_btn.setAction_('submitClicked:')
+        _question_targets.append(target)
+        submit_wrapper.addSubview_(submit_btn)
+
+        y_offset = 0.0
+        if _message_views:
+            last = _message_views[-1]
+            y_offset = last.frame().origin.y + last.frame().size.height + 8.0
+        submit_wrapper.setFrameOrigin_(AppKit.NSMakePoint(margin, y_offset))
+        _message_container.addSubview_(submit_wrapper)
+        _message_views.append(submit_wrapper)
+
     _update_container_height()
     _scroll_to_bottom()
+
+
+def _build_choice_group(question_text, options, available_width, is_single):
+    """Build a question group with radio buttons (single) or checkboxes (multiple).
+
+    Returns (wrapper_view, buttons_list). No submit button — the caller adds
+    one shared Submit for all groups.
+    """
+    check_height = 22.0
+    check_spacing = 4.0
+
+    total_height = 0.0
+    if question_text:
+        total_height += 22.0
+    total_height += len(options) * (check_height + check_spacing)
+
+    wrapper = AppKit.NSView.alloc().initWithFrame_(
+        AppKit.NSMakeRect(0, 0, available_width, total_height))
+
+    cur_y = total_height
+
+    if question_text:
+        cur_y -= 20.0
+        qlabel = AppKit.NSTextField.labelWithString_(question_text)
+        qlabel.setFrame_(AppKit.NSMakeRect(0, cur_y, available_width, 18))
+        qlabel.setFont_(AppKit.NSFont.systemFontOfSize_(11.0))
+        qlabel.setTextColor_(_COLOR_STATUS_TEXT)
+        wrapper.addSubview_(qlabel)
+        cur_y -= 4.0
+
+    buttons = []
+    btn_type = AppKit.NSButtonTypeRadio if is_single else AppKit.NSButtonTypeSwitch
+    for opt in options:
+        cur_y -= check_height
+        btn = AppKit.NSButton.alloc().initWithFrame_(
+            AppKit.NSMakeRect(0, cur_y, available_width, check_height))
+        btn.setButtonType_(btn_type)
+        btn.setTitle_(opt)
+        btn.setFont_(AppKit.NSFont.systemFontOfSize_(12.0))
+        btn.setState_(AppKit.NSControlStateValueOff)
+        wrapper.addSubview_(btn)
+        buttons.append(btn)
+        cur_y -= check_spacing
+
+    # Pre-select first radio option
+    if is_single and buttons:
+        buttons[0].setState_(AppKit.NSControlStateValueOn)
+
+    return wrapper, buttons
+
+
+class _ChoiceSubmitTarget(AppKit.NSObject):
+    """Target for the shared Submit button across all question groups."""
+    _all_groups = []  # list of (question_text, buttons_list, is_single)
+
+    def submitClicked_(self, sender):
+        parts = []
+        for question_text, buttons, is_single in _ChoiceSubmitTarget._all_groups:
+            selected = [b.title() for b in buttons
+                        if b.state() == AppKit.NSControlStateValueOn]
+            if selected:
+                if is_single:
+                    parts.append(selected[0])
+                else:
+                    parts.append(', '.join(selected))
+        if parts:
+            text = '; '.join(parts) if len(parts) > 1 else parts[0]
+            _DeferredMessage._pending_text = text
+            Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                0.0, _DeferredMessage.alloc().init(), 'fire:', None, False)
 
 
 # ---------------------------------------------------------------------------
@@ -470,8 +529,50 @@ def hide_status():
     show_status('')
 
 
-def update_on_main_thread(role, content, results):
-    """Thread-safe wrapper: dispatches UI updates to the main thread."""
+def set_busy(busy):
+    """Called by ai_chat when worker starts/stops. Updates send button appearance."""
+    global _busy, _cancel_requested
+    _busy = busy
+    if not busy:
+        _cancel_requested = False
+    # Update button on main thread
+    updater = _BusyUpdater.alloc().init()
+    _BusyUpdater._busy = busy
+    updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+        'doUpdate:', None, False)
+
+
+def is_cancel_requested():
+    """Check if user clicked stop."""
+    return _cancel_requested
+
+
+class _BusyUpdater(AppKit.NSObject):
+    """Dispatches send button appearance changes to the main thread."""
+    _busy = False
+
+    def doUpdate_(self, _ignored):
+        if _send_button is None:
+            return
+        _ensure_colors()
+        if _BusyUpdater._busy:
+            _send_button.setTitle_("\u25A0")  # black square (stop)
+            _send_button.setContentTintColor_(
+                AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                    0.88, 0.32, 0.32, 1.0))  # red tint
+        else:
+            _send_button.setTitle_("\u2191")  # up arrow (send)
+            _send_button.setContentTintColor_(_COLOR_ACCENT)
+
+
+def update_on_main_thread(role, content, results, status=None):
+    """Thread-safe wrapper: dispatches UI updates to the main thread.
+
+    If *status* is provided (and role is None), just updates the status label.
+    """
+    if status is not None and role is None:
+        show_status(status)
+        return
     info = {
         'role': role,
         'content': content,
@@ -607,12 +708,18 @@ def _create_text_label(text, font, text_color, max_width, alignment=None):
 
 
 def _create_user_bubble(text, container_width, margin, padding, max_text_width):
-    """User message: right-aligned blue bubble with white text."""
+    """User message: right-aligned blue bubble with white text, tightly wrapped."""
     font = AppKit.NSFont.systemFontOfSize_(13.0)
-    label = _create_text_label(text, font, _COLOR_USER_TEXT, max_text_width)
+
+    # Measure actual text size to wrap bubble tightly
+    tw, th = _measure_text(text, font, max_text_width)
+    # Tight bubble width: measured text + padding on each side, capped
+    tight_width = min(tw + 8, max_text_width)  # small extra for rounding
+
+    label = _create_text_label(text, font, _COLOR_USER_TEXT, tight_width)
 
     label_size = label.frame().size
-    bubble_w = label_size.width + 2 * padding
+    bubble_w = tight_width + 2 * padding
     bubble_h = label_size.height + 2 * padding
 
     # Right-align the bubble
@@ -633,22 +740,214 @@ def _create_user_bubble(text, container_width, margin, padding, max_text_width):
     return bubble
 
 
-def _create_assistant_view(text, container_width, margin, max_text_width):
-    """Assistant message: left-aligned green text, no bubble."""
-    font = AppKit.NSFont.systemFontOfSize_(13.0)
-    label = _create_text_label(text, font, _COLOR_ASSISTANT_TEXT, max_text_width)
+def _markdown_to_attributed_string(text, font, text_color, max_width):
+    """Convert basic markdown to an NSMutableAttributedString.
 
-    label_size = label.frame().size
+    Supported syntax:
+    - **bold** -> bold font
+    - *italic* -> italic font
+    - ## Header -> larger bold font
+    - - item / bullet -> bullet character + indented text
+    - 1. item -> numbered list preserved
+    - Newlines preserved
+    """
+    import re
+
+    font_mgr = AppKit.NSFontManager.sharedFontManager()
+    font_size = font.pointSize()
+    bold_font = AppKit.NSFont.boldSystemFontOfSize_(font_size)
+    italic_font = font_mgr.convertFont_toHaveTrait_(font, AppKit.NSItalicFontMask)
+    if italic_font is None:
+        italic_font = font
+    bold_italic_font = font_mgr.convertFont_toHaveTrait_(
+        bold_font, AppKit.NSItalicFontMask)
+    if bold_italic_font is None:
+        bold_italic_font = bold_font
+    header_font = AppKit.NSFont.boldSystemFontOfSize_(font_size + 3)
+
+    result = AppKit.NSMutableAttributedString.alloc().init()
+
+    # Default paragraph style
+    default_para = AppKit.NSMutableParagraphStyle.alloc().init()
+    default_para.setLineBreakMode_(AppKit.NSLineBreakByWordWrapping)
+
+    # Indented paragraph style for list items
+    list_para = AppKit.NSMutableParagraphStyle.alloc().init()
+    list_para.setLineBreakMode_(AppKit.NSLineBreakByWordWrapping)
+    list_para.setHeadIndent_(16.0)
+    list_para.setFirstLineHeadIndent_(0.0)
+
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if i > 0:
+            newline = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                '\n', {AppKit.NSFontAttributeName: font,
+                       AppKit.NSForegroundColorAttributeName: text_color})
+            result.appendAttributedString_(newline)
+
+        # Check for headers (## Header)
+        header_match = re.match(r'^(#{1,3})\s+(.+)$', line)
+        if header_match:
+            header_text = header_match.group(2)
+            header_astr = _parse_inline_markdown(
+                header_text, header_font, bold_font, italic_font,
+                bold_italic_font, text_color, default_para)
+            result.appendAttributedString_(header_astr)
+            continue
+
+        # Check for bullet list (- item or * item or bullet)
+        bullet_match = re.match(r'^(\s*)[-*\u2022]\s+(.+)$', line)
+        if bullet_match:
+            indent = bullet_match.group(1)
+            item_text = bullet_match.group(2)
+            bullet_str = '\u2022 '
+            bullet_astr = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                bullet_str,
+                {AppKit.NSFontAttributeName: font,
+                 AppKit.NSForegroundColorAttributeName: text_color,
+                 AppKit.NSParagraphStyleAttributeName: list_para})
+            result.appendAttributedString_(bullet_astr)
+            item_astr = _parse_inline_markdown(
+                item_text, font, bold_font, italic_font,
+                bold_italic_font, text_color, list_para)
+            result.appendAttributedString_(item_astr)
+            continue
+
+        # Check for numbered list (1. item)
+        num_match = re.match(r'^(\s*)(\d+)\.\s+(.+)$', line)
+        if num_match:
+            num = num_match.group(2)
+            item_text = num_match.group(3)
+            num_str = '%s. ' % num
+            num_astr = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                num_str,
+                {AppKit.NSFontAttributeName: font,
+                 AppKit.NSForegroundColorAttributeName: text_color,
+                 AppKit.NSParagraphStyleAttributeName: list_para})
+            result.appendAttributedString_(num_astr)
+            item_astr = _parse_inline_markdown(
+                item_text, font, bold_font, italic_font,
+                bold_italic_font, text_color, list_para)
+            result.appendAttributedString_(item_astr)
+            continue
+
+        # Regular line: parse inline markdown
+        line_astr = _parse_inline_markdown(
+            line, font, bold_font, italic_font,
+            bold_italic_font, text_color, default_para)
+        result.appendAttributedString_(line_astr)
+
+    return result
+
+
+def _parse_inline_markdown(text, font, bold_font, italic_font,
+                           bold_italic_font, text_color, para_style):
+    """Parse inline **bold** and *italic* markers in text.
+
+    Returns an NSMutableAttributedString.
+    """
+    import re
+
+    result = AppKit.NSMutableAttributedString.alloc().init()
+    base_attrs = {
+        AppKit.NSFontAttributeName: font,
+        AppKit.NSForegroundColorAttributeName: text_color,
+        AppKit.NSParagraphStyleAttributeName: para_style,
+    }
+
+    # Pattern matches **bold**, *italic*, or plain text segments
+    # Process bold first (** **), then italic (* *)
+    pattern = re.compile(r'(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*)')
+
+    last_end = 0
+    for m in pattern.finditer(text):
+        # Add plain text before this match
+        if m.start() > last_end:
+            plain = text[last_end:m.start()]
+            plain_astr = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                plain, base_attrs)
+            result.appendAttributedString_(plain_astr)
+
+        if m.group(2):  # ***bold italic***
+            attrs = dict(base_attrs)
+            attrs[AppKit.NSFontAttributeName] = bold_italic_font
+            seg = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                m.group(2), attrs)
+            result.appendAttributedString_(seg)
+        elif m.group(3):  # **bold**
+            attrs = dict(base_attrs)
+            attrs[AppKit.NSFontAttributeName] = bold_font
+            seg = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                m.group(3), attrs)
+            result.appendAttributedString_(seg)
+        elif m.group(4):  # *italic*
+            attrs = dict(base_attrs)
+            attrs[AppKit.NSFontAttributeName] = italic_font
+            seg = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+                m.group(4), attrs)
+            result.appendAttributedString_(seg)
+
+        last_end = m.end()
+
+    # Add remaining plain text
+    if last_end < len(text):
+        plain = text[last_end:]
+        plain_astr = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+            plain, base_attrs)
+        result.appendAttributedString_(plain_astr)
+
+    # If no matches at all, return the whole text as plain
+    if result.length() == 0:
+        plain_astr = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+            text, base_attrs)
+        result.appendAttributedString_(plain_astr)
+
+    return result
+
+
+def _create_markdown_text_view(text, font, text_color, max_width):
+    """Create an NSTextView displaying markdown-rendered attributed text."""
+    attr_str = _markdown_to_attributed_string(text, font, text_color, max_width)
+
+    # Create text view with initial frame, then resize to fit
+    text_view = AppKit.NSTextView.alloc().initWithFrame_(
+        AppKit.NSMakeRect(0, 0, max_width, 10))
+    text_view.textStorage().setAttributedString_(attr_str)
+    text_view.setEditable_(False)
+    text_view.setSelectable_(True)
+    text_view.setDrawsBackground_(False)
+    text_view.setTextContainerInset_(AppKit.NSMakeSize(0, 0))
+    text_view.textContainer().setLineFragmentPadding_(0)
+    text_view.textContainer().setWidthTracksTextView_(True)
+
+    # Force layout and measure actual height
+    text_view.layoutManager().ensureLayoutForTextContainer_(
+        text_view.textContainer())
+    used_rect = text_view.layoutManager().usedRectForTextContainer_(
+        text_view.textContainer())
+    height = used_rect.size.height + 4
+
+    text_view.setFrameSize_(AppKit.NSMakeSize(max_width, height))
+    return text_view
+
+
+def _create_assistant_view(text, container_width, margin, max_text_width):
+    """Assistant message: left-aligned text with markdown rendering, no bubble."""
+    font = AppKit.NSFont.systemFontOfSize_(13.0)
+    text_view = _create_markdown_text_view(
+        text, font, _COLOR_ASSISTANT_TEXT, max_text_width)
+
+    view_size = text_view.frame().size
     wrapper = AppKit.NSView.alloc().initWithFrame_(
-        AppKit.NSMakeRect(margin, 0, label_size.width, label_size.height))
-    label.setFrameOrigin_(AppKit.NSMakePoint(0, 0))
-    wrapper.addSubview_(label)
+        AppKit.NSMakeRect(margin, 0, view_size.width, view_size.height))
+    text_view.setFrameOrigin_(AppKit.NSMakePoint(0, 0))
+    wrapper.addSubview_(text_view)
 
     return wrapper
 
 
 def _create_error_view(text, container_width, margin, max_text_width):
-    """Error message: left-aligned red italic text."""
+    """Error message: left-aligned red italic text with markdown rendering."""
     base_font = AppKit.NSFont.systemFontOfSize_(13.0)
     font_mgr = AppKit.NSFontManager.sharedFontManager()
     italic_font = font_mgr.convertFont_toHaveTrait_(
@@ -656,14 +955,14 @@ def _create_error_view(text, container_width, margin, max_text_width):
     if italic_font is None:
         italic_font = base_font
 
-    label = _create_text_label(text, italic_font, _COLOR_ERROR_TEXT,
-                               max_text_width)
+    text_view = _create_markdown_text_view(
+        text, italic_font, _COLOR_ERROR_TEXT, max_text_width)
 
-    label_size = label.frame().size
+    view_size = text_view.frame().size
     wrapper = AppKit.NSView.alloc().initWithFrame_(
-        AppKit.NSMakeRect(margin, 0, label_size.width, label_size.height))
-    label.setFrameOrigin_(AppKit.NSMakePoint(0, 0))
-    wrapper.addSubview_(label)
+        AppKit.NSMakeRect(margin, 0, view_size.width, view_size.height))
+    text_view.setFrameOrigin_(AppKit.NSMakePoint(0, 0))
+    wrapper.addSubview_(text_view)
 
     return wrapper
 
@@ -752,6 +1051,7 @@ def _position_panel_and_shift_glut(glut_win, opening):
 def _build_chat_subviews(parent_view):
     """Populate *parent_view* with the chat header, message area, input field."""
     global _message_container, _input_field, _status_label, _scroll_view, _delegate
+    global _send_button
 
     _ensure_colors()
 
@@ -821,6 +1121,7 @@ def _build_chat_subviews(parent_view):
     send_btn.setTarget_(_send_target)
     send_btn.setAction_('sendMessage:')
     _build_chat_subviews._send_target = _send_target
+    _send_button = send_btn
     input_area.addSubview_(send_btn)
 
     # Text input field
@@ -930,9 +1231,13 @@ class _NewButtonTarget(AppKit.NSObject):
 
 
 class _SendButtonTarget(AppKit.NSObject):
-    """Target for the 'Send' button."""
+    """Target for the 'Send' button. Doubles as stop button when busy."""
 
     def sendMessage_(self, sender):
+        global _cancel_requested
+        if _busy:
+            _cancel_requested = True
+            return
         if _input_field is None:
             return
         text = _input_field.stringValue().strip()

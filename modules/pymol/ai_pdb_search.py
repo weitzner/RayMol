@@ -43,12 +43,8 @@ def search_pdb(query, max_results=5):
     if not pdb_ids:
         return []
 
-    # Step 2: Fetch metadata for each ID
-    results = []
-    for pdb_id in pdb_ids:
-        entry = _fetch_entry_metadata(pdb_id)
-        if entry is not None:
-            results.append(entry)
+    # Step 2: Fetch metadata for all IDs in one GraphQL request
+    results = _fetch_all_metadata(pdb_ids)
 
     return results
 
@@ -99,13 +95,75 @@ def _search_ids(query, max_results):
     return [entry["identifier"] for entry in result_set if "identifier" in entry]
 
 
-def _fetch_entry_metadata(pdb_id):
-    """GET metadata for a single PDB entry.
+def _fetch_all_metadata(pdb_ids):
+    """Fetch metadata for multiple PDB entries in a single GraphQL request.
 
-    Returns
-    -------
-    dict or None
-        Dict with pdb_id, title, organism, resolution; or None on failure.
+    Returns list of dicts with pdb_id, title, organism, resolution.
+    """
+    if not pdb_ids:
+        return []
+
+    # Use RCSB GraphQL API — one request for all entries
+    graphql_url = "https://data.rcsb.org/graphql"
+    query = """
+    query($ids: [String!]!) {
+      entries(entry_ids: $ids) {
+        rcsb_id
+        struct { title }
+        rcsb_entry_info {
+          resolution_combined
+          organism_scientific_name
+        }
+      }
+    }
+    """
+    payload = json.dumps({"query": query, "variables": {"ids": pdb_ids}}).encode("utf-8")
+    req = urllib.request.Request(
+        graphql_url, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+
+    try:
+        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        entries = body.get("data", {}).get("entries", [])
+        results = []
+        for entry in entries:
+            if not entry:
+                continue
+            pdb_id = entry.get("rcsb_id", "")
+            title = None
+            struct = entry.get("struct", {})
+            if struct:
+                title = struct.get("title")
+            organism = None
+            resolution = None
+            info = entry.get("rcsb_entry_info", {})
+            if info:
+                organism = info.get("organism_scientific_name")
+                if isinstance(organism, list) and organism:
+                    organism = organism[0]
+                res = info.get("resolution_combined")
+                if isinstance(res, list) and res:
+                    try:
+                        resolution = float(res[0])
+                    except (ValueError, TypeError):
+                        pass
+                elif isinstance(res, (int, float)):
+                    resolution = float(res)
+            results.append({
+                "pdb_id": pdb_id, "title": title,
+                "organism": organism, "resolution": resolution,
+            })
+        return results
+    except Exception:
+        # Fallback: fetch individually
+        return [_fetch_entry_metadata(pid) for pid in pdb_ids]
+
+
+def _fetch_entry_metadata(pdb_id):
+    """GET metadata for a single PDB entry (fallback).
+
+    Returns dict with pdb_id, title, organism, resolution.
     """
     url = _ENTRY_URL.format(pdb_id=pdb_id)
     req = urllib.request.Request(url, method="GET")
@@ -115,16 +173,13 @@ def _fetch_entry_metadata(pdb_id):
             body = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.HTTPError, urllib.error.URLError, OSError,
             json.JSONDecodeError):
-        # Return a minimal entry if metadata fetch fails
         return {"pdb_id": pdb_id, "title": None, "organism": None, "resolution": None}
 
-    # Extract title
     title = None
     struct = body.get("struct", {})
     if isinstance(struct, dict):
         title = struct.get("title")
 
-    # Extract organism
     organism = None
     entry_info = body.get("rcsb_entry_info", {})
     if isinstance(entry_info, dict):

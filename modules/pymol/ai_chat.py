@@ -1,16 +1,39 @@
-"""AI Chat conversation engine for PyMOL — agentic LLM integration with tool use.
+"""AI Chat conversation engine for PyMOL — agentic LLM integration.
 
-Uses the Anthropic Messages API with streaming SSE and tool_use for an
-agentic loop: the model can call tools (get_session_state, execute_command,
-capture_viewport, search_pdb), inspect results, and iterate until it produces
-a final structured JSON response with {response, script, questions}.
+Uses the Claude Agent SDK when available for an agentic loop with MCP tools
+and structured output. Falls back to hand-rolled urllib API calls if the SDK
+is not installed.
 """
 
 import os
 import json
 import threading
-import urllib.request
-import urllib.error
+import asyncio
+
+# ---------------------------------------------------------------------------
+# SDK availability check
+# ---------------------------------------------------------------------------
+
+try:
+    from claude_agent_sdk import (
+        query,
+        ClaudeAgentOptions,
+        AssistantMessage,
+        ResultMessage,
+        TextBlock,
+    )
+    _HAS_SDK = True
+except ImportError:
+    _HAS_SDK = False
+
+# Fallback imports (only needed when SDK is unavailable)
+if not _HAS_SDK:
+    import urllib.request
+    import urllib.error
+
+# ---------------------------------------------------------------------------
+# Module state
+# ---------------------------------------------------------------------------
 
 _cmd = None
 _has_ui = False
@@ -22,13 +45,13 @@ _ai_config = {
         'anthropic': os.environ.get('ANTHROPIC_API_KEY', ''),
     },
     'models': {
-        'anthropic': 'claude-sonnet-4-20250514',
+        'anthropic': 'claude-sonnet-4-6',
     },
 }
 
 from pymol.ai_system_prompt import SYSTEM_PROMPT
 
-# Try to import tool definitions (created by Agent B)
+# Try to import tool definitions (fallback path) and MCP server (SDK path)
 try:
     from pymol.ai_tools import TOOL_DEFINITIONS, execute_tool
 except ImportError:
@@ -36,6 +59,46 @@ except ImportError:
     def execute_tool(name, tool_input, cmd):
         return json.dumps({"error": f"Tool '{name}' not available — ai_tools module not found."})
 
+try:
+    from pymol.ai_tools import pymol_server
+except ImportError:
+    pymol_server = None
+
+# ---------------------------------------------------------------------------
+# Structured output schema for the Claude Agent SDK
+# ---------------------------------------------------------------------------
+
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "response": {"type": "string"},
+        "script": {"type": "string"},
+        "questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "type": {
+                        "type": "string",
+                        "enum": ["single", "multiple"],
+                        "description": "single: pick one option (radio). multiple: pick several (checkboxes + submit).",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["text", "options"],
+            },
+        },
+    },
+    "required": ["response"],
+}
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def _init(cmd_module):
     """Initialize the AI chat module, registering commands and optional UI."""
@@ -67,7 +130,7 @@ def ai_config(args='', _self=None):
     Usage:
         ai_config                        # show current config
         ai_config key=sk-...             # set API key
-        ai_config model=claude-sonnet-4-20250514  # set model
+        ai_config model=claude-sonnet-4-6  # set model
     """
     global _ai_config
 
@@ -80,6 +143,7 @@ def ai_config(args='', _self=None):
         print(f"  provider : {provider}")
         print(f"  key      : {masked_key}")
         print(f"  model    : {model}")
+        print(f"  sdk      : {'claude-agent-sdk' if _HAS_SDK else 'urllib (fallback)'}")
         return
 
     pairs = {}
@@ -133,224 +197,271 @@ def _on_user_message(text):
             print(error_msg)
         return
 
+    global _worker_active
+    if _worker_active:
+        if _has_ui:
+            from pymol import ai_chat_ui
+            ai_chat_ui.show_message('assistant', 'Still processing the previous request...')
+        return
+    _worker_active = True
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
 
 
+def clear_conversation():
+    """Reset the conversation history and clear the UI (if available)."""
+    global _messages
+    _messages = []
+    if _has_ui:
+        from pymol import ai_chat_ui
+        ai_chat_ui.clear_messages()
+
+
+_worker_active = False
+
 # ---------------------------------------------------------------------------
-# Agentic worker loop
+# Worker dispatch — SDK path or fallback
 # ---------------------------------------------------------------------------
 
 def _worker():
-    """Background thread: agentic loop with streaming and tool use.
+    """Background thread: dispatch to SDK or fallback worker."""
+    global _worker_active
+    if _has_ui:
+        from pymol import ai_chat_ui
+        ai_chat_ui.set_busy(True)
+    try:
+        if _HAS_SDK:
+            _worker_impl_sdk()
+        else:
+            _worker_impl_fallback()
+    finally:
+        _worker_active = False
+        if _has_ui:
+            from pymol import ai_chat_ui
+            ai_chat_ui.set_busy(False)
 
-    1. Stream API call with tools
-    2. Handle text_delta (update streaming bubble)
-    3. Handle tool_use blocks (execute tools, send tool_result back)
-    4. Loop until stop_reason == "end_turn"
-    5. Parse final text as JSON {response, script, questions}
-    6. Execute script silently, show questions
-    """
+
+# ---------------------------------------------------------------------------
+# SDK-based worker (claude-agent-sdk)
+# ---------------------------------------------------------------------------
+
+def _worker_impl_sdk():
+    """Worker using the Claude Agent SDK with MCP tools and structured output."""
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_agent_query())
+    finally:
+        loop.close()
+
+
+async def _agent_query():
+    """Async function that runs the Claude Agent SDK query."""
     global _messages
 
     def _ui_status(text):
         if _has_ui:
             from pymol import ai_chat_ui
-            ai_chat_ui._StatusUpdater._text = text
-            ai_chat_ui._StatusUpdater.alloc().init().performSelectorOnMainThread_withObject_waitUntilDone_(
-                'doStatus:', None, False)
+            ai_chat_ui.update_on_main_thread(None, None, None, status=text)
 
     def _ui_msg(role, text):
         if _has_ui:
             from pymol import ai_chat_ui
             ai_chat_ui.update_on_main_thread(role, text, [])
 
-    def _ui_begin_stream():
-        if _has_ui:
-            from pymol import ai_chat_ui
-            ai_chat_ui.run_on_main_thread(ai_chat_ui.begin_streaming_message)
+    try:
+        # Ensure ANTHROPIC_API_KEY is set in the environment for the SDK
+        key = _ai_config['api_keys'].get('anthropic', '')
+        if key:
+            os.environ['ANTHROPIC_API_KEY'] = key
 
-    def _ui_update_stream(text):
-        if _has_ui:
-            from pymol import ai_chat_ui
-            ai_chat_ui.update_streaming_message(text)
+        # Build the prompt from the last user message
+        user_text = ''
+        for m in reversed(_messages):
+            if m['role'] == 'user' and isinstance(m['content'], str):
+                user_text = m['content']
+                break
 
-    def _ui_finalize_stream():
+        # Build conversation context from history (excluding the last user msg)
+        # The SDK manages its own conversation, but we provide context as part
+        # of the prompt so it knows about prior exchanges.
+        context_parts = []
+        for m in _messages[:-1]:
+            role = m['role']
+            content = m['content']
+            if isinstance(content, str) and content.strip():
+                context_parts.append(f"{role}: {content}")
+            elif isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get('type') == 'text':
+                        text_parts.append(block.get('text', ''))
+                joined = '\n'.join(text_parts).strip()
+                if joined:
+                    context_parts.append(f"{role}: {joined}")
+
+        prompt = user_text
+        if context_parts:
+            context_str = '\n'.join(context_parts)
+            prompt = (
+                f"<conversation_history>\n{context_str}\n"
+                f"</conversation_history>\n\n{user_text}"
+            )
+
+        # Configure MCP servers
+        mcp_servers = {}
+        if pymol_server is not None:
+            mcp_servers["pymol"] = pymol_server
+
+        # Configure allowed tools
+        allowed_tools = []
+        if pymol_server is not None:
+            allowed_tools = [
+                "mcp__pymol__get_session_state",
+                "mcp__pymol__execute_command",
+                "mcp__pymol__capture_viewport",
+                "mcp__pymol__search_pdb",
+            ]
+
+        options = ClaudeAgentOptions(
+            system_prompt=SYSTEM_PROMPT,
+            mcp_servers=mcp_servers if mcp_servers else None,
+            allowed_tools=allowed_tools if allowed_tools else None,
+            output_format={"type": "json_schema", "schema": RESPONSE_SCHEMA},
+        )
+
+        streaming_text = []
+        result_data = None
+
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        streaming_text.append(block.text)
+                        # Don't show streaming text — we show the final
+                        # parsed response after the query completes.
+
+            elif isinstance(message, ResultMessage):
+                if message.subtype == "success":
+                    result_data = message.structured_output
+
+        # Process the result
+        if result_data and isinstance(result_data, dict):
+            parsed = result_data
+        else:
+            # Fallback: try to parse from the accumulated streaming text
+            full_text = ''.join(streaming_text)
+            parsed = _parse_structured_response(full_text)
+
+        response_text = parsed.get('response', ''.join(streaming_text) or '(no response)')
+        script = parsed.get('script', '')
+        questions = parsed.get('questions', [])
+
+        # Store assistant response in conversation history
+        _messages.append({'role': 'assistant', 'content': [
+            {'type': 'text', 'text': json.dumps(parsed)}
+        ]})
+
+        # Final UI update with the structured response text
+        _ui_msg('assistant', response_text)
+
+        if script:
+            _ui_status('Executing...')
+            _execute_script(script)
+
+        if questions and _has_ui:
+            from pymol import ai_chat_ui
+            ai_chat_ui.show_question_buttons(questions)
+
+        _ui_status('')
+
+    except Exception as exc:
+        _ui_msg('error', f"SDK error: {exc}")
+        _ui_status('')
+
+
+# ---------------------------------------------------------------------------
+# Fallback worker (urllib, no SDK)
+# ---------------------------------------------------------------------------
+
+def _worker_impl_fallback():
+    """Simple non-streaming agentic loop using urllib (fallback when SDK is unavailable)."""
+    global _messages
+
+    def _ui_status(text):
         if _has_ui:
             from pymol import ai_chat_ui
-            ai_chat_ui.finalize_streaming_message()
+            ai_chat_ui.show_status(text)
+
+    def _ui_msg(role, text):
+        if _has_ui:
+            from pymol import ai_chat_ui
+            ai_chat_ui.update_on_main_thread(role, text, [])
 
     try:
         key = _ai_config['api_keys'].get('anthropic', '')
         model = _ai_config['models'].get('anthropic', '')
 
-        while True:
-            # Build clean messages for the API
+        max_tool_rounds = 5
+        for _round in range(max_tool_rounds):
             api_messages = _build_api_messages()
 
-            # Start streaming
-            _ui_begin_stream()
-            accumulated_text = ''
-            stop_reason = None
-            content_blocks = []  # collected content blocks from the response
-
-            # Current block tracking
-            current_block_type = None
-            current_block_id = None
-            current_block_name = None
-            current_block_text = ''
-            current_block_json = ''
-
-            def on_text_delta(delta_text):
-                nonlocal accumulated_text
-                accumulated_text += delta_text
-                _ui_update_stream(accumulated_text)
-
-            def on_content_block_start(block):
-                nonlocal current_block_type, current_block_id, current_block_name
-                nonlocal current_block_text, current_block_json
-                btype = block.get('type', '')
-                current_block_type = btype
-                if btype == 'tool_use':
-                    current_block_id = block.get('id', '')
-                    current_block_name = block.get('name', '')
-                    current_block_json = ''
-                elif btype == 'text':
-                    current_block_text = ''
-
-            def on_content_block_delta(delta):
-                nonlocal current_block_text, current_block_json
-                dtype = delta.get('type', '')
-                if dtype == 'text_delta':
-                    text = delta.get('text', '')
-                    current_block_text += text
-                    on_text_delta(text)
-                elif dtype == 'input_json_delta':
-                    current_block_json += delta.get('partial_json', '')
-
-            def on_content_block_stop():
-                nonlocal current_block_type
-                if current_block_type == 'text':
-                    content_blocks.append({
-                        'type': 'text',
-                        'text': current_block_text,
-                    })
-                elif current_block_type == 'tool_use':
-                    try:
-                        tool_input = json.loads(current_block_json) if current_block_json else {}
-                    except json.JSONDecodeError:
-                        tool_input = {}
-                    content_blocks.append({
-                        'type': 'tool_use',
-                        'id': current_block_id,
-                        'name': current_block_name,
-                        'input': tool_input,
-                    })
-                current_block_type = None
-
-            def on_message_delta(delta):
-                nonlocal stop_reason
-                stop_reason = delta.get('stop_reason', stop_reason)
-
             try:
-                _call_anthropic_streaming(
-                    api_messages, key, model,
-                    on_content_block_start=on_content_block_start,
-                    on_content_block_delta=on_content_block_delta,
-                    on_content_block_stop=on_content_block_stop,
-                    on_message_delta=on_message_delta,
-                )
+                body = _call_anthropic(api_messages, key, model)
             except Exception as exc:
-                _ui_finalize_stream()
-                error_msg = f"API call failed: {exc}"
-                _messages.append({'role': 'assistant', 'content': error_msg})
-                _ui_msg('error', error_msg)
+                _ui_msg('error', f"API call failed: {exc}")
                 _ui_status('')
                 return
 
-            _ui_finalize_stream()
+            stop_reason = body.get('stop_reason', 'end_turn')
+            content = body.get('content', [])
 
-            # Store assistant response in conversation history
-            # Use content blocks format if there are tool_use blocks
-            if any(b['type'] == 'tool_use' for b in content_blocks):
-                _messages.append({'role': 'assistant', 'content': content_blocks})
-            else:
-                # Plain text
-                full_text = ''.join(b.get('text', '') for b in content_blocks if b['type'] == 'text')
-                _messages.append({'role': 'assistant', 'content': full_text})
+            # Extract text and tool_use blocks
+            text_parts = []
+            tool_uses = []
+            for block in content:
+                if block.get('type') == 'text':
+                    text_parts.append(block.get('text', ''))
+                elif block.get('type') == 'tool_use':
+                    tool_uses.append(block)
 
-            # If stop_reason is tool_use, execute tools and loop
-            if stop_reason == 'tool_use':
+            full_text = ''.join(text_parts)
+
+            # Store in conversation history
+            _messages.append({'role': 'assistant', 'content': content})
+
+            # Handle tool_use
+            if stop_reason == 'tool_use' and tool_uses:
                 _ui_status('Using tools...')
                 tool_results = []
-                for block in content_blocks:
-                    if block['type'] != 'tool_use':
-                        continue
-                    tool_name = block['name']
-                    tool_input = block['input']
-                    tool_id = block['id']
-
+                for tu in tool_uses:
                     try:
-                        result = execute_tool(tool_name, tool_input, _cmd)
+                        result = execute_tool(tu['name'], tu['input'], _cmd)
                     except Exception as exc:
                         result = json.dumps({"error": str(exc)})
 
-                    # Build tool_result content block
-                    # Check if result is an image (for capture_viewport)
-                    try:
-                        result_parsed = json.loads(result) if isinstance(result, str) else result
-                    except (json.JSONDecodeError, TypeError):
-                        result_parsed = None
+                    result_str = result if isinstance(result, str) else json.dumps(result)
+                    tool_results.append({
+                        'type': 'tool_result',
+                        'tool_use_id': tu['id'],
+                        'content': result_str,
+                    })
 
-                    if (isinstance(result_parsed, dict)
-                            and result_parsed.get('type') == 'image'
-                            and 'data' in result_parsed):
-                        tool_results.append({
-                            'type': 'tool_result',
-                            'tool_use_id': tool_id,
-                            'content': [{
-                                'type': 'image',
-                                'source': {
-                                    'type': 'base64',
-                                    'media_type': result_parsed.get('media_type', 'image/png'),
-                                    'data': result_parsed['data'],
-                                }
-                            }],
-                        })
-                    else:
-                        result_str = result if isinstance(result, str) else json.dumps(result)
-                        tool_results.append({
-                            'type': 'tool_result',
-                            'tool_use_id': tool_id,
-                            'content': result_str,
-                        })
-
-                # Add tool results as a user message
                 _messages.append({'role': 'user', 'content': tool_results})
                 _ui_status('Thinking...')
-                # Reset for next iteration
-                continue
+                continue  # next round
 
-            # stop_reason == "end_turn" (or anything else) — we're done
-            full_text = ''.join(b.get('text', '') for b in content_blocks if b['type'] == 'text')
-
-            # Parse structured response
+            # end_turn — parse and display
             parsed = _parse_structured_response(full_text)
             response_text = parsed.get('response', full_text)
             script = parsed.get('script', '')
             questions = parsed.get('questions', [])
 
-            # The streaming bubble already showed the raw text; if we parsed
-            # a structured response, show the clean version instead
-            if response_text != full_text and response_text:
-                _ui_msg('assistant', response_text)
+            _ui_msg('assistant', response_text)
 
-            # Execute script silently on main thread
             if script:
                 _ui_status('Executing...')
                 _execute_script(script)
 
-            # Show question buttons
             if questions and _has_ui:
                 from pymol import ai_chat_ui
                 ai_chat_ui.show_question_buttons(questions)
@@ -359,30 +470,54 @@ def _worker():
             break
 
     except Exception as exc:
-        if _has_ui:
-            from pymol import ai_chat_ui
-            ai_chat_ui.finalize_streaming_message()
         _ui_msg('error', f"Unexpected error: {exc}")
         _ui_status('')
 
 
-def _build_api_messages():
-    """Build a clean message list for the Anthropic API.
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
-    Handles both string content and list-of-blocks content (for tool_use turns).
-    Ensures proper alternating user/assistant roles.
+def _build_api_messages():
+    """Build a clean message list for the Anthropic API (fallback path).
+
+    Strips tool_use/tool_result blocks from conversation history since those
+    are only valid within a single agentic loop turn. Keeps only text content
+    for the persistent conversation context.
     """
     api_messages = []
     for m in _messages:
         role = m['role']
         content = m['content']
-        api_messages.append({'role': role, 'content': content})
-    return api_messages
 
+        # If content is a list of blocks (from a tool_use turn), extract text only
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get('type') == 'text':
+                        text_parts.append(block.get('text', ''))
+                    elif block.get('type') == 'tool_result':
+                        continue
+                    elif block.get('type') == 'tool_use':
+                        continue
+            text = '\n'.join(text_parts).strip()
+            if not text:
+                continue  # skip empty messages
+            api_messages.append({'role': role, 'content': text})
+        else:
+            api_messages.append({'role': role, 'content': content})
 
-# ---------------------------------------------------------------------------
-# Structured response parsing
-# ---------------------------------------------------------------------------
+    # Ensure proper alternating roles (Anthropic requires this)
+    cleaned = []
+    for msg in api_messages:
+        if cleaned and cleaned[-1]['role'] == msg['role']:
+            cleaned[-1]['content'] += '\n' + msg['content']
+        else:
+            cleaned.append(msg)
+
+    return cleaned
+
 
 def _parse_structured_response(text):
     """Extract JSON {response, script, questions} from the model's text.
@@ -415,7 +550,6 @@ def _parse_structured_response(text):
     # Try to find a JSON object anywhere in the text
     brace_start = text.find('{')
     if brace_start >= 0:
-        # Find the matching closing brace
         depth = 0
         for i in range(brace_start, len(text)):
             if text[i] == '{':
@@ -435,59 +569,43 @@ def _parse_structured_response(text):
     return {'response': text, 'script': '', 'questions': []}
 
 
-# ---------------------------------------------------------------------------
-# Script execution
-# ---------------------------------------------------------------------------
-
 def _execute_script(script):
     """Execute a multi-line PyMOL script silently on the main thread.
 
     Each non-empty, non-comment line is executed via _cmd.do(line, 0, 1).
+    Uses async dispatch (no wait) to avoid deadlocking with the render loop.
     """
     if not script or not _cmd:
         return
 
-    from pymol import ai_chat_ui
     for line in script.splitlines():
         line = line.strip()
         if not line or line.startswith('#'):
             continue
         try:
-            ai_chat_ui.run_on_main_thread(lambda l=line: _cmd.do(l, 0, 1))
+            _cmd.do(line, 0, 1)
         except Exception:
             pass  # silently ignore errors in script execution
 
 
 # ---------------------------------------------------------------------------
-# Anthropic streaming API
+# Fallback Anthropic API call (urllib, no SDK)
 # ---------------------------------------------------------------------------
 
-def _call_anthropic_streaming(messages, key, model,
-                               on_content_block_start=None,
-                               on_content_block_delta=None,
-                               on_content_block_stop=None,
-                               on_message_delta=None):
-    """Call the Anthropic Messages API with streaming SSE.
+def _call_anthropic(messages, key, model):
+    """Call the Anthropic Messages API (non-streaming). Returns the response body dict.
 
-    Reads the response line-by-line, parsing SSE events:
-    - message_start
-    - content_block_start: {content_block: {type, id?, name?}}
-    - content_block_delta: {delta: {type: "text_delta"|"input_json_delta", ...}}
-    - content_block_stop
-    - message_delta: {delta: {stop_reason}}
-    - message_stop
+    Only used when claude-agent-sdk is not installed.
     """
     url = 'https://api.anthropic.com/v1/messages'
 
     payload = {
         'model': model,
         'max_tokens': 4096,
-        'stream': True,
         'system': SYSTEM_PROMPT,
         'messages': messages,
     }
 
-    # Include tools if available
     if TOOL_DEFINITIONS:
         payload['tools'] = TOOL_DEFINITIONS
 
@@ -504,79 +622,8 @@ def _call_anthropic_streaming(messages, key, model,
     )
 
     try:
-        resp = urllib.request.urlopen(req, timeout=120)
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode('utf-8', errors='replace')
         raise RuntimeError(f"Anthropic HTTP {exc.code}: {error_body}") from exc
-
-    try:
-        _parse_sse_stream(resp, on_content_block_start, on_content_block_delta,
-                          on_content_block_stop, on_message_delta)
-    finally:
-        resp.close()
-
-
-def _parse_sse_stream(resp, on_content_block_start, on_content_block_delta,
-                       on_content_block_stop, on_message_delta):
-    """Parse an SSE stream from the Anthropic API response."""
-    event_type = None
-    data_buf = ''
-
-    for raw_line in resp:
-        line = raw_line.decode('utf-8', errors='replace').rstrip('\n').rstrip('\r')
-
-        if line.startswith('event: '):
-            event_type = line[7:].strip()
-            data_buf = ''
-            continue
-
-        if line.startswith('data: '):
-            data_buf += line[6:]
-            continue
-
-        if line == '' and event_type and data_buf:
-            # End of event — process it
-            try:
-                payload = json.loads(data_buf)
-            except json.JSONDecodeError:
-                event_type = None
-                data_buf = ''
-                continue
-
-            if event_type == 'content_block_start':
-                block = payload.get('content_block', {})
-                if on_content_block_start:
-                    on_content_block_start(block)
-
-            elif event_type == 'content_block_delta':
-                delta = payload.get('delta', {})
-                if on_content_block_delta:
-                    on_content_block_delta(delta)
-
-            elif event_type == 'content_block_stop':
-                if on_content_block_stop:
-                    on_content_block_stop()
-
-            elif event_type == 'message_delta':
-                delta = payload.get('delta', {})
-                if on_message_delta:
-                    on_message_delta(delta)
-
-            elif event_type == 'message_stop':
-                pass  # stream complete
-
-            event_type = None
-            data_buf = ''
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def clear_conversation():
-    """Reset the conversation history and clear the UI (if available)."""
-    global _messages
-    _messages = []
-    if _has_ui:
-        from pymol import ai_chat_ui
-        ai_chat_ui.clear_messages()
