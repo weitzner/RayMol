@@ -1066,8 +1066,9 @@ def _position_panel_and_shift_glut(glut_win, opening):
 
 def prompt_for_credentials():
     """Show a dialog letting the user choose provider and enter credentials."""
+    # Delay to allow the main window to fully render before showing a modal
     Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        0.1, _CredentialPromptHelper.alloc().init(), 'fire:', None, False)
+        1.0, _CredentialPromptHelper.alloc().init(), 'fire:', None, False)
 
 
 def prompt_for_api_key():

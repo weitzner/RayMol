@@ -715,6 +715,11 @@ def _build_api_messages():
         else:
             cleaned.append(msg)
 
+    # Vertex AI requires the conversation to end with a user message.
+    # Trim any trailing assistant messages.
+    while cleaned and cleaned[-1]['role'] == 'assistant':
+        cleaned.pop()
+
     return cleaned
 
 
@@ -852,6 +857,8 @@ def _call_vertex_ai(messages, model):
         f"publishers/anthropic/models/{model}:rawPredict"
     )
 
+    # Vertex AI rawPredict: model is in the URL, NOT in the body.
+    # system and tools are supported same as direct Anthropic API.
     payload = {
         'anthropic_version': 'vertex-2023-10-16',
         'max_tokens': 4096,
