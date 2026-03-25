@@ -1,0 +1,77 @@
+name: PyMOLViewer
+options:
+  bundleIdPrefix: org.pymol
+  deploymentTarget:
+    macOS: "13.0"
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    CLANG_ENABLE_MODULES: YES
+    SWIFT_OBJC_BRIDGING_HEADER: PyMOLViewer/Bridge/PyMOLBridge.h
+    # PyMOL header search paths (for the bridging header and .mm files)
+    HEADER_SEARCH_PATHS:
+      - $(SRCROOT)/../include
+      - $(SRCROOT)/../include/pymol
+      - $(SRCROOT)/../layer0
+      - $(SRCROOT)/../layer1
+      - $(SRCROOT)/../layer2
+      - $(SRCROOT)/../layer3
+      - $(SRCROOT)/../layer4
+      - $(SRCROOT)/../layer5
+      - $(SRCROOT)/../layerGraphics
+      - $(SRCROOT)/../layerGraphics/metal
+      - $(SRCROOT)/../contrib
+      - $(SRCROOT)/../contrib/pocketfft
+      - $(SRCROOT)/../build_appkit/generated
+      - /opt/homebrew/include
+      - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14
+    LIBRARY_SEARCH_PATHS:
+      - $(SRCROOT)/../build_appkit
+      - /opt/homebrew/lib
+      - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib
+    FRAMEWORK_SEARCH_PATHS:
+      - /opt/homebrew/opt/python@3.14/Frameworks
+    OTHER_LDFLAGS:
+      - -lpymol_core
+      - -lfreetype
+      - -lpng16
+      - -lGLEW
+      - -lxml2
+      - -lpython3.14
+      - -framework Metal
+      - -framework MetalKit
+      - -framework OpenGL
+      - -framework CoreVideo
+
+targets:
+  PyMOLViewer:
+    type: application
+    platform: [macOS, iOS]
+    sources:
+      - path: PyMOLViewer
+        excludes:
+          - "**/*.md"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.pymol.viewer
+        INFOPLIST_GENERATION_MODE: GeneratedFile
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: PyMOL
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: -Onone
+          DEBUG_INFORMATION_FORMAT: dwarf
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: -O
+    dependencies: []
+    scheme:
+      testTargets: []
+      gatherCoverageData: false

@@ -1,0 +1,534 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		042F08F899EE19B73EFEC143 /* CommandPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50D264C420888CBF7FDE633 /* CommandPanel.swift */; };
+		104B27F848D308735A6D6DD2 /* MetalViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9F8D36908E3216D1C8F893 /* MetalViewport.swift */; };
+		13B48E7F8C2A51ADAF48F4C3 /* SequencePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 474D18A43D0D9A6BDD69EEFD /* SequencePanel.swift */; };
+		24169A74B9EBFD202258A5E4 /* PyMOLBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 356FC561FA1515B3D15A26E2 /* PyMOLBridge.mm */; };
+		278DFAA0C69C41D31A0FCF6D /* ChatPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B718B8A3C2C5CCB98BA1C5 /* ChatPanel.swift */; };
+		300656C47AD9A9C18C129C42 /* SequencePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 474D18A43D0D9A6BDD69EEFD /* SequencePanel.swift */; };
+		3F96563B0EA8F919B068A421 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75F059BB95517CE91BD3E26E /* ContentView.swift */; };
+		4128B469229CEE6A6A4E4B68 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75F059BB95517CE91BD3E26E /* ContentView.swift */; };
+		4679E36960C9AE8AAE3B1F7D /* ObjectPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A73267D4D7B506E647B7A995 /* ObjectPanel.swift */; };
+		5313FFF152E5D3F23159919B /* MousePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221117550FAD97CF81924E05 /* MousePanel.swift */; };
+		56CC6A9A8A95D5B1B8D92688 /* PyMOLEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D6A753E4525628B96C259C /* PyMOLEngine.swift */; };
+		5992346BC7D06026A673BA71 /* ObjectPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A73267D4D7B506E647B7A995 /* ObjectPanel.swift */; };
+		5C923361D76329D2A466FFA9 /* PyMOLApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D965CB609C447033E5DB0046 /* PyMOLApp.swift */; };
+		5D4BC69196C1256F5164E56A /* PyMOLBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 356FC561FA1515B3D15A26E2 /* PyMOLBridge.mm */; };
+		8852A9FA93BDAAB188D4103C /* PyMOLEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D6A753E4525628B96C259C /* PyMOLEngine.swift */; };
+		979AB10150CC62EE5E7962F9 /* MetalViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9F8D36908E3216D1C8F893 /* MetalViewport.swift */; };
+		C62180B11A031D82264ED97B /* ChatPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B718B8A3C2C5CCB98BA1C5 /* ChatPanel.swift */; };
+		DC8A9C1AA5EB1946175041FA /* CommandPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50D264C420888CBF7FDE633 /* CommandPanel.swift */; };
+		F619DEB3EA3D691634AE8268 /* MousePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221117550FAD97CF81924E05 /* MousePanel.swift */; };
+		F6C4DEEFED66EB440E6359AF /* PyMOLApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D965CB609C447033E5DB0046 /* PyMOLApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		05C388F2E8B5A99F3CBFFC7E /* PyMOLViewer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PyMOLViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		221117550FAD97CF81924E05 /* MousePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MousePanel.swift; sourceTree = "<group>"; };
+		33D6A753E4525628B96C259C /* PyMOLEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PyMOLEngine.swift; sourceTree = "<group>"; };
+		356FC561FA1515B3D15A26E2 /* PyMOLBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = PyMOLBridge.mm; sourceTree = "<group>"; };
+		474D18A43D0D9A6BDD69EEFD /* SequencePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SequencePanel.swift; sourceTree = "<group>"; };
+		5E9F8D36908E3216D1C8F893 /* MetalViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalViewport.swift; sourceTree = "<group>"; };
+		75F059BB95517CE91BD3E26E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		82BCB731F0C74F642D78D450 /* PyMOLBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PyMOLBridge.h; sourceTree = "<group>"; };
+		85B718B8A3C2C5CCB98BA1C5 /* ChatPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPanel.swift; sourceTree = "<group>"; };
+		A73267D4D7B506E647B7A995 /* ObjectPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectPanel.swift; sourceTree = "<group>"; };
+		B50D264C420888CBF7FDE633 /* CommandPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPanel.swift; sourceTree = "<group>"; };
+		C78CBBCC3AFAD0E62BBAA884 /* PyMOLViewer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PyMOLViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D965CB609C447033E5DB0046 /* PyMOLApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PyMOLApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		1A65998EE1F4B509B9B62F00 /* Panels */ = {
+			isa = PBXGroup;
+			children = (
+				85B718B8A3C2C5CCB98BA1C5 /* ChatPanel.swift */,
+				B50D264C420888CBF7FDE633 /* CommandPanel.swift */,
+				221117550FAD97CF81924E05 /* MousePanel.swift */,
+				A73267D4D7B506E647B7A995 /* ObjectPanel.swift */,
+				474D18A43D0D9A6BDD69EEFD /* SequencePanel.swift */,
+			);
+			path = Panels;
+			sourceTree = "<group>";
+		};
+		3EBD6226DB025AF86B7A30A2 = {
+			isa = PBXGroup;
+			children = (
+				52FC8256B867D42D45933E18 /* PyMOLViewer */,
+				9CB24941D41B87B6FB69845B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		52FC8256B867D42D45933E18 /* PyMOLViewer */ = {
+			isa = PBXGroup;
+			children = (
+				F5456D006DB0002CB809CACF /* Bridge */,
+				1A65998EE1F4B509B9B62F00 /* Panels */,
+				64BF1D08B3C4F59EA8DE2FE1 /* Shared */,
+			);
+			path = PyMOLViewer;
+			sourceTree = "<group>";
+		};
+		64BF1D08B3C4F59EA8DE2FE1 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				75F059BB95517CE91BD3E26E /* ContentView.swift */,
+				5E9F8D36908E3216D1C8F893 /* MetalViewport.swift */,
+				D965CB609C447033E5DB0046 /* PyMOLApp.swift */,
+				33D6A753E4525628B96C259C /* PyMOLEngine.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		9CB24941D41B87B6FB69845B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C78CBBCC3AFAD0E62BBAA884 /* PyMOLViewer.app */,
+				05C388F2E8B5A99F3CBFFC7E /* PyMOLViewer.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		F5456D006DB0002CB809CACF /* Bridge */ = {
+			isa = PBXGroup;
+			children = (
+				82BCB731F0C74F642D78D450 /* PyMOLBridge.h */,
+				356FC561FA1515B3D15A26E2 /* PyMOLBridge.mm */,
+			);
+			path = Bridge;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		403C29EE7864FF79CFA77A80 /* PyMOLViewer_macOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 882466131FAA9C59212EA9BC /* Build configuration list for PBXNativeTarget "PyMOLViewer_macOS" */;
+			buildPhases = (
+				CF1A74B0524F06E570BF6DF9 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PyMOLViewer_macOS;
+			packageProductDependencies = (
+			);
+			productName = PyMOLViewer_macOS;
+			productReference = 05C388F2E8B5A99F3CBFFC7E /* PyMOLViewer.app */;
+			productType = "com.apple.product-type.application";
+		};
+		5C02477A5F60954358D0D615 /* PyMOLViewer_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 706EC407223177C273587127 /* Build configuration list for PBXNativeTarget "PyMOLViewer_iOS" */;
+			buildPhases = (
+				CA0704A170D844CE72B9AB3E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PyMOLViewer_iOS;
+			packageProductDependencies = (
+			);
+			productName = PyMOLViewer_iOS;
+			productReference = C78CBBCC3AFAD0E62BBAA884 /* PyMOLViewer.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6ED6C52F0EEB9A594A439620 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 2DD9F037E609612924B32CC1 /* Build configuration list for PBXProject "PyMOLViewer" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 3EBD6226DB025AF86B7A30A2;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 9CB24941D41B87B6FB69845B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5C02477A5F60954358D0D615 /* PyMOLViewer_iOS */,
+				403C29EE7864FF79CFA77A80 /* PyMOLViewer_macOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CA0704A170D844CE72B9AB3E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C62180B11A031D82264ED97B /* ChatPanel.swift in Sources */,
+				DC8A9C1AA5EB1946175041FA /* CommandPanel.swift in Sources */,
+				4128B469229CEE6A6A4E4B68 /* ContentView.swift in Sources */,
+				104B27F848D308735A6D6DD2 /* MetalViewport.swift in Sources */,
+				5313FFF152E5D3F23159919B /* MousePanel.swift in Sources */,
+				4679E36960C9AE8AAE3B1F7D /* ObjectPanel.swift in Sources */,
+				F6C4DEEFED66EB440E6359AF /* PyMOLApp.swift in Sources */,
+				24169A74B9EBFD202258A5E4 /* PyMOLBridge.mm in Sources */,
+				56CC6A9A8A95D5B1B8D92688 /* PyMOLEngine.swift in Sources */,
+				13B48E7F8C2A51ADAF48F4C3 /* SequencePanel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CF1A74B0524F06E570BF6DF9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				278DFAA0C69C41D31A0FCF6D /* ChatPanel.swift in Sources */,
+				042F08F899EE19B73EFEC143 /* CommandPanel.swift in Sources */,
+				3F96563B0EA8F919B068A421 /* ContentView.swift in Sources */,
+				979AB10150CC62EE5E7962F9 /* MetalViewport.swift in Sources */,
+				F619DEB3EA3D691634AE8268 /* MousePanel.swift in Sources */,
+				5992346BC7D06026A673BA71 /* ObjectPanel.swift in Sources */,
+				5C923361D76329D2A466FFA9 /* PyMOLApp.swift in Sources */,
+				5D4BC69196C1256F5164E56A /* PyMOLBridge.mm in Sources */,
+				8852A9FA93BDAAB188D4103C /* PyMOLEngine.swift in Sources */,
+				300656C47AD9A9C18C129C42 /* SequencePanel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		463D94E637C3A881C4BEEB97 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_CFBundleDisplayName = PyMOL;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
+				PRODUCT_NAME = PyMOLViewer;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4D9ACD9B455938F3397B8DB7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_CFBundleDisplayName = PyMOL;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
+				PRODUCT_NAME = PyMOLViewer;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		5DC18310572E12E35999B821 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_CFBundleDisplayName = PyMOL;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
+				PRODUCT_NAME = PyMOLViewer;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		659B60F0D963E0707D0A53CB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_CFBundleDisplayName = PyMOL;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
+				PRODUCT_NAME = PyMOLViewer;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		76B7E9DB75E073D1E60928FA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"/opt/homebrew/opt/python@3.14/Frameworks",
+				);
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../include",
+					"$(SRCROOT)/../include/pymol",
+					"$(SRCROOT)/../layer0",
+					"$(SRCROOT)/../layer1",
+					"$(SRCROOT)/../layer2",
+					"$(SRCROOT)/../layer3",
+					"$(SRCROOT)/../layer4",
+					"$(SRCROOT)/../layer5",
+					"$(SRCROOT)/../layerGraphics",
+					"$(SRCROOT)/../layerGraphics/metal",
+					"$(SRCROOT)/../contrib",
+					"$(SRCROOT)/../contrib/pocketfft",
+					"$(SRCROOT)/../build_appkit/generated",
+					/opt/homebrew/include,
+					"/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../build_appkit",
+					/opt/homebrew/lib,
+					"/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				OTHER_LDFLAGS = (
+					"-lpymol_core",
+					"-lfreetype",
+					"-lpng16",
+					"-lGLEW",
+					"-lxml2",
+					"-lpython3.14",
+					"-framework Metal",
+					"-framework MetalKit",
+					"-framework OpenGL",
+					"-framework CoreVideo",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OBJC_BRIDGING_HEADER = PyMOLViewer/Bridge/PyMOLBridge.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		D8F44FDFF036013D2F03BA83 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"/opt/homebrew/opt/python@3.14/Frameworks",
+				);
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/../include",
+					"$(SRCROOT)/../include/pymol",
+					"$(SRCROOT)/../layer0",
+					"$(SRCROOT)/../layer1",
+					"$(SRCROOT)/../layer2",
+					"$(SRCROOT)/../layer3",
+					"$(SRCROOT)/../layer4",
+					"$(SRCROOT)/../layer5",
+					"$(SRCROOT)/../layerGraphics",
+					"$(SRCROOT)/../layerGraphics/metal",
+					"$(SRCROOT)/../contrib",
+					"$(SRCROOT)/../contrib/pocketfft",
+					"$(SRCROOT)/../build_appkit/generated",
+					/opt/homebrew/include,
+					"/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(SRCROOT)/../build_appkit",
+					/opt/homebrew/lib,
+					"/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				OTHER_LDFLAGS = (
+					"-lpymol_core",
+					"-lfreetype",
+					"-lpng16",
+					"-lGLEW",
+					"-lxml2",
+					"-lpython3.14",
+					"-framework Metal",
+					"-framework MetalKit",
+					"-framework OpenGL",
+					"-framework CoreVideo",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OBJC_BRIDGING_HEADER = PyMOLViewer/Bridge/PyMOLBridge.h;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2DD9F037E609612924B32CC1 /* Build configuration list for PBXProject "PyMOLViewer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				76B7E9DB75E073D1E60928FA /* Debug */,
+				D8F44FDFF036013D2F03BA83 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		706EC407223177C273587127 /* Build configuration list for PBXNativeTarget "PyMOLViewer_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				463D94E637C3A881C4BEEB97 /* Debug */,
+				659B60F0D963E0707D0A53CB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		882466131FAA9C59212EA9BC /* Build configuration list for PBXNativeTarget "PyMOLViewer_macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4D9ACD9B455938F3397B8DB7 /* Debug */,
+				5DC18310572E12E35999B821 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 6ED6C52F0EEB9A594A439620 /* Project object */;
+}

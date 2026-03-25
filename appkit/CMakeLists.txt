@@ -99,19 +99,51 @@ if(PYMOL_VMD_PLUGINS)
     )
 endif()
 
-# All sources
-set(ALL_SOURCES
+# Core library sources (everything except the AppKit entry point)
+set(CORE_SOURCES
     ${PYMOL_SOURCES}
     ${LAYER5_SOURCES}
-    ${OBJCXX_SOURCES}
     ${GENERATED_SOURCES}
     ${VMD_SOURCES}
+    ${PYMOL_ROOT}/layer0/MetalShaderMgr.mm
+    ${PYMOL_ROOT}/layerGraphics/metal/RendererMetal.mm
 )
+
+# All sources for the AppKit executable
+set(ALL_SOURCES
+    ${CORE_SOURCES}
+    ${PYMOL_ROOT}/layer5/main_appkit.mm
+)
+
+# Static library for use by SwiftUI project (and potentially other frontends)
+add_library(pymol_core STATIC ${CORE_SOURCES})
 
 # Create executable (macOS .app bundle)
 add_executable(PyMOL MACOSX_BUNDLE ${ALL_SOURCES})
 
+# Shared include directories for both targets
+set(PYMOL_INCLUDE_DIRS
+    ${PYMOL_ROOT}/include
+    ${PYMOL_ROOT}/ov/src
+    ${PYMOL_ROOT}/layer0
+    ${PYMOL_ROOT}/layer1
+    ${PYMOL_ROOT}/layer2
+    ${PYMOL_ROOT}/layer3
+    ${PYMOL_ROOT}/layer4
+    ${PYMOL_ROOT}/layer5
+    ${PYMOL_ROOT}/layerGraphics
+    ${PYMOL_ROOT}/layerGraphics/gl
+    ${PYMOL_ROOT}/layerGraphics/metal
+    ${PYMOL_ROOT}/contrib/pocketfft
+    ${CMAKE_BINARY_DIR}/generated
+    ${Python3_INCLUDE_DIRS}
+    ${Python3_NumPy_INCLUDE_DIRS}
+    ${PNG_INCLUDE_DIRS}
+    ${FREETYPE_INCLUDE_DIRS}
+)
+
 # Include directories
+target_include_directories(pymol_core PRIVATE ${PYMOL_INCLUDE_DIRS})
 target_include_directories(PyMOL PRIVATE
     ${PYMOL_ROOT}/include
     ${PYMOL_ROOT}/ov/src
@@ -134,6 +166,7 @@ target_include_directories(PyMOL PRIVATE
 
 if(GLEW_INCLUDE)
     target_include_directories(PyMOL PRIVATE ${GLEW_INCLUDE})
+    target_include_directories(pymol_core PRIVATE ${GLEW_INCLUDE})
 endif()
 
 if(PYMOL_VMD_PLUGINS)
@@ -141,11 +174,36 @@ if(PYMOL_VMD_PLUGINS)
         ${PYMOL_ROOT}/contrib/uiuc/plugins/include
         ${PYMOL_ROOT}/contrib/uiuc/plugins/molfile_plugin/src
     )
+    target_include_directories(pymol_core PRIVATE
+        ${PYMOL_ROOT}/contrib/uiuc/plugins/include
+        ${PYMOL_ROOT}/contrib/uiuc/plugins/molfile_plugin/src
+    )
 endif()
 
 if(GLM_INCLUDE)
     target_include_directories(PyMOL PRIVATE ${GLM_INCLUDE})
+    target_include_directories(pymol_core PRIVATE ${GLM_INCLUDE})
 endif()
+
+# Shared preprocessor defines
+set(PYMOL_DEFINES
+    _PYMOL_LIBPNG
+    _PYMOL_FREETYPE
+    _PYMOL_NUMPY
+    _PYMOL_OSX
+    _PYMOL_NO_MAIN
+    _PYMOL_APPKIT
+    _PYMOL_EMBEDDED
+    PYMOL_CURVE_VALIDATE
+)
+target_compile_definitions(pymol_core PRIVATE ${PYMOL_DEFINES})
+
+# Shared compiler flags
+set(PYMOL_COMPILE_FLAGS
+    -Werror=return-type -Wno-switch -Wno-narrowing
+    -Wno-char-subscripts -O2 -fno-strict-aliasing
+)
+target_compile_options(pymol_core PRIVATE ${PYMOL_COMPILE_FLAGS})
 
 # Preprocessor defines
 target_compile_definitions(PyMOL PRIVATE
@@ -161,6 +219,7 @@ target_compile_definitions(PyMOL PRIVATE
 
 if(PYMOL_VMD_PLUGINS)
     target_compile_definitions(PyMOL PRIVATE _PYMOL_VMD_PLUGINS)
+    target_compile_definitions(pymol_core PRIVATE _PYMOL_VMD_PLUGINS)
 endif()
 
 if(PYMOL_LIBXML)
@@ -170,16 +229,21 @@ if(PYMOL_LIBXML)
         HINTS /opt/homebrew/include)
     if(XML2_LIB AND XML2_INCLUDE)
         target_compile_definitions(PyMOL PRIVATE _HAVE_LIBXML)
+        target_compile_definitions(pymol_core PRIVATE _HAVE_LIBXML)
         target_include_directories(PyMOL PRIVATE ${XML2_INCLUDE})
+        target_include_directories(pymol_core PRIVATE ${XML2_INCLUDE})
         target_link_libraries(PyMOL PRIVATE ${XML2_LIB})
     endif()
 endif()
 
 if(PYMOL_MSGPACKC)
     target_compile_definitions(PyMOL PRIVATE MMTF_MSGPACK_USE_CPP11 MSGPACK_NO_BOOST)
+    target_compile_definitions(pymol_core PRIVATE MMTF_MSGPACK_USE_CPP11 MSGPACK_NO_BOOST)
     target_include_directories(PyMOL PRIVATE ${PYMOL_ROOT}/contrib/mmtf-c)
+    target_include_directories(pymol_core PRIVATE ${PYMOL_ROOT}/contrib/mmtf-c)
 else()
     target_compile_definitions(PyMOL PRIVATE _PYMOL_NO_MSGPACKC)
+    target_compile_definitions(pymol_core PRIVATE _PYMOL_NO_MSGPACKC)
 endif()
 
 # Compiler flags
