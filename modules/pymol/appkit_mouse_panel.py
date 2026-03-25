@@ -587,17 +587,8 @@ def setup(container_view, cmd):
     cycle_btn_w = 22
     cycle_btn_h = 14
 
-    # Mode cycle button (top-right of text area)
-    # Use _TransportTarget (which works!) with special command names
-    mode_btn = _make_transport_button("M", "mouse_mode_forward",
-        ((w - cycle_btn_w - 2, h - cycle_btn_h - 2), (cycle_btn_w, cycle_btn_h)))
-    container_view.addSubview_(mode_btn)
-
-    sel_btn = _make_transport_button("S", "sel_mode_forward",
-        ((w - cycle_btn_w - 2, h - 2 * cycle_btn_h - 4), (cycle_btn_w, cycle_btn_h)))
-    container_view.addSubview_(sel_btn)
-
     # Text view — plain NSTextView, no scroll view
+    # Added BEFORE the M/S buttons so buttons are on top in the z-order
     text_y = transport_h + 4
     text_h = h - text_y - 2
     text_frame = AppKit.NSMakeRect(2, text_y, w - cycle_btn_w - 6, text_h)
@@ -612,6 +603,16 @@ def setup(container_view, cmd):
         AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
     _text_view.textContainer().setWidthTracksTextView_(True)
     container_view.addSubview_(_text_view)
+
+    # Mode cycle button (top-right of text area)
+    # Added AFTER text view so they sit on top and receive mouse clicks
+    mode_btn = _make_transport_button("M", "mouse_mode_forward",
+        ((w - cycle_btn_w - 2, h - cycle_btn_h - 2), (cycle_btn_w, cycle_btn_h)))
+    container_view.addSubview_(mode_btn)
+
+    sel_btn = _make_transport_button("S", "sel_mode_forward",
+        ((w - cycle_btn_w - 2, h - 2 * cycle_btn_h - 4), (cycle_btn_w, cycle_btn_h)))
+    container_view.addSubview_(sel_btn)
 
     # Initial render — force an initial text to verify the view works
     try:
