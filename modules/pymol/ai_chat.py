@@ -618,9 +618,17 @@ def _worker_impl_fallback():
         _log(f'fallback worker: provider={provider}, model={model}')
 
         max_tool_rounds = 5
+        # For the first round, build clean messages from conversation history.
+        # For subsequent rounds (tool-use loop), send _messages directly so the
+        # model can see its own tool_use blocks and tool_result responses.
+        use_raw_messages = False
         for _round in range(max_tool_rounds):
-            _log(f'round {_round}: building api messages')
-            api_messages = _build_api_messages()
+            if use_raw_messages:
+                _log(f'round {_round}: using raw messages (with tool blocks)')
+                api_messages = _messages
+            else:
+                _log(f'round {_round}: building clean api messages')
+                api_messages = _build_api_messages()
             _log(f'round {_round}: {len(api_messages)} messages, calling API...')
 
             try:
@@ -658,12 +666,16 @@ def _worker_impl_fallback():
             # Handle tool_use
             if stop_reason == 'tool_use' and tool_uses:
                 _ui_status('Using tools...')
+                _log(f'round {_round}: executing {len(tool_uses)} tools: {[tu["name"] for tu in tool_uses]}')
                 tool_results = []
                 for tu in tool_uses:
+                    _log(f'  tool: {tu["name"]}({json.dumps(tu["input"])[:100]})')
+                    t_tool = time.time()
                     try:
                         result = execute_tool(tu['name'], tu['input'], _cmd)
                     except Exception as exc:
                         result = json.dumps({"error": str(exc)})
+                    _log(f'  tool: {tu["name"]} returned in {time.time()-t_tool:.2f}s ({len(str(result))} chars)')
 
                     result_str = result if isinstance(result, str) else json.dumps(result)
                     tool_results.append({
@@ -673,6 +685,7 @@ def _worker_impl_fallback():
                     })
 
                 _messages.append({'role': 'user', 'content': tool_results})
+                use_raw_messages = True  # subsequent rounds must include tool blocks
                 _ui_status('Thinking...')
                 continue  # next round
 
