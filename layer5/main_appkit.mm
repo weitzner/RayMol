@@ -53,6 +53,8 @@ int MainFromPyList(PyMOLGlobals *, PyObject *) { return 0; }
 
 static CPyMOL *pymolInstance = nullptr;
 static PyMOLOpenGLView *glView = nullptr;
+static BOOL pymolReady = NO;  // set after full Python + PyMOL init
+static NSMutableArray *pendingFiles = nil;  // files received before ready
 
 // ---------------------------------------------------------------------------
 #pragma mark - PyMOLOpenGLView
@@ -217,6 +219,19 @@ static PyMOLOpenGLView *glView = nullptr;
                                                    repeats:YES];
     // Ensure timer fires during event tracking (mouse drags)
     [[NSRunLoop currentRunLoop] addTimer:_renderTimer forMode:NSEventTrackingRunLoopMode];
+
+    // Mark PyMOL as fully ready and load any files that were queued before init
+    pymolReady = YES;
+    if (pendingFiles && [pendingFiles count] > 0) {
+        for (NSString *filename in pendingFiles) {
+            NSString *escaped = [filename stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+            escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            NSString *pyCmd = [@"__import__('pymol').cmd.do(\"load '" stringByAppendingString:escaped];
+            pyCmd = [pyCmd stringByAppendingString:@"'\")"];
+            PyRun_SimpleString([pyCmd UTF8String]);
+        }
+        [pendingFiles removeAllObjects];
+    }
 }
 
 - (void)renderFrame {
@@ -594,25 +609,33 @@ static PyMOLOpenGLView *glView = nullptr;
     // Cleanup handled by view dealloc
 }
 
-- (BOOL)application:(NSApplication *)sender openFile:(NSString *)filename {
-    if (!pymolInstance) return NO;
-    NSString *escaped = [filename stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-    NSString *pyCmd = [@"__import__('pymol').cmd.load('" stringByAppendingString:escaped];
-    pyCmd = [pyCmd stringByAppendingString:@"')"];
+static void _loadFile(NSString *filename) {
+    NSString *escaped = [filename stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    NSString *pyCmd = [@"__import__('pymol').cmd.do(\"load '" stringByAppendingString:escaped];
+    pyCmd = [pyCmd stringByAppendingString:@"'\")"];
     PyRun_SimpleString([pyCmd UTF8String]);
+}
+
+- (BOOL)application:(NSApplication *)sender openFile:(NSString *)filename {
+    if (pymolReady) {
+        _loadFile(filename);
+    } else {
+        // Queue for loading after PyMOL finishes initializing
+        if (!pendingFiles) pendingFiles = [[NSMutableArray alloc] init];
+        [pendingFiles addObject:filename];
+    }
     return YES;
 }
 
 - (void)application:(NSApplication *)sender openFiles:(NSArray<NSString *> *)filenames {
-    if (!pymolInstance) {
-        [sender replyToOpenOrPrint:NSApplicationDelegateReplyFailure];
-        return;
-    }
     for (NSString *filename in filenames) {
-        NSString *escaped = [filename stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-        NSString *pyCmd = [@"__import__('pymol').cmd.load('" stringByAppendingString:escaped];
-        pyCmd = [pyCmd stringByAppendingString:@"')"];
-        PyRun_SimpleString([pyCmd UTF8String]);
+        if (pymolReady) {
+            _loadFile(filename);
+        } else {
+            if (!pendingFiles) pendingFiles = [[NSMutableArray alloc] init];
+            [pendingFiles addObject:filename];
+        }
     }
     [sender replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
 }
