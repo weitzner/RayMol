@@ -251,6 +251,11 @@ if(ZLIB_LIB)
     target_link_libraries(PyMOL PRIVATE ${ZLIB_LIB})
 endif()
 
+# App icon
+set(PYMOL_ICON "${CMAKE_SOURCE_DIR}/PyMOL.icns")
+set_source_files_properties(${PYMOL_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+target_sources(PyMOL PRIVATE ${PYMOL_ICON})
+
 # macOS bundle properties
 set_target_properties(PyMOL PROPERTIES
     MACOSX_BUNDLE TRUE
@@ -258,6 +263,7 @@ set_target_properties(PyMOL PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "PyMOL"
     MACOSX_BUNDLE_BUNDLE_VERSION "3.2.0"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "3.2.0"
+    MACOSX_BUNDLE_ICON_FILE "PyMOL"
     MACOSX_BUNDLE_INFO_PLIST "${PYMOL_ROOT}/cmake/Info.plist.in"
 )
 

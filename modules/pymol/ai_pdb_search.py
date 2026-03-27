@@ -6,6 +6,7 @@ RCSB Search API v2 and retrieve entry metadata. Uses only stdlib
 """
 
 import json
+import re
 import urllib.request
 import urllib.error
 
@@ -13,16 +14,29 @@ _SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
 _ENTRY_URL = "https://data.rcsb.org/rest/v1/core/entry/{pdb_id}"
 
 # Timeout for individual HTTP requests (seconds)
-_REQUEST_TIMEOUT = 10
+_REQUEST_TIMEOUT = 5
+
+# Pattern for a 4-character PDB ID (e.g., 1M47, 3BPL)
+_PDB_ID_RE = re.compile(r'^[0-9][A-Za-z0-9]{3}$')
+
+
+def _extract_pdb_ids(query):
+    """Extract PDB IDs from a query string. Returns list of uppercase IDs found."""
+    tokens = re.split(r'[\s,;]+', query.strip())
+    return [t.upper() for t in tokens if _PDB_ID_RE.match(t)]
 
 
 def search_pdb(query, max_results=5):
     """Search the RCSB PDB for structures matching a text query.
 
+    If the query contains PDB IDs (4-character codes like 1M47), fetches
+    metadata directly without the slow full-text search (~0.5s vs ~10s).
+
     Parameters
     ----------
     query : str
-        Free-text search query (e.g. 'human hemoglobin', 'CRISPR Cas9').
+        Free-text search query (e.g. 'human hemoglobin', 'CRISPR Cas9')
+        or PDB IDs (e.g. '1M47', '1M47 1HIK').
     max_results : int, optional
         Maximum number of results to return (default 5, clamped to 1-25).
 
@@ -37,7 +51,12 @@ def search_pdb(query, max_results=5):
     """
     max_results = max(1, min(25, int(max_results)))
 
-    # Step 1: Full-text search for PDB IDs
+    # Fast path: if the query looks like PDB ID(s), skip full-text search
+    pdb_ids = _extract_pdb_ids(query)
+    if pdb_ids:
+        return _fetch_all_metadata(pdb_ids[:max_results])
+
+    # Slow path: full-text search
     pdb_ids = _search_ids(query, max_results)
 
     if not pdb_ids:

@@ -667,22 +667,55 @@ def _worker_impl_fallback():
             if stop_reason == 'tool_use' and tool_uses:
                 _ui_status('Using tools...')
                 _log(f'round {_round}: executing {len(tool_uses)} tools: {[tu["name"] for tu in tool_uses]}')
-                tool_results = []
-                for tu in tool_uses:
-                    _log(f'  tool: {tu["name"]}({json.dumps(tu["input"])[:100]})')
-                    t_tool = time.time()
-                    try:
-                        result = execute_tool(tu['name'], tu['input'], _cmd)
-                    except Exception as exc:
-                        result = json.dumps({"error": str(exc)})
-                    _log(f'  tool: {tu["name"]} returned in {time.time()-t_tool:.2f}s ({len(str(result))} chars)')
 
-                    result_str = result if isinstance(result, str) else json.dumps(result)
-                    tool_results.append({
-                        'type': 'tool_result',
-                        'tool_use_id': tu['id'],
-                        'content': result_str,
-                    })
+                # Run tools in parallel when there are multiple
+                if len(tool_uses) > 1:
+                    _log(f'  running {len(tool_uses)} tools in parallel')
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                    def _run_tool(tu):
+                        t_tool = time.time()
+                        try:
+                            result = execute_tool(tu['name'], tu['input'], _cmd)
+                        except Exception as exc:
+                            result = json.dumps({"error": str(exc)})
+                        _log(f'  tool: {tu["name"]} returned in {time.time()-t_tool:.2f}s ({len(str(result))} chars)')
+                        return tu, result
+
+                    tool_results_map = {}
+                    with ThreadPoolExecutor(max_workers=len(tool_uses)) as pool:
+                        futures = {pool.submit(_run_tool, tu): tu['id'] for tu in tool_uses}
+                        for f in as_completed(futures):
+                            tu, result = f.result()
+                            tool_results_map[tu['id']] = result
+
+                    tool_results = []
+                    for tu in tool_uses:
+                        result = tool_results_map[tu['id']]
+                        result_str = result if isinstance(result, str) else json.dumps(result)
+                        tool_results.append({
+                            'type': 'tool_result',
+                            'tool_use_id': tu['id'],
+                            'content': result_str,
+                        })
+                else:
+                    # Single tool — run directly
+                    tool_results = []
+                    for tu in tool_uses:
+                        _log(f'  tool: {tu["name"]}({json.dumps(tu["input"])[:100]})')
+                        t_tool = time.time()
+                        try:
+                            result = execute_tool(tu['name'], tu['input'], _cmd)
+                        except Exception as exc:
+                            result = json.dumps({"error": str(exc)})
+                        _log(f'  tool: {tu["name"]} returned in {time.time()-t_tool:.2f}s ({len(str(result))} chars)')
+
+                        result_str = result if isinstance(result, str) else json.dumps(result)
+                        tool_results.append({
+                            'type': 'tool_result',
+                            'tool_use_id': tu['id'],
+                            'content': result_str,
+                        })
 
                 _messages.append({'role': 'user', 'content': tool_results})
                 use_raw_messages = True  # subsequent rounds must include tool blocks
