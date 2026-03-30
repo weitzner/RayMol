@@ -101,6 +101,9 @@ static NSMutableArray *pendingFiles = nil;  // files received before ready
         GLint swapInterval = 1;
         [[self openGLContext] setValues:&swapInterval
                            forParameter:NSOpenGLContextParameterSwapInterval];
+
+        // Accept file drops
+        [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
     }
     return self;
 }
@@ -473,6 +476,33 @@ static NSMutableArray *pendingFiles = nil;  // files received before ready
 
 - (void)flagsChanged:(NSEvent *)event {
     // Could track modifier key state changes if needed
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - Drag and Drop
+// ---------------------------------------------------------------------------
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    NSPasteboard *pb = [sender draggingPasteboard];
+    if ([pb canReadObjectForClasses:@[[NSURL class]]
+                            options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}]) {
+        return NSDragOperationCopy;
+    }
+    return NSDragOperationNone;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSPasteboard *pb = [sender draggingPasteboard];
+    NSArray<NSURL *> *urls = [pb readObjectsForClasses:@[[NSURL class]]
+                                               options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    if (!urls || [urls count] == 0) return NO;
+
+    for (NSURL *url in urls) {
+        if ([url isFileURL] && pymolReady) {
+            _loadFile([url path]);
+        }
+    }
+    return YES;
 }
 
 // ---------------------------------------------------------------------------
