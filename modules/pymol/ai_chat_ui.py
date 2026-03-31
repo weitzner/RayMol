@@ -1071,6 +1071,25 @@ def prompt_for_credentials():
         1.0, _CredentialPromptHelper.alloc().init(), 'fire:', None, False)
 
 
+_auto_greet_sent = False
+
+class _AutoGreetHelper(AppKit.NSObject):
+    """Fires on main thread to send a silent greeting."""
+    def fire_(self, timer):
+        global _auto_greet_sent
+        if _auto_greet_sent:
+            return
+        _auto_greet_sent = True
+        from pymol import ai_chat
+        ai_chat._on_user_message("Greet the user briefly.", silent=True)
+
+
+def _schedule_auto_greet():
+    """Schedule a silent greeting after a short delay (main thread)."""
+    Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        1.5, _AutoGreetHelper.alloc().init(), 'fire:', None, False)
+
+
 def prompt_for_api_key():
     """Show a dialog asking for the Anthropic API key."""
     Foundation.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(

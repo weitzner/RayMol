@@ -234,9 +234,24 @@ def _init(cmd_module):
             pass
 
     # If no credentials for the active provider, prompt the user
+    # Refresh PDB index in background (weekly, ~56MB)
+    def _refresh_pdb_index():
+        try:
+            from pymol.ai_pdb_index import is_stale, download_index, load_index
+            if is_stale():
+                download_index()
+            load_index()
+        except Exception as e:
+            _log(f'PDB index refresh failed: {e}')
+    threading.Thread(target=_refresh_pdb_index, daemon=True).start()
+
     if _has_ui and not _has_credentials():
         from pymol import ai_chat_ui
         ai_chat_ui.prompt_for_credentials()
+    elif _has_ui and _has_credentials():
+        # Auto-greet after a short delay via NSTimer (fires on main thread)
+        from pymol import ai_chat_ui
+        ai_chat_ui._schedule_auto_greet()
 
 
 def _has_credentials():
@@ -387,14 +402,14 @@ def _toggle_panel():
         print("Chat panel requires macOS with pyobjc-framework-Cocoa.")
 
 
-def _on_user_message(text):
+def _on_user_message(text, silent=False):
     """Main entry point called by the UI when the user submits a message."""
     global _messages
     _log(f'_on_user_message: "{text[:50]}"')
 
     _messages.append({'role': 'user', 'content': text})
 
-    if _has_ui:
+    if _has_ui and not silent:
         from pymol import ai_chat_ui
         ai_chat_ui.show_message('user', text)
         ai_chat_ui.show_status('Thinking...')
@@ -635,15 +650,17 @@ def _worker_impl_fallback():
         model = _ai_config['models'].get(provider, 'claude-sonnet-4-6')
         _log(f'fallback worker: provider={provider}, model={model}')
 
-        max_tool_rounds = 5
+        max_tool_rounds = 12
         # For the first round, build clean messages from conversation history.
-        # For subsequent rounds (tool-use loop), send _messages directly so the
-        # model can see its own tool_use blocks and tool_result responses.
+        # For subsequent rounds (tool-use loop), keep only the last N messages
+        # from _messages so the model sees its tool_use/tool_result blocks
+        # without drowning in the full conversation history.
         use_raw_messages = False
         for _round in range(max_tool_rounds):
             if use_raw_messages:
                 _log(f'round {_round}: using raw messages (with tool blocks)')
-                api_messages = _messages
+                # Keep only the last 12 messages to avoid context explosion
+                api_messages = _messages[-12:]
             else:
                 _log(f'round {_round}: building clean api messages')
                 api_messages = _build_api_messages()
@@ -758,6 +775,24 @@ def _worker_impl_fallback():
 
             _ui_status('')
             break
+        else:
+            # Loop exhausted without end_turn — display whatever we have
+            _log(f'tool loop exhausted after {max_tool_rounds} rounds')
+            if full_text:
+                parsed = _parse_structured_response(full_text)
+                response_text = parsed.get('response', full_text)
+                script = parsed.get('script', '')
+                questions = parsed.get('questions', [])
+                _ui_msg('assistant', response_text)
+                if script:
+                    _ui_status('Executing...')
+                    _execute_script(script)
+                if questions and _has_ui:
+                    from pymol import ai_chat_ui
+                    ai_chat_ui.show_question_buttons(questions)
+            else:
+                _ui_msg('assistant', 'Done — check the viewport for results.')
+            _ui_status('')
 
     except Exception as exc:
         _ui_msg('error', f"Unexpected error: {exc}")

@@ -114,9 +114,9 @@ static NSMutableArray *pendingFiles = nil;  // files received before ready
 
     // Initialize PyMOL
     CPyMOLOptions *options = PyMOLOptions_New();
-    options->show_splash = 1;
+    options->show_splash = 0;
     options->internal_gui = 1;
-    options->internal_feedback = 1;
+    options->internal_feedback = 0;
 
     pymolInstance = PyMOL_NewWithOptions(options);
     PyMOLOptions_Free(options);

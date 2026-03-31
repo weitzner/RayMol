@@ -67,12 +67,12 @@ TOOL_DEFINITIONS = [
     {
         "name": "execute_command",
         "description": (
-            "Execute one or more PyMOL commands and return the result of each. "
-            "Commands are separated by newlines and executed sequentially. Each "
-            "command is run via cmd.do() on the main thread. Returns 'OK' or an "
-            "error message for each command. Use this when you need to run a "
-            "command and confirm it succeeded, rather than putting commands in "
-            "the JSON 'script' field which executes silently."
+            "Run a PyMOL command and return its text output. Use this ONLY when "
+            "you need to READ the result before deciding your next step (e.g., "
+            "checking distances, listing chains, reading settings). "
+            "Do NOT use this for actions like fetch, color, show, align, super — "
+            "put those in the 'script' field of your JSON response instead. "
+            "Using the script field is faster and avoids wasting tool rounds."
         ),
         "input_schema": {
             "type": "object",

@@ -56,15 +56,23 @@ def search_pdb(query, max_results=5):
     if pdb_ids:
         return _fetch_all_metadata(pdb_ids[:max_results])
 
-    # Slow path: full-text search
+    # Try local index first (<100ms vs 5-20s)
+    try:
+        from pymol.ai_pdb_index import ensure_loaded, search as local_search
+        if ensure_loaded():
+            results = local_search(query, max_results)
+            if results:
+                return results
+    except Exception:
+        pass
+
+    # Fallback: RCSB full-text search (slow)
     pdb_ids = _search_ids(query, max_results)
 
     if not pdb_ids:
         return []
 
-    # Step 2: Fetch metadata for all IDs in one GraphQL request
     results = _fetch_all_metadata(pdb_ids)
-
     return results
 
 
