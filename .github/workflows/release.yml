@@ -26,7 +26,13 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # ---------------------------------------------------------------
-    # 3. Build the AppKit app (CMake copies modules/ and data/ post-build)
+    # 3. Install NumPy into embedded Python (needed by CMake FindPython3)
+    # ---------------------------------------------------------------
+    - name: Install NumPy for embedded Python
+      run: deps/python/bin/python3 -m pip install numpy
+
+    # ---------------------------------------------------------------
+    # 4. Build the AppKit app (CMake copies modules/ and data/ post-build)
     # ---------------------------------------------------------------
     - name: Configure CMake
       run: cmake -S appkit -B build_appkit -DCMAKE_BUILD_TYPE=Release
