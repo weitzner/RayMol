@@ -816,8 +816,11 @@ def get_pymol_version():
 
 
 def get_sources(subdirs, suffixes=(".c", ".cpp", ".mm")):
+    # Exclude main_appkit.mm — it's only for the standalone AppKit app bundle,
+    # not the _cmd Python extension (it duplicates symbols from main.cpp).
     return sorted(
-        [f for d in subdirs for s in suffixes for f in glob.glob(d + "/*" + s)]
+        [f for d in subdirs for s in suffixes for f in glob.glob(d + "/*" + s)
+         if not f.endswith("main_appkit.mm")]
     )
 
 
