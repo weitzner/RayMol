@@ -297,10 +297,17 @@ def _add_edit_menu(menubar):
     item = AppKit.NSMenuItem.alloc().init()
     menubar.addItem_(item)
     menu = AppKit.NSMenu.alloc().initWithTitle_("Edit")
-    menu.setAutoenablesItems_(False)
+    menu.setAutoenablesItems_(True)
 
-    _menu_cmd(menu, "Undo", "undo", 'z')
-    _menu_cmd(menu, "Redo", "redo", 'z', _CMD_SHIFT)
+    # Standard editing actions — these use AppKit's responder chain so
+    # Cmd+C/V/X/A work in text fields (chat, command panel, log).
+    mi = menu.addItemWithTitle_action_keyEquivalent_("Undo", "undo:", "z")
+    mi = menu.addItemWithTitle_action_keyEquivalent_("Redo", "undo:", "Z")
+    menu.addItem_(AppKit.NSMenuItem.separatorItem())
+    mi = menu.addItemWithTitle_action_keyEquivalent_("Cut", "cut:", "x")
+    mi = menu.addItemWithTitle_action_keyEquivalent_("Copy", "copy:", "c")
+    mi = menu.addItemWithTitle_action_keyEquivalent_("Paste", "paste:", "v")
+    mi = menu.addItemWithTitle_action_keyEquivalent_("Select All", "selectAll:", "a")
 
     item.setSubmenu_(menu)
 
