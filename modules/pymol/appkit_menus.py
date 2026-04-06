@@ -52,6 +52,9 @@ def _do(cmd_str):
 class _MenuTarget(AppKit.NSObject):
     """Receives actions from simple command menu items."""
 
+    def validateMenuItem_(self, menuItem):
+        return True
+
     def doCommand_(self, sender):
         tag = sender.tag()
         cmd_str = _command_map.get(tag, '')
@@ -180,6 +183,7 @@ def _menu_cmd(menu, title, command, key='', modifiers=None):
         title, 'doCommand:', key)
     item.setTag_(tag)
     item.setTarget_(_get_target())
+    item.setEnabled_(True)
     if modifiers is not None:
         item.setKeyEquivalentModifierMask_(modifiers)
     return item
