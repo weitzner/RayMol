@@ -126,6 +126,12 @@ extension MetalViewport {
         weak var engine: PyMOLEngine?
         weak var mtkView: MTKView?
         private var viewportSize: CGSize = .zero
+        #if os(macOS)
+        // Track the mouse-down point to distinguish a click (pick/select) from
+        // a drag (rotate). Point space, view coordinates.
+        private var mouseDownLoc: CGPoint = .zero
+        private var didDrag = false
+        #endif
 
         // MARK: - MTKViewDelegate
 
@@ -174,18 +180,41 @@ extension MetalViewport {
 
         #if os(macOS)
         func handleMouseDown(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
+            let loc = view.convert(event.locationInWindow, from: nil)
+            mouseDownLoc = loc
+            didDrag = false
+            let pt = pymolPoint(in: view, at: loc)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
             engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_DOWN, x: pt.0, y: pt.1, modifiers: mods)
         }
 
         func handleMouseUp(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
+            let loc = view.convert(event.locationInWindow, from: nil)
+            let pt = pymolPoint(in: view, at: loc)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
             engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: mods)
+
+            // A click (no meaningful drag) = pick/select via the CPU picker
+            // (GL color-picking is unavailable on Metal). NDC in view-point
+            // space, bottom-left origin (macOS views are not flipped, matching
+            // PyMOL's NDC), so no Y flip. Delay slightly so it runs after the
+            // deferred mouse-release, which would otherwise clear the selection.
+            let moved = hypot(loc.x - mouseDownLoc.x, loc.y - mouseDownLoc.y)
+            if !didDrag && moved < 3 {
+                let w = view.bounds.width, h = view.bounds.height
+                if w > 0, h > 0 {
+                    let ndcX = Float(loc.x / w) * 2 - 1
+                    let ndcY = Float(loc.y / h) * 2 - 1
+                    let aspect = Float(w / h)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                        self?.engine?.pick(ndcX: ndcX, ndcY: ndcY, aspect: aspect)
+                    }
+                }
+            }
         }
 
         func handleMouseDragged(_ event: NSEvent, in view: MTKView) {
+            didDrag = true
             let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
             let mods = pymolModifiers(event.modifierFlags.rawValue)
             engine?.drag(x: pt.0, y: pt.1, modifiers: mods)

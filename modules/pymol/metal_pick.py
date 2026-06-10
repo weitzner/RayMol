@@ -94,15 +94,8 @@ def pick_at(ndc_x, ndc_y, aspect):
                 continue
 
         if sele_expr:
-            try:
-                existing = cmd.count_atoms('sele')
-            except Exception:
-                existing = 0
-
-            if existing > 0:
-                cmd.select('sele', 'sele or %s' % sele_expr)
-            else:
-                cmd.select('sele', sele_expr)
+            # Plain click replaces the selection (standard PyMOL behavior).
+            cmd.select('sele', sele_expr)
             cmd.enable('sele')
 
     except Exception as e:
