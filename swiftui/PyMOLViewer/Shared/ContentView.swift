@@ -22,34 +22,33 @@ struct ContentView: View {
     #if os(macOS)
     private var macOSLayout: some View {
         HSplitView {
-            // Left: 3D viewport
-            VStack(spacing: 0) {
-                MetalViewport()
-                    .frame(minWidth: 400, minHeight: 300)
-
+            // Left column: sequence viewer + terminal stacked ABOVE the 3D
+            // viewport in a VSplitView so each is drag-resizable, and each is
+            // hideable via the toolbar toggles.
+            VSplitView {
                 if engine.sequenceVisible {
                     SequencePanel()
-                        .frame(height: 40)
+                        .frame(minHeight: 28, idealHeight: 40, maxHeight: 160)
                 }
+
+                if showCommandPanel {
+                    CommandPanel()
+                        .frame(minHeight: 80, idealHeight: 160)
+                }
+
+                MetalViewport()
+                    .frame(minWidth: 400, minHeight: 200)
             }
 
-            // Right: panels
+            // Right column: objects + (chat) + mouse legend
             VStack(spacing: 0) {
                 if showObjectPanel {
                     ObjectPanel()
                         .frame(minHeight: 150)
                 }
 
-                Divider()
-
-                if showCommandPanel {
-                    CommandPanel()
-                        .frame(minHeight: 150)
-                }
-
-                Divider()
-
                 if showChatPanel {
+                    Divider()
                     ChatPanel()
                         .frame(minHeight: 200)
                 }
