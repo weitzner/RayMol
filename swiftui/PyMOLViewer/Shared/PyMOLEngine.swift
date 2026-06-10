@@ -57,6 +57,11 @@ final class PyMOLEngine: ObservableObject {
             }
         }
 
+        // Test affordance: rotate the camera (confirms view changes render).
+        if let t = ProcessInfo.processInfo.environment["PYMOL_AUTOTURN"], let deg = Float(t) {
+            runCommand("turn y, \(deg)")
+        }
+
         // Poll feedback every 100ms
         feedbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.pollFeedback()
