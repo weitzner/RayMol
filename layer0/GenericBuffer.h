@@ -320,6 +320,19 @@ public:
    * @param data The data to upload
   */
   void texture_subdata_2D(int xoffset, int yoffset, int width, int height, const void* data);
+
+  // CPU-side RGBA copy of a 2D texture, retained for non-GL renderers (Metal)
+  // that cannot read back from the (stubbed) GL texture. Only populated in
+  // NO_OPENGL builds; empty otherwise. Used for the glyph/label atlas.
+  const unsigned char* cpuData() const {
+    return m_cpuPixels.empty() ? nullptr : m_cpuPixels.data();
+  }
+  int cpuWidth() const { return _width; }
+  int cpuHeight() const { return _height; }
+  // Monotonically increasing counter bumped on every CPU-copy mutation so a
+  // renderer can detect when its uploaded texture is stale and re-upload.
+  std::uint64_t cpuGeneration() const { return m_cpuGeneration; }
+
 private:
   void genBuffer();
   void freeBuffer();
@@ -333,6 +346,8 @@ private:
   int                      _width  { 0 };
   int                      _height { 0 };
   int                      _depth  { 0 };
+  std::vector<unsigned char> m_cpuPixels;     // RGBA8, size = _width*_height*4
+  std::uint64_t              m_cpuGeneration { 0 };
 };
 
 /***********************************************************************

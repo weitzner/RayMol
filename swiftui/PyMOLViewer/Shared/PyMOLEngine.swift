@@ -47,6 +47,13 @@ final class PyMOLEngine: ObservableObject {
             }
         }
 
+        // Test affordance: run arbitrary ;-separated PyMOL commands (parity testing).
+        if let c = ProcessInfo.processInfo.environment["PYMOL_AUTOCMD"] {
+            for one in c.split(separator: ";") {
+                runCommand(one.trimmingCharacters(in: .whitespaces))
+            }
+        }
+
         // Test affordance: pick at an NDC point ("x,y") and record the selection
         // size to a file for verification (no-op unless env var set).
         if let s = ProcessInfo.processInfo.environment["PYMOL_AUTOPICK"] {
@@ -60,6 +67,25 @@ final class PyMOLEngine: ObservableObject {
         // Test affordance: rotate the camera (confirms view changes render).
         if let t = ProcessInfo.processInfo.environment["PYMOL_AUTOTURN"], let deg = Float(t) {
             runCommand("turn y, \(deg)")
+        }
+
+        // Test affordance: simulate a left-drag through PyMOL_Button/Drag to
+        // verify the C input path drives rotation (isolates GUI event wiring
+        // from the button/drag camera path). Format: "cx,cy" backing px.
+        if let d = ProcessInfo.processInfo.environment["PYMOL_AUTODRAG"] {
+            let parts = d.split(separator: ",").compactMap { Int32($0) }
+            if parts.count == 2 {
+                let cx = parts[0], cy = parts[1]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    guard let self = self else { return }
+                    self.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_DOWN, x: cx, y: cy, modifiers: 0)
+                    for i in 1...30 {
+                        self.drag(x: cx + Int32(i) * 6, y: cy, modifiers: 0)
+                    }
+                    self.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_UP, x: cx + 180, y: cy, modifiers: 0)
+                    NSLog("PYMOL_AUTODRAG: simulated left-drag from (\(cx),\(cy)) +180px")
+                }
+            }
         }
 
         // Test affordance: after a few frames render, capture the Metal
@@ -177,6 +203,11 @@ final class PyMOLEngine: ObservableObject {
                 } else if !line.isEmpty {
                     DispatchQueue.main.async {
                         self.feedbackLog.append(line)
+                        // Cap the log so it can't grow unbounded and thrash the
+                        // SwiftUI list (which would starve the render/input loop).
+                        if self.feedbackLog.count > 400 {
+                            self.feedbackLog.removeFirst(self.feedbackLog.count - 400)
+                        }
                     }
                 }
             }
@@ -190,18 +221,20 @@ final class PyMOLEngine: ObservableObject {
         objectPollCounter += 1
         guard objectPollCounter % 5 == 0 else { return }
 
-        runCommand(
-            "python\n"
-            + "import json\n"
-            + "from pymol import cmd\n"
-            + "objs = list(cmd.get_names('public_objects') or [])\n"
-            + "sels = list(cmd.get_names('public_selections') or [])\n"
-            + "enabled = set(cmd.get_names('public_objects', enabled_only=1) or [])\n"
-            + "enabled |= set(cmd.get_names('public_selections', enabled_only=1) or [])\n"
-            + "sel_counts = {s: cmd.count_atoms(s) for s in sels}\n"
-            + "print('OBJPANEL:' + json.dumps({'objects': objs, 'selections': sels, "
-            + "'enabled': list(enabled), 'sel_counts': sel_counts}))\n"
-            + "python end"
+        // Run via runPython (raw PyRun), NOT runCommand/cmd.do — cmd.do echoes
+        // the whole command block into the feedback log every poll, which floods
+        // the log and starves the UI. The print('OBJPANEL:') still reaches the
+        // feedback buffer (parsed by pollFeedback); only the echo is avoided.
+        runPython(
+            "import json\n"
+            + "from pymol import cmd as _cmd\n"
+            + "_objs = list(_cmd.get_names('public_objects') or [])\n"
+            + "_sels = list(_cmd.get_names('public_selections') or [])\n"
+            + "_en = set(_cmd.get_names('public_objects', enabled_only=1) or [])\n"
+            + "_en |= set(_cmd.get_names('public_selections', enabled_only=1) or [])\n"
+            + "_sc = {s: _cmd.count_atoms(s) for s in _sels}\n"
+            + "print('OBJPANEL:' + json.dumps({'objects': _objs, 'selections': _sels, "
+            + "'enabled': list(_en), 'sel_counts': _sc}))"
         )
     }
 }

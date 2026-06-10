@@ -11,6 +11,7 @@
 #include "Executive.h"
 #include "Feedback.h"
 #include "Matrix.h"
+#include "Ortho.h"
 #include "P.h"
 #include "Picking.h"
 #include "PyMOLOptions.h"
@@ -1861,6 +1862,15 @@ void SceneRenderMetal(PyMOLGlobals* G)
     OrthoReshape(G, G->Option->winX, G->Option->winY, true);
     metalConfigDone = true;
   }
+
+  // Drain deferred mouse/UI actions (click, drag, release). PyMOL_Button/Drag
+  // queue these via OrthoDefer; the normal GL path runs them in
+  // ExecutiveDrawNow, which the Metal path bypasses. Without this, mouse
+  // rotate/zoom/pan never take effect. Runs inside the ValidContext window
+  // (the bridge pushes a valid context around SceneRenderMetal), matching what
+  // the deferred SceneClick/SceneDrag handlers expect.
+  if (!SettingGetGlobal_b(G, cSetting_suspend_deferred))
+    OrthoExecDeferred(G);
 
   // --- Update phase (CPU only, no GL) ---
   ExecutiveUpdateSceneMembers(G);

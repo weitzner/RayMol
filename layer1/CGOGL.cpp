@@ -91,6 +91,10 @@ static bool drawVBOIndexedViaMetal(pymol::Renderer* renderer,
     (data)[0] / 255.f, (data)[1] / 255.f, (data)[2] / 255.f, (data)[3] / 255.f);
 #endif
 
+// Label/text Metal helpers (defined later, after Texture.h is included).
+static bool vboLooksLikeLabels(VertexBufferGL* vbo);
+static void drawLabelsViaMetal(CCGORenderer* I, size_t vboid, int vertexCount);
+
 constexpr unsigned VERTEX_PICKCOLOR_RGBA_SIZE = 1;  // 4 unsigned bytes
 constexpr unsigned VERTEX_PICKCOLOR_INDEX_SIZE = 2; // index + bond
 constexpr unsigned VERTEX_PICKCOLOR_SIZE = VERTEX_PICKCOLOR_RGBA_SIZE + //
@@ -759,6 +763,12 @@ static void CGO_gl_draw_custom(CCGORenderer* I, CGO_op_data pc)
   if (I->G->Renderer) {
     if (I->isPicking) return;
     auto* vbo = I->G->ShaderMgr->getGPUBuffer<VertexBufferGL>(sp->vboid);
+    // Text/label CGOs are emitted as custom draws but need the screen-aligned
+    // glyph-atlas shader rather than the geometry VBO shader.
+    if (vboLooksLikeLabels(vbo)) {
+      drawLabelsViaMetal(I, sp->vboid, sp->nverts);
+      return;
+    }
     if (sp->iboid) {
       auto* ibo = I->G->ShaderMgr->getGPUBuffer<IndexBufferGL>(sp->iboid);
       drawVBOIndexedViaMetal(I->G->Renderer, vbo, ibo,
@@ -930,11 +940,98 @@ static void CGO_gl_draw_cylinder_buffers(CCGORenderer* I, CGO_op_data pc)
 }
 #include "Texture.h"
 
+// True if this VBO is a text/label VBO (built by CGOConvertToLabelShader),
+// identified by its screen-aligned glyph attributes.
+static bool vboLooksLikeLabels(VertexBufferGL* vbo)
+{
+  if (!vbo)
+    return false;
+  bool hasWorld = false, hasTex = false;
+  for (const auto& d : vbo->getDesc().descs) {
+    if (d.attr_name == "attr_worldpos")
+      hasWorld = true;
+    else if (d.attr_name == "attr_texcoords")
+      hasTex = true;
+  }
+  return hasWorld && hasTex;
+}
+
+// Metal path for text/label quads. The GL path uses the "label" GL shader
+// (CShaderPrg), which doesn't exist in NO_OPENGL builds; instead route the
+// interleaved label VBO + glyph atlas to Renderer::drawLabels.
+static void drawLabelsViaMetal(CCGORenderer* I, size_t vboid, int vertexCount)
+{
+  auto* G = I->G;
+  if (!G->Renderer || I->isPicking)
+    return; // picking uses the CPU metal_pick path, not GL color-pick
+
+  auto* vbo = G->ShaderMgr->getGPUBuffer<VertexBufferGL>(vboid);
+  if (!vbo || !vbo->hasCPUData())
+    return;
+
+  pymol::Renderer::LabelDrawCall call;
+  call.data = vbo->cpuData();
+  call.dataSize = vbo->cpuDataSize();
+  call.stride = vbo->cpuStride();
+  call.vertexCount = vertexCount;
+
+  for (const auto& d : vbo->getDesc().descs) {
+    int off = static_cast<int>(d.offset);
+    if (d.attr_name == "attr_worldpos")
+      call.worldPosOff = off;
+    else if (d.attr_name == "attr_targetpos")
+      call.targetPosOff = off;
+    else if (d.attr_name == "attr_screenoffset")
+      call.screenOff = off;
+    else if (d.attr_name == "attr_texcoords")
+      call.texOff = off;
+    else if (d.attr_name == "attr_screenworldoffset")
+      call.screenWorldOff = off;
+    else if (d.attr_name == "attr_relative_mode")
+      call.relModeOff = off;
+  }
+
+  auto extent = SceneGetExtentStereo(G);
+  call.screenW = extent.width;
+  call.screenH = extent.height;
+  call.screenOriginVertexScale = SceneGetScreenVertexScale(G, nullptr) / 2.f;
+  float front = SceneGetCurrentFrontSafe(G);
+  float back = SceneGetCurrentBackSafe(G);
+  call.front = front;
+  call.clipRange = back - front;
+
+  // Mirror SET_LABEL_SCALE_UNIFORMS: scale-by-vertex when label_size < 0.
+  CSetting *s1 = nullptr, *s2 = nullptr;
+  if (I->rep && I->rep->cs)
+    s1 = I->rep->cs->Setting.get();
+  if (I->rep && I->rep->obj)
+    s2 = I->rep->obj->Setting.get();
+  float label_size = SettingGet_f(G, s1, s2, cSetting_label_size);
+  call.scaleByVertexScale = label_size < 0.f ? 1.f : 0.f;
+  float tfs = I->info ? static_cast<float>(I->info->texture_font_size) : 0.f;
+  call.labelTextureSize = label_size < 0.f ? (-2.f * tfs / label_size) : 1.f;
+
+  const unsigned char* px = nullptr;
+  int aw = 0, ah = 0;
+  unsigned long long gen = 0;
+  if (!TextureGetTextTextureMetalData(G, &px, &aw, &ah, &gen))
+    return;
+  call.atlasPixels = px;
+  call.atlasW = aw;
+  call.atlasH = ah;
+  call.atlasGen = gen;
+
+  G->Renderer->drawLabels(call);
+}
+
 static void CGO_gl_draw_labels(CCGORenderer* I, CGO_op_data pc)
 {
-  if (I->G->Renderer)
-    return;
   const cgo::draw::labels* sp = reinterpret_cast<decltype(sp)>(*pc);
+
+  if (I->G->Renderer) {
+    drawLabelsViaMetal(I, sp->vboid, sp->ntextures * 6);
+    return;
+  }
 
   CShaderPrg* shaderPrg;
   int t_mode = SettingGetGlobal_i(I->G, cSetting_transparency_mode);
@@ -1446,12 +1543,14 @@ static void CGO_gl_special(CCGORenderer* I, CGO_op_data pc)
     if (lineradius < 0.f) {
       lineradius = linewidth * vScale * pixel_scale_value / 2.f;
     }
-    shaderPrg->Set1f("uni_radius", lineradius);
-    if (I->color) {
-      shaderPrg->SetAttrib4fLocation(
-          "a_Color", I->color[0], I->color[1], I->color[2], 1.f);
-      shaderPrg->SetAttrib4fLocation(
-          "a_Color2", I->color[0], I->color[1], I->color[2], 1.f);
+    if (shaderPrg) {
+      shaderPrg->Set1f("uni_radius", lineradius);
+      if (I->color) {
+        shaderPrg->SetAttrib4fLocation(
+            "a_Color", I->color[0], I->color[1], I->color[2], 1.f);
+        shaderPrg->SetAttrib4fLocation(
+            "a_Color2", I->color[0], I->color[1], I->color[2], 1.f);
+      }
     }
     glLineWidthAndUniform(lineradius * 2.f / vScale, shaderPrg);
   } break;
@@ -1472,10 +1571,12 @@ static void CGO_gl_special(CCGORenderer* I, CGO_op_data pc)
       if (I->rep->obj)
         set2 = I->rep->obj->Setting.get();
       label_size = SettingGet_f(I->G, set1, set2, cSetting_label_size);
-      shaderPrg->Set1f("scaleByVertexScale", label_size < 0.f ? 1.f : 0.f);
-      if (label_size < 0.f) {
-        shaderPrg->Set1f("labelTextureSize",
-            (float) -2.f * I->info->texture_font_size / label_size);
+      if (shaderPrg) {
+        shaderPrg->Set1f("scaleByVertexScale", label_size < 0.f ? 1.f : 0.f);
+        if (label_size < 0.f) {
+          shaderPrg->Set1f("labelTextureSize",
+              (float) -2.f * I->info->texture_font_size / label_size);
+        }
       }
     }
 

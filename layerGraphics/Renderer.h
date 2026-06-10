@@ -185,6 +185,37 @@ public:
   // VBO buffer cache — returns a cached buffer ID for the given key,
   // creating it from data if not already cached.
   virtual void invalidateVBOCache(uint64_t key) {}
+
+  // Screen-aligned textured text quads (labels + measurement text). The
+  // interleaved vertex data carries the attributes the GL label shader uses;
+  // byte offsets are within `stride` (-1 = absent). The glyph atlas is an
+  // RGBA8 image whose pixels already carry the baked label color; `atlasGen`
+  // lets the renderer skip re-upload when unchanged. Default: no-op (GL path
+  // uses its own shader; this is for renderers without the GL shader infra).
+  struct LabelDrawCall {
+    int vertexCount = 0;
+    const void* data = nullptr;
+    size_t dataSize = 0;
+    size_t stride = 0;
+    int worldPosOff = -1;
+    int targetPosOff = -1;
+    int screenOff = -1;        // attr_screenoffset (vec3)
+    int texOff = -1;           // attr_texcoords (vec2)
+    int screenWorldOff = -1;   // attr_screenworldoffset (vec3)
+    int relModeOff = -1;       // attr_relative_mode (float)
+    const unsigned char* atlasPixels = nullptr;
+    int atlasW = 0;
+    int atlasH = 0;
+    uint64_t atlasGen = 0;
+    float screenW = 1.f;
+    float screenH = 1.f;
+    float screenOriginVertexScale = 1.f;
+    float scaleByVertexScale = 0.f;
+    float labelTextureSize = 1.f;
+    float front = 0.f;
+    float clipRange = 1.f;
+  };
+  virtual void drawLabels(const LabelDrawCall&) {}
 };
 
 } // namespace pymol

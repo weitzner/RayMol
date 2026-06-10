@@ -1180,11 +1180,24 @@ struct VBOVertexIn {
 struct VBOUniforms {
   float4x4 modelview;
   float4x4 projection;
+  float pointSize;
 };
 
 struct VBOVertexOut {
   float4 position [[position]];
   float4 color;
+};
+
+// Unlit input has no normal attribute (lines/ribbon/dots disable lighting).
+struct VBOVertexInUnlit {
+  float3 position [[attribute(0)]];
+  float4 color    [[attribute(2)]];
+};
+
+struct VBOVertexOutUnlit {
+  float4 position [[position]];
+  float4 color;
+  float  pointSize [[point_size]];
 };
 
 vertex VBOVertexOut vbo_vertex(
@@ -1195,10 +1208,12 @@ vertex VBOVertexOut vbo_vertex(
   float4 eyePos = uniforms.modelview * float4(in.position, 1.0);
   out.position = uniforms.projection * eyePos;
 
-  // Basic directional lighting in eye space
+  // Two-sided directional lighting in eye space: abs(N·L) lights back faces
+  // (surface interiors, cartoon undersides) instead of leaving them black,
+  // matching desktop PyMOL's two_sided_lighting behavior for closed geometry.
   float3 eyeNormal = normalize((uniforms.modelview * float4(in.normal, 0.0)).xyz);
   float3 lightDir = float3(0.0, 0.0, 1.0);
-  float NdotL = max(dot(eyeNormal, lightDir), 0.0);
+  float NdotL = abs(dot(eyeNormal, lightDir));
   float ambient = 0.25;
   float lighting = ambient + (1.0 - ambient) * NdotL;
 
@@ -1207,6 +1222,25 @@ vertex VBOVertexOut vbo_vertex(
 }
 
 fragment float4 vbo_fragment(VBOVertexOut in [[stage_in]])
+{
+  return in.color;
+}
+
+// Unlit: flat color, no lighting. Used for lines/ribbon (GL_LINES) and dots
+// (GL_POINTS), which disable lighting and carry no normal attribute. Emits
+// point_size so dots render at the requested screen size.
+vertex VBOVertexOutUnlit vbo_vertex_unlit(
+    VBOVertexInUnlit in [[stage_in]],
+    constant VBOUniforms& uniforms [[buffer(1)]])
+{
+  VBOVertexOutUnlit out;
+  out.position = uniforms.projection * (uniforms.modelview * float4(in.position, 1.0));
+  out.color = in.color;
+  out.pointSize = max(uniforms.pointSize, 1.0);
+  return out;
+}
+
+fragment float4 vbo_fragment_unlit(VBOVertexOutUnlit in [[stage_in]])
 {
   return in.color;
 }
@@ -1223,6 +1257,8 @@ fragment float4 vbo_fragment(VBOVertexOut in [[stage_in]])
 
   _vboVertexFunc = [lib newFunctionWithName:@"vbo_vertex"];
   _vboFragmentFunc = [lib newFunctionWithName:@"vbo_fragment"];
+  _vboVertexUnlitFunc = [lib newFunctionWithName:@"vbo_vertex_unlit"];
+  _vboFragmentUnlitFunc = [lib newFunctionWithName:@"vbo_fragment_unlit"];
   if (!_vboVertexFunc || !_vboFragmentFunc) {
     NSLog(@"RendererMetal: VBO shader functions not found");
     return;
@@ -1363,11 +1399,14 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
 
   // Build a pipeline for this specific layout. For common layouts, reuse
-  // pre-built pipelines.
+  // pre-built pipelines. Lines/ribbon (no normal) and dots (Points) must use
+  // the unlit flat-color + point-size shader, so they skip the prebuilt
+  // (lit) pipelines even when their interleaved layout happens to match.
+  bool unlit = (normalOffset < 0) || (mode == PrimitiveType::Points);
   id<MTLRenderPipelineState> pipeline = nil;
 
   // Check if layout matches pre-built pipelines
-  if (posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
+  if (!unlit && posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
     if (colorType == 0 && stride == 28 && _vboPipelineUByte) {
       pipeline = _vboPipelineUByte;
     } else if (colorType == 1 && stride == 40 && _vboPipelineFloat) {
@@ -1375,12 +1414,16 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
     }
   }
 
-  // Fallback: create pipeline on-the-fly (cached by Metal driver)
-  if (!pipeline && _vboVertexFunc && _vboFragmentFunc) {
+  // Fallback: create pipeline on-the-fly (cached by Metal driver). `unlit`
+  // (lines/ribbon without a normal, or Points/dots) uses the flat-color +
+  // point-size shader.
+  id<MTLFunction> vfn = unlit ? _vboVertexUnlitFunc : _vboVertexFunc;
+  id<MTLFunction> ffn = unlit ? _vboFragmentUnlitFunc : _vboFragmentFunc;
+  if (!pipeline && vfn && ffn) {
     MTLRenderPipelineDescriptor* psd =
         [[MTLRenderPipelineDescriptor alloc] init];
-    psd.vertexFunction = _vboVertexFunc;
-    psd.fragmentFunction = _vboFragmentFunc;
+    psd.vertexFunction = vfn;
+    psd.fragmentFunction = ffn;
     psd.vertexDescriptor = vd;
     psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
     psd.colorAttachments[0].blendingEnabled = YES;
@@ -1492,11 +1535,14 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
       pipeline = _vboPipelineFloat;
     }
   }
-  if (!pipeline && _vboVertexFunc && _vboFragmentFunc) {
+  bool unlit = (normalOffset < 0);
+  id<MTLFunction> vfn = unlit ? _vboVertexUnlitFunc : _vboVertexFunc;
+  id<MTLFunction> ffn = unlit ? _vboFragmentUnlitFunc : _vboFragmentFunc;
+  if (!pipeline && vfn && ffn) {
     MTLRenderPipelineDescriptor* psd =
         [[MTLRenderPipelineDescriptor alloc] init];
-    psd.vertexFunction = _vboVertexFunc;
-    psd.fragmentFunction = _vboFragmentFunc;
+    psd.vertexFunction = vfn;
+    psd.fragmentFunction = ffn;
     psd.vertexDescriptor = vd;
     psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
     psd.colorAttachments[0].blendingEnabled = YES;
@@ -1530,9 +1576,13 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   struct {
     float modelview[16];
     float projection[16];
+    float pointSize;
+    float _pad[3];
   } matrices;
   std::memcpy(matrices.modelview, _modelviewMatrix.data(), 64);
   std::memcpy(matrices.projection, _projectionMatrix.data(), 64);
+  matrices.pointSize = _pointSize > 0.0f ? _pointSize : 1.0f;
+  matrices._pad[0] = matrices._pad[1] = matrices._pad[2] = 0.0f;
   [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
 
   [_encoder drawIndexedPrimitives:toMTL(mode)
@@ -1546,6 +1596,268 @@ void RendererMetal::invalidateVBOCache(uint64_t key)
 {
   // Clear entire cache — key type changed to pointer-based
   _vboCache.clear();
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - Label / Text Drawing
+// ---------------------------------------------------------------------------
+
+// Self-contained MSL port of data/shaders/label.vs + label.fs. Screen-aligned
+// textured glyph quads; the atlas RGBA already carries the baked label color
+// (RGB = color, A = glyph coverage). Picking/fog/background-color effects from
+// the full GL label shader are intentionally omitted here.
+static NSString* const kLabelShaderSrc = @R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct LabelVtxIn {
+  float3 worldpos          [[attribute(0)]];
+  float3 targetpos         [[attribute(1)]];
+  float3 screenoffset      [[attribute(2)]];
+  float2 texcoords         [[attribute(3)]];
+  float3 screenworldoffset [[attribute(4)]];
+  float  relative_mode     [[attribute(5)]];
+};
+
+struct LabelVtxOut {
+  float4 position [[position]];
+  float2 texcoords;
+};
+
+struct LabelUniforms {
+  float4x4 modelview;
+  float4x4 projection;
+  float2 screenSize;
+  float screenOriginVertexScale;
+  float scaleByVertexScale;
+  float labelTextureSize;
+  float front;
+  float clipRange;
+};
+
+static float convertNormalZToScreenZ(float normalz, float front,
+                                     float clipRange, float4x4 proj) {
+  float a_centerN = (normalz + 1.0) / 2.0;
+  float z = -(front + clipRange * a_centerN);
+  float4 p = proj * float4(0.0, 0.0, z, 1.0);
+  return p.z / p.w;
+}
+
+vertex LabelVtxOut label_vertex(LabelVtxIn in [[stage_in]],
+    constant LabelUniforms& U [[buffer(1)]]) {
+  LabelVtxOut out;
+  float isScreenCoord = step(2.0, fmod(in.relative_mode, 4.0));
+  float isPixelCoord  = step(4.0, fmod(in.relative_mode, 8.0));
+  float zTarget       = step(8.0, fmod(in.relative_mode, 16.0));
+  float isProjected   = step(isScreenCoord + isPixelCoord, 0.5);
+
+  float3 viewVector = (float4(0.0, 0.0, -1.0, 0.0) * U.modelview).xyz;
+  float sovx = U.screenOriginVertexScale;
+  float screenVertexScale =
+      U.scaleByVertexScale * sovx * U.labelTextureSize +
+      (1.0 - U.scaleByVertexScale);
+
+  float4 wpos = float4(in.worldpos, 1.0);
+  float4 tpos = float4(in.targetpos, 1.0);
+  float4 transformedPosition = U.projection * U.modelview * wpos;
+  float4 targetPosition = U.projection * U.modelview * tpos;
+  targetPosition.xyz /= targetPosition.w; targetPosition.w = 1.0;
+  transformedPosition.xyz /= transformedPosition.w;
+  transformedPosition.xy =
+      (floor(transformedPosition.xy * U.screenSize + 0.5) + 0.5) / U.screenSize;
+
+  float4 a_center = wpos + in.screenworldoffset.z * float4(viewVector, 0.0);
+  float4 tposZ = U.projection * U.modelview * a_center;
+  tposZ.xyz /= tposZ.w; tposZ.w = 1.0;
+  float2 pixOffset = (2.0 * in.worldpos.xy / U.screenSize) - 1.0;
+  transformedPosition = isProjected * transformedPosition +
+      isScreenCoord * wpos +
+      isPixelCoord * float4(pixOffset.x, pixOffset.y, -0.5, 0.0);
+  transformedPosition.xy += in.screenworldoffset.xy / (U.screenSize * sovx);
+  transformedPosition.z = (1.0 - zTarget) *
+          ((isProjected * tposZ.z) + (1.0 - isProjected) *
+              convertNormalZToScreenZ(in.worldpos.z, U.front, U.clipRange,
+                  U.projection)) +
+      zTarget * targetPosition.z;
+  transformedPosition.xy +=
+      in.screenoffset.xy * 2.0 / (U.screenSize * screenVertexScale);
+  transformedPosition.w = 1.0;
+
+  out.position = transformedPosition;
+  out.texcoords = in.texcoords;
+  return out;
+}
+
+fragment float4 label_fragment(LabelVtxOut in [[stage_in]],
+    texture2d<float> atlas [[texture(0)]],
+    sampler smp [[sampler(0)]]) {
+  float4 c = atlas.sample(smp, in.texcoords);
+  if (c.a < 0.05)
+    discard_fragment();
+  return c;
+}
+)";
+
+void RendererMetal::buildLabelPipeline()
+{
+  if (_labelPipeline)
+    return;
+
+  NSError* error = nil;
+  id<MTLLibrary> lib = [_device newLibraryWithSource:kLabelShaderSrc
+                                             options:nil
+                                               error:&error];
+  if (!lib) {
+    NSLog(@"RendererMetal: failed to compile label shader: %@", error);
+    return;
+  }
+  id<MTLFunction> vfn = [lib newFunctionWithName:@"label_vertex"];
+  id<MTLFunction> ffn = [lib newFunctionWithName:@"label_fragment"];
+  if (!vfn || !ffn) {
+    NSLog(@"RendererMetal: label shader functions not found");
+    return;
+  }
+
+  // Vertex descriptor matching the interleaved label VBO. Offsets are filled
+  // in per-draw via a stored layout; here we build for the canonical packing
+  // (worldpos F3, targetpos F3, screenoffset F3, texcoords F2,
+  //  screenworldoffset F3, relative_mode F1) with 4-byte alignment, which is
+  // how CGOConvertToLabelShader lays it out.
+  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  vd.attributes[0].format = MTLVertexFormatFloat3; vd.attributes[0].offset = 0;
+  vd.attributes[1].format = MTLVertexFormatFloat3; vd.attributes[1].offset = 12;
+  vd.attributes[2].format = MTLVertexFormatFloat3; vd.attributes[2].offset = 24;
+  vd.attributes[3].format = MTLVertexFormatFloat2; vd.attributes[3].offset = 36;
+  vd.attributes[4].format = MTLVertexFormatFloat3; vd.attributes[4].offset = 44;
+  vd.attributes[5].format = MTLVertexFormatFloat;  vd.attributes[5].offset = 56;
+  for (int i = 0; i < 6; ++i) vd.attributes[i].bufferIndex = 0;
+  vd.layouts[0].stride = 60;
+  vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+  MTLRenderPipelineDescriptor* psd =
+      [[MTLRenderPipelineDescriptor alloc] init];
+  psd.vertexFunction = vfn;
+  psd.fragmentFunction = ffn;
+  psd.vertexDescriptor = vd;
+  psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+  psd.colorAttachments[0].blendingEnabled = YES;
+  psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+  psd.colorAttachments[0].destinationRGBBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+  psd.colorAttachments[0].destinationAlphaBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+  psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+
+  _labelPipeline = [_device newRenderPipelineStateWithDescriptor:psd
+                                                           error:&error];
+  if (!_labelPipeline) {
+    NSLog(@"RendererMetal: failed to create label pipeline: %@", error);
+    return;
+  }
+
+  MTLSamplerDescriptor* sd = [[MTLSamplerDescriptor alloc] init];
+  sd.minFilter = MTLSamplerMinMagFilterNearest;
+  sd.magFilter = MTLSamplerMinMagFilterNearest;
+  sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
+  sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
+  _labelSampler = [_device newSamplerStateWithDescriptor:sd];
+}
+
+void RendererMetal::ensureLabelAtlas(const unsigned char* pixels, int w, int h,
+    uint64_t generation)
+{
+  if (!pixels || w <= 0 || h <= 0)
+    return;
+  if (_labelAtlas && _labelAtlasGen == generation &&
+      (int)_labelAtlas.width == w && (int)_labelAtlas.height == h)
+    return;
+
+  if (!_labelAtlas || (int)_labelAtlas.width != w ||
+      (int)_labelAtlas.height != h) {
+    MTLTextureDescriptor* td = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:w
+                                    height:h
+                                 mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    _labelAtlas = [_device newTextureWithDescriptor:td];
+  }
+  if (!_labelAtlas)
+    return;
+  [_labelAtlas replaceRegion:MTLRegionMake2D(0, 0, w, h)
+                 mipmapLevel:0
+                   withBytes:pixels
+                 bytesPerRow:static_cast<NSUInteger>(w) * 4];
+  _labelAtlasGen = generation;
+}
+
+void RendererMetal::drawLabels(const LabelDrawCall& call)
+{
+  if (!call.data || call.dataSize == 0 || call.vertexCount <= 0)
+    return;
+  ensureEncoder();
+  if (!_encoder)
+    return;
+  buildLabelPipeline();
+  if (!_labelPipeline || !_labelSampler)
+    return;
+  ensureLabelAtlas(call.atlasPixels, call.atlasW, call.atlasH, call.atlasGen);
+  if (!_labelAtlas)
+    return;
+
+  // Upload (or reuse cached) the interleaved label vertex data.
+  id<MTLBuffer> vbo = nil;
+  auto it = _vboCache.find(call.data);
+  if (it != _vboCache.end()) {
+    vbo = it->second;
+  } else {
+    vbo = [_device newBufferWithBytes:call.data
+                               length:call.dataSize
+                              options:MTLResourceStorageModeShared];
+    if (!vbo)
+      return;
+    _vboCache[call.data] = vbo;
+  }
+
+  [_encoder setRenderPipelineState:_labelPipeline];
+  applyDepthStencilState();
+  if (_depthStencilState)
+    [_encoder setDepthStencilState:_depthStencilState];
+
+  [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
+
+  struct {
+    float modelview[16];
+    float projection[16];
+    float screenSize[2];
+    float screenOriginVertexScale;
+    float scaleByVertexScale;
+    float labelTextureSize;
+    float front;
+    float clipRange;
+    float _pad;
+  } U;
+  std::memcpy(U.modelview, _modelviewMatrix.data(), 64);
+  std::memcpy(U.projection, _projectionMatrix.data(), 64);
+  U.screenSize[0] = call.screenW;
+  U.screenSize[1] = call.screenH;
+  U.screenOriginVertexScale = call.screenOriginVertexScale;
+  U.scaleByVertexScale = call.scaleByVertexScale;
+  U.labelTextureSize = call.labelTextureSize;
+  U.front = call.front;
+  U.clipRange = call.clipRange;
+  U._pad = 0.f;
+  [_encoder setVertexBytes:&U length:sizeof(U) atIndex:1];
+
+  [_encoder setFragmentTexture:_labelAtlas atIndex:0];
+  [_encoder setFragmentSamplerState:_labelSampler atIndex:0];
+
+  [_encoder drawPrimitives:MTLPrimitiveTypeTriangle
+               vertexStart:0
+               vertexCount:static_cast<NSUInteger>(call.vertexCount)];
 }
 
 } // namespace pymol

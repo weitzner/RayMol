@@ -133,8 +133,14 @@ public:
       int posOffset, int normalOffset, int colorOffset, int colorType,
       const void* indexData, size_t indexDataSize) override;
   void invalidateVBOCache(uint64_t key) override;
+  void drawLabels(const LabelDrawCall& call) override;
 
 private:
+  void buildLabelPipeline();
+  // (Re)upload the glyph atlas to an MTLTexture if the generation changed.
+  void ensureLabelAtlas(const unsigned char* pixels, int w, int h,
+      uint64_t generation);
+
   // 4x4 matrix stored column-major
   using Mat4 = std::array<float, 16>;
 
@@ -191,6 +197,14 @@ private:
   id<MTLRenderPipelineState> _vboPipelineFloat; // VBO with Float4 color
   id<MTLFunction> _vboVertexFunc;
   id<MTLFunction> _vboFragmentFunc;
+  id<MTLFunction> _vboVertexUnlitFunc;   // flat-color (no normal) for lines/dots
+  id<MTLFunction> _vboFragmentUnlitFunc;
+  // Label/text rendering (screen-aligned textured glyph quads). Initialized to
+  // nil — this is a C++ class under MRC, so id ivars are not zero-initialized.
+  id<MTLRenderPipelineState> _labelPipeline = nil;
+  id<MTLSamplerState> _labelSampler = nil;
+  id<MTLTexture> _labelAtlas = nil;  // glyph atlas, uploaded from CPU copy
+  uint64_t _labelAtlasGen = 0;       // generation of the uploaded atlas
   uint32_t _currentProgram = 0;
 
   // Depth/stencil state

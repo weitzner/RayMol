@@ -22,6 +22,11 @@ struct MetalViewport: NSViewRepresentable {
         view.isPaused = false
         context.coordinator.engine = engine
         context.coordinator.mtkView = view
+        // Back-reference so the view's NSEvent overrides can reach the
+        // coordinator's input handlers. Without this, mouseDown/Dragged/etc.
+        // call `coordinator?.handle...` on a nil coordinator and silently
+        // no-op — mouse rotate/zoom/pan never reach PyMOL.
+        view.coordinator = context.coordinator
         return view
     }
 

@@ -54,4 +54,17 @@ void TextureGetPlacementForNewSubtexture(PyMOLGlobals * G, int new_texture_width
 void TextureFillNewSubtexture(PyMOLGlobals* G, int width, int height, int x, int y, const void* data);
 int TextureGetTextTextureSize(PyMOLGlobals * G);
 
+/**
+ * Access the glyph/text atlas as a CPU RGBA8 image (for the Metal renderer,
+ * which cannot read back the stubbed GL texture). Returns false if no atlas
+ * or no CPU copy is available.
+ * @param[out] pixels pointer to RGBA8 pixel data (owned by the atlas)
+ * @param[out] width atlas width in pixels
+ * @param[out] height atlas height in pixels
+ * @param[out] generation counter bumped on each atlas mutation
+ */
+bool TextureGetTextTextureMetalData(PyMOLGlobals* G,
+    const unsigned char** pixels, int* width, int* height,
+    unsigned long long* generation);
+
 #endif

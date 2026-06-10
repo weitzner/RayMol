@@ -329,6 +329,21 @@ void PyMOLBridge_RenderMetalFrame(PyMOLHandle h, void *drawablePtr,
     MTLRenderPassDescriptor *passDesc = (__bridge MTLRenderPassDescriptor *)passDescPtr;
     if (!drawable || !passDesc) return;
 
+    // Keep PyMOL's window/scene-block size in sync with the actual drawable
+    // (backing pixels). Without this the scene block stays at the default
+    // 640x480, so mouse clicks/drags outside that region miss the Scene block
+    // and never rotate/zoom — even though rendering fills the full viewport.
+    // G->Option->winX/winY feed SceneRenderMetal's one-time OrthoReshape; set
+    // them here (before SceneRenderMetal) so that reshape uses the real size.
+    static int s_lastW = 0, s_lastH = 0;
+    if (width != s_lastW || height != s_lastH) {
+        G->Option->winX = width;
+        G->Option->winY = height;
+        PyMOL_Reshape(INST(h), width, height, 0);
+        s_lastW = width;
+        s_lastH = height;
+    }
+
     // Mirror main_appkit.mm drawInMTKView (805-869); ordering is load-bearing.
     renderer->setDrawable(drawable, passDesc);
     renderer->viewport(0, 0, width, height);

@@ -268,6 +268,23 @@ void TextureFillNewSubtexture(PyMOLGlobals* G, int width, int height, int x, int
   }
 }
 
+bool TextureGetTextTextureMetalData(PyMOLGlobals* G,
+    const unsigned char** pixels, int* width, int* height,
+    unsigned long long* generation)
+{
+  CTexture* I = G->Texture;
+  if (!I || !I->texture)
+    return false;
+  const unsigned char* data = I->texture->cpuData();
+  if (!data)
+    return false;
+  if (pixels) *pixels = data;
+  if (width) *width = I->texture->cpuWidth();
+  if (height) *height = I->texture->cpuHeight();
+  if (generation) *generation = I->texture->cpuGeneration();
+  return true;
+}
+
 void TextureFree(PyMOLGlobals * G)
 {
   /* TODO -- free all the resident textures */

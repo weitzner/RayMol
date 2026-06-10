@@ -436,6 +436,17 @@ void TextureGL::texture_data_2D(int width, int height, const void *data) {
     break;
   }
   CheckGLErrorOK(nullptr, "GLTextureBuffer::texture_data_2D failed");
+#ifdef _PYMOL_NO_OPENGL
+  // Retain a CPU RGBA8 copy so the Metal renderer can build an MTLTexture;
+  // the GL upload above is a no-op stub in NO_OPENGL builds.
+  if (_format == tex::format::RGBA && _type == tex::data_type::UBYTE) {
+    const size_t n = static_cast<size_t>(_width) * _height * 4;
+    m_cpuPixels.assign(n, 0);
+    if (data)
+      memcpy(m_cpuPixels.data(), data, n);
+    ++m_cpuGeneration;
+  }
+#endif
 }
 
 void TextureGL::texture_subdata_2D(
@@ -455,6 +466,29 @@ void TextureGL::texture_subdata_2D(
     break;
   }
   CheckGLErrorOK(nullptr, "GLTextureBuffer::texture_subdata_2D failed");
+#ifdef _PYMOL_NO_OPENGL
+  // Blit the sub-rect into the retained CPU RGBA8 copy (see texture_data_2D).
+  if (_format == tex::format::RGBA && _type == tex::data_type::UBYTE && data &&
+      !m_cpuPixels.empty()) {
+    const auto* src = static_cast<const unsigned char*>(data);
+    for (int row = 0; row < height; ++row) {
+      const int dy = yoffset + row;
+      if (dy < 0 || dy >= _height)
+        continue;
+      // Source rows are tightly packed at `width` px; dest stride is _width px.
+      const size_t srcRow = static_cast<size_t>(row) * width * 4;
+      const size_t dstRow =
+          (static_cast<size_t>(dy) * _width + xoffset) * 4;
+      int copyW = width;
+      if (xoffset + copyW > _width)
+        copyW = _width - xoffset;
+      if (copyW > 0)
+        memcpy(m_cpuPixels.data() + dstRow, src + srcRow,
+            static_cast<size_t>(copyW) * 4);
+    }
+    ++m_cpuGeneration;
+  }
+#endif
 }
 
 void TextureGL::texture_data_3D(int width, int height, int depth,
