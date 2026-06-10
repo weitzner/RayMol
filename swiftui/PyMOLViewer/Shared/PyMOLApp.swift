@@ -1,6 +1,9 @@
 // PyMOLApp.swift — Cross-platform SwiftUI entry point for macOS and iPadOS
 
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 @main
 struct PyMOLApp: App {
@@ -10,6 +13,11 @@ struct PyMOLApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(engine)
+            #if os(macOS)
+                // Bring the app/window to the front on launch (a GUI app should
+                // foreground itself; also lets it be launched from a terminal).
+                .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
+            #endif
         }
         #if os(macOS)
         .windowStyle(.titleBar)
