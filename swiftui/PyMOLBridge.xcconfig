@@ -5,24 +5,65 @@
 // module builds for CoreFoundation/UIKit.
 
 PYMOL_ROOT = $(SRCROOT)/..
-PYMOL_BUILD = $(SRCROOT)/../build_appkit
+
+// Platform-conditional build directories
+PYMOL_BUILD_MACOS = $(SRCROOT)/../build_macos_swiftui
+PYMOL_BUILD_IOS = $(SRCROOT)/../build_ios
+
+// --- Library search paths (platform-conditional) ---
+// macOS: the NO_OPENGL+Metal core (build_macos_swiftui) + embedded standalone
+// Python 3.13; /opt/homebrew/lib only supplies freetype/png at LINK time.
+LIBRARY_SEARCH_PATHS[sdk=macosx*] = $(PYMOL_BUILD_MACOS) $(SRCROOT)/../deps_macos/python-standalone/python/lib /opt/homebrew/lib
+LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PYMOL_BUILD_IOS)
+LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PYMOL_BUILD_IOS)
+
+// Embedded Python lives in the .app's Contents/Resources/python; the app must
+// resolve @rpath/libpython3.13.dylib there at runtime.
+LD_RUNPATH_SEARCH_PATHS[sdk=macosx*] = $(inherited) @executable_path/../Resources/python/lib
 
 // --- C++/ObjC++ include paths ---
-PYMOL_INCLUDE_FLAGS = -I$(PYMOL_ROOT)/include -I$(PYMOL_ROOT)/include/pymol -I$(PYMOL_ROOT)/ov/src -I$(PYMOL_ROOT)/layer0 -I$(PYMOL_ROOT)/layer1 -I$(PYMOL_ROOT)/layer2 -I$(PYMOL_ROOT)/layer3 -I$(PYMOL_ROOT)/layer4 -I$(PYMOL_ROOT)/layer5 -I$(PYMOL_ROOT)/layerGraphics -I$(PYMOL_ROOT)/layerGraphics/gl -I$(PYMOL_ROOT)/layerGraphics/metal -I$(PYMOL_ROOT)/contrib -I$(PYMOL_ROOT)/contrib/pocketfft -I$(PYMOL_BUILD)/generated -I/opt/homebrew/include -I/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14
+PYMOL_INCLUDE_FLAGS_COMMON = -I$(PYMOL_ROOT)/include -I$(PYMOL_ROOT)/include/pymol -I$(PYMOL_ROOT)/ov/src -I$(PYMOL_ROOT)/layer0 -I$(PYMOL_ROOT)/layer1 -I$(PYMOL_ROOT)/layer2 -I$(PYMOL_ROOT)/layer3 -I$(PYMOL_ROOT)/layer4 -I$(PYMOL_ROOT)/layer5 -I$(PYMOL_ROOT)/layerGraphics -I$(PYMOL_ROOT)/layerGraphics/gl -I$(PYMOL_ROOT)/layerGraphics/metal -I$(PYMOL_ROOT)/contrib -I$(PYMOL_ROOT)/contrib/pocketfft -I/opt/homebrew/include
 
-// On iOS, define _PYMOL_NO_OPENGL to compile out GL code (Metal-only)
-PYMOL_IOS_FLAGS[sdk=iphoneos*] = -D_PYMOL_NO_OPENGL
-PYMOL_IOS_FLAGS[sdk=iphonesimulator*] = -D_PYMOL_NO_OPENGL
+// Python headers: macOS uses Homebrew 3.14, iOS uses BeeWare 3.13
+PYMOL_PYTHON_INC[sdk=macosx*] = -I$(SRCROOT)/../deps_macos/python-standalone/python/include/python3.13
+PYMOL_PYTHON_INC[sdk=iphoneos*] = -I$(SRCROOT)/../deps_ios/Python.xcframework/ios-arm64/Python.framework/Headers
+PYMOL_PYTHON_INC[sdk=iphonesimulator*] = -I$(SRCROOT)/../deps_ios/Python.xcframework/ios-arm64_x86_64-simulator/Python.framework/Headers
 
-OTHER_CPLUSPLUSFLAGS = $(inherited) $(PYMOL_INCLUDE_FLAGS) $(PYMOL_IOS_FLAGS)
+PYMOL_INCLUDE_FLAGS = $(PYMOL_INCLUDE_FLAGS_COMMON) $(PYMOL_PYTHON_INC)
+
+// Generated shader headers (platform-conditional build dir)
+PYMOL_GENERATED_FLAGS[sdk=macosx*] = -I$(PYMOL_BUILD_MACOS)/generated
+PYMOL_GENERATED_FLAGS[sdk=iphoneos*] = -I$(PYMOL_BUILD_IOS)/generated
+PYMOL_GENERATED_FLAGS[sdk=iphonesimulator*] = -I$(PYMOL_BUILD_IOS)/generated
+
+// On iOS, define _PYMOL_NO_OPENGL and _PYMOL_IOS to compile out GL code (Metal-only)
+PYMOL_IOS_FLAGS[sdk=iphoneos*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
+PYMOL_IOS_FLAGS[sdk=iphonesimulator*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
+
+OTHER_CPLUSPLUSFLAGS = $(inherited) $(PYMOL_INCLUDE_FLAGS) $(PYMOL_GENERATED_FLAGS) $(PYMOL_IOS_FLAGS)
 
 // --- Linker flags ---
-// Shared libs for both platforms
-PYMOL_SHARED_LDFLAGS = -lpymol_core -lfreetype -lpng16 -lxml2 -lpython3.14 -framework Metal -framework MetalKit -framework CoreVideo
+// iOS cross-compiled dependencies
+PYMOL_IOS_DEPS = $(SRCROOT)/../deps_ios/install
 
-// macOS-only: OpenGL + GLEW
-PYMOL_GL_LDFLAGS[sdk=macosx*] = -framework OpenGL -lGLEW
-PYMOL_GL_LDFLAGS[sdk=iphoneos*] =
-PYMOL_GL_LDFLAGS[sdk=iphonesimulator*] =
+// Inject library search paths via -L in OTHER_LDFLAGS to take precedence
+// over the hardcoded LIBRARY_SEARCH_PATHS in the project file.
+PYMOL_LIB_PATH_FLAGS[sdk=macosx*] =
+PYMOL_LIB_PATH_FLAGS[sdk=iphoneos*] = -L$(PYMOL_BUILD_IOS) -L$(PYMOL_IOS_DEPS)/lib
+PYMOL_LIB_PATH_FLAGS[sdk=iphonesimulator*] = -L$(PYMOL_BUILD_IOS) -L$(PYMOL_IOS_DEPS)/lib
 
-OTHER_LDFLAGS = $(inherited) $(PYMOL_SHARED_LDFLAGS) $(PYMOL_GL_LDFLAGS)
+// Python.xcframework dylib paths (linked directly to avoid macOS Homebrew Python being found
+// via the hardcoded FRAMEWORK_SEARCH_PATHS in the project file)
+PYMOL_PYTHON_DYLIB[sdk=iphoneos*] = $(SRCROOT)/../deps_ios/Python.xcframework/ios-arm64/Python.framework/Python
+PYMOL_PYTHON_DYLIB[sdk=iphonesimulator*] = $(SRCROOT)/../deps_ios/Python.xcframework/ios-arm64_x86_64-simulator/Python.framework/Python
+
+// Core library (always linked)
+PYMOL_CORE_LDFLAGS = -lpymol_core -framework Metal -framework MetalKit -framework CoreVideo
+
+// macOS: full dependency set
+PYMOL_PLATFORM_LDFLAGS[sdk=macosx*] = -lfreetype -lpng16 -lz -lpython3.13
+// iOS: cross-compiled dependencies + Python dylib linked by path
+PYMOL_PLATFORM_LDFLAGS[sdk=iphoneos*] = -lfreetype -lpng16 -lz $(PYMOL_PYTHON_DYLIB)
+PYMOL_PLATFORM_LDFLAGS[sdk=iphonesimulator*] = -lfreetype -lpng16 -lz $(PYMOL_PYTHON_DYLIB)
+
+OTHER_LDFLAGS = $(inherited) $(PYMOL_LIB_PATH_FLAGS) $(PYMOL_CORE_LDFLAGS) $(PYMOL_PLATFORM_LDFLAGS)

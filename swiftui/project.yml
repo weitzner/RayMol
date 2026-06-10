@@ -19,17 +19,11 @@ settings:
     SWIFT_OBJC_BRIDGING_HEADER: PyMOLViewer/Bridge/PyMOLBridge.h
     # Do NOT add PyMOL layer paths to HEADER_SEARCH_PATHS —
     # layer0/Block.h shadows the system Block.h and breaks module builds.
-    # All paths and flags are in PyMOLBridge.xcconfig.
-    # macOS-only. Leaving these unconditioned leaked build_appkit (the macOS
-    # core archive) + Homebrew into the iphonesimulator link, ahead of
-    # build_ios, so -lpymol_core resolved to the wrong-platform archive.
-    # The iOS build gets its -L from PyMOLBridge.xcconfig ([sdk=iphone*]).
-    "LIBRARY_SEARCH_PATHS[sdk=macosx*]":
-      - $(SRCROOT)/../build_appkit
-      - /opt/homebrew/lib
-      - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib
-    "FRAMEWORK_SEARCH_PATHS[sdk=macosx*]":
-      - /opt/homebrew/opt/python@3.14/Frameworks
+    # All paths/flags (incl. per-SDK LIBRARY_SEARCH_PATHS) live in
+    # PyMOLBridge.xcconfig. macOS links build_macos_swiftui + the embedded
+    # standalone Python 3.13 (no Homebrew/python@3.14). Do NOT set
+    # LIBRARY_SEARCH_PATHS here — a target-level value would override the
+    # xcconfig's per-SDK paths.
 
 targets:
   PyMOLViewer:
@@ -112,6 +106,27 @@ targets:
           set -e
           ditto "$SRCROOT/../modules" "$CODESIGNING_FOLDER_PATH/modules"
           ditto "$SRCROOT/../data" "$CODESIGNING_FOLDER_PATH/data"
+      # macOS runtime packaging: payload under Contents/Resources (so the shared
+      # bridge's config.home=<resourcePath>/python resolves to it). Guarded to
+      # macOS so the iOS build is unaffected.
+      - name: "macOS: Bundle Python + modules + data"
+        basedOnDependencyAnalysis: false
+        script: |
+          case "$PLATFORM_NAME" in macosx*) ;; *) exit 0 ;; esac
+          set -e
+          RES="$CODESIGNING_FOLDER_PATH/Contents/Resources"
+          mkdir -p "$RES"
+          rsync -au --delete "$SRCROOT/../deps_macos/python-standalone/python/" "$RES/python/"
+          ditto "$SRCROOT/../modules" "$RES/modules"
+          ditto "$SRCROOT/../data" "$RES/data"
+      - name: "macOS: Build + bundle pymol.metallib"
+        basedOnDependencyAnalysis: false
+        script: |
+          case "$PLATFORM_NAME" in macosx*) ;; *) exit 0 ;; esac
+          set -e
+          RES="$CODESIGNING_FOLDER_PATH/Contents/Resources"
+          /usr/bin/python3 "$SRCROOT/../scripts/compile_metal_shaders.py" --sdk macosx --output "/tmp/pymol_macos.metallib" || true
+          [ -f /tmp/pymol_macos.metallib ] && cp /tmp/pymol_macos.metallib "$RES/pymol.metallib" || echo "metallib skipped (runtime-compile fallback)"
     dependencies: []
     scheme:
       testTargets: []

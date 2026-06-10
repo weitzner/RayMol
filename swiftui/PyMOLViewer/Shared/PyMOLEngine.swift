@@ -62,6 +62,14 @@ final class PyMOLEngine: ObservableObject {
             runCommand("turn y, \(deg)")
         }
 
+        // Test affordance: after a few frames render, capture the Metal
+        // framebuffer to a PNG (ray=0 => the rendered image, not CPU raytrace).
+        if let p = ProcessInfo.processInfo.environment["PYMOL_AUTOPNG"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.runCommand("png \(p), ray=0")
+            }
+        }
+
         // Poll feedback every 100ms
         feedbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.pollFeedback()
