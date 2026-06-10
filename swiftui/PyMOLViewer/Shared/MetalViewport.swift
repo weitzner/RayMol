@@ -3,6 +3,9 @@
 
 import SwiftUI
 import MetalKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 #if os(macOS)
 struct MetalViewport: NSViewRepresentable {

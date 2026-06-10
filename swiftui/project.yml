@@ -20,11 +20,15 @@ settings:
     # Do NOT add PyMOL layer paths to HEADER_SEARCH_PATHS —
     # layer0/Block.h shadows the system Block.h and breaks module builds.
     # All paths and flags are in PyMOLBridge.xcconfig.
-    LIBRARY_SEARCH_PATHS:
+    # macOS-only. Leaving these unconditioned leaked build_appkit (the macOS
+    # core archive) + Homebrew into the iphonesimulator link, ahead of
+    # build_ios, so -lpymol_core resolved to the wrong-platform archive.
+    # The iOS build gets its -L from PyMOLBridge.xcconfig ([sdk=iphone*]).
+    "LIBRARY_SEARCH_PATHS[sdk=macosx*]":
       - $(SRCROOT)/../build_appkit
       - /opt/homebrew/lib
       - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib
-    FRAMEWORK_SEARCH_PATHS:
+    "FRAMEWORK_SEARCH_PATHS[sdk=macosx*]":
       - /opt/homebrew/opt/python@3.14/Frameworks
 
 targets:

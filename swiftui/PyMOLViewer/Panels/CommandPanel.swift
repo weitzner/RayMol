@@ -2,6 +2,9 @@
 // Replaces modules/pymol/appkit_command_panel.py with pure SwiftUI.
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct CommandPanel: View {
     @EnvironmentObject var engine: PyMOLEngine

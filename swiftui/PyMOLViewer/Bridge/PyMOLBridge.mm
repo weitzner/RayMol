@@ -24,6 +24,17 @@ extern "C" {
   void init_cmd(void);
 }
 
+// C++-linkage forward decl (defined in layer1/SceneRender.cpp). Declared
+// OUTSIDE the extern "C" block below so the call resolves to the core's
+// C++ (mangled) symbol, not a C one.
+void SceneRenderMetal(PyMOLGlobals *G);
+
+// All PyMOLBridge_* entry points MUST have C linkage to match the Swift
+// bridging header (PyMOLBridge.h declares them inside extern "C"); otherwise
+// the Swift side references _PyMOLBridge_* while the .mm emits mangled C++
+// names and the link fails.
+extern "C" {
+
 // --- Lifecycle ---
 
 PyMOLHandle PyMOLBridge_New(void)
@@ -196,7 +207,6 @@ void PyMOLBridge_RenderMetal(PyMOLHandle h)
     PyMOLGlobals *G = PyMOL_GetGlobals(INST(h));
     if (!G) return;
 
-    extern void SceneRenderMetal(PyMOLGlobals *);
     SceneRenderMetal(G);
 }
 
@@ -212,3 +222,5 @@ void *PyMOLBridge_GetRenderer(PyMOLHandle h)
     PyMOLGlobals *G = h ? PyMOL_GetGlobals(INST(h)) : nullptr;
     return G ? G->Renderer : nullptr;
 }
+
+} // extern "C"
