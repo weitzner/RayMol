@@ -67,8 +67,14 @@ host must do:
 3. **iOS compile errors (small).** `CommandPanel.swift` and `MetalViewport.swift` use UIKit types
    (`UITextField`, `UIColor`, `UIKeyCommand`, `UI*GestureRecognizer`) without `import UIKit`.
 
-**Secondary (out of scope this round, see §4):** Metal atom-pick hit-testing — CGO draw ops
-early-return on `isPicking` (`layer1/CGOGL.cpp:578,671,760`); iPad input has no modifier mapping
+**In MVP scope (added per review):** atom picking on iPad — tap to select. Note the apparent
+tension to resolve during planning: the macOS commit `9d124c7c` added "selection indicators and
+atom picking for Metal backend" (so picking works on macOS Metal), yet the CGO VBO draw ops
+early-return on `isPicking` (`layer1/CGOGL.cpp:578,671,760`). The plan must establish exactly how
+macOS Metal picking works (likely a separate pick mechanism, not the VBO color-pick path) and wire
+the same on iOS, mapping a tap to a left-button click/pick.
+
+**Secondary (out of scope this round, see §4):** iPad input has no modifier mapping
 (`MetalViewport.swift:159–165`) and an empty two-finger rotate (`:280–283`); `SequencePanel` shows
 hardcoded data; `ChatPanel` is a canned stub (no AI); no numpy; simulator slice only.
 
@@ -82,6 +88,7 @@ On the **iOS Simulator**, the PyMOLViewer app:
    cartoon in the viewport.
 4. Responds to basic touch: one-finger drag rotates, pinch zooms, two-finger pan translates; the
    app stays stable.
+5. Tap-to-select works: tapping an atom selects it (PyMOL pick), reusing the macOS Metal pick path.
 
 (`1ubq.cif` and `2kpo.cif` already exist at the repo root as test structures.)
 
@@ -89,7 +96,7 @@ On the **iOS Simulator**, the PyMOLViewer app:
 
 iphoneos **device** build + code signing/provisioning; AI chat backend (would use `URLSession`,
 never a subprocess); live `SequencePanel` data; iPad ray-image display; numpy; prebuilt metallib;
-App Store packaging; Metal atom-pick hit-testing (tap-select may be partial — not MVP-blocking).
+App Store packaging.
 
 ## 5. Key technical decisions
 
@@ -143,12 +150,16 @@ checkpoints must pass in order (the app must launch before a loaded structure ca
 - ✅ **Checkpoint:** viewport clears to PyMOL's background; `load 1ubq.cif; hide everything;
   show cartoon` renders a cartoon. Capture with `xcrun simctl io booted screenshot`.
 
-### Phase 3 — Basic touch interaction
+### Phase 3 — Basic touch interaction + atom picking
 - Verify the existing UIKit gestures drive `PyMOLBridge_Button`/`Drag` (drag = rotate, pinch =
   zoom, two-finger pan = translate); implement the empty `handleRotation` (`MetalViewport.swift:280–283`)
   if quick.
-- ✅ **Checkpoint:** rotate/zoom a loaded structure smoothly; app remains stable across
-  load + interaction.
+- **Atom picking:** establish how the macOS Metal backend implements picking (research
+  `git show 9d124c7c` + the pick path in `RendererMetal`/`SceneRender`/`CGOGL` + how
+  `main_appkit.mm` maps a click to a pick), then wire the same on iOS and map a single-finger tap to
+  a left-button click/pick. Resolve the `isPicking` CGO early-return question (§2).
+- ✅ **Checkpoint:** rotate/zoom a loaded structure smoothly; **tapping an atom selects it**
+  (visible selection indicator); app remains stable across load + interaction.
 
 ## 7. Risks & unknowns
 
