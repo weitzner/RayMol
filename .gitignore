@@ -3,4 +3,6 @@
 generated
 build
 build_appkit
+build_macos_swiftui
+deps_macos
 .vscode
