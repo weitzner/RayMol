@@ -124,6 +124,9 @@ RendererMetal::RendererMetal(id<MTLDevice> device, id<MTLCommandQueue> queue)
     , _vboPipelineFloat(nil)
     , _vboVertexFunc(nil)
     , _vboFragmentFunc(nil)
+    , _vboVertexUnlitFunc(nil)
+    , _vboFragmentUnlitFunc(nil)
+    , _batchBuffer(nil)
     , _depthStencilState(nil)
 {
   _modelviewMatrix = identityMatrix();

@@ -199,8 +199,10 @@ extension MetalViewport {
             // space, bottom-left origin (macOS views are not flipped, matching
             // PyMOL's NDC), so no Y flip. Delay slightly so it runs after the
             // deferred mouse-release, which would otherwise clear the selection.
+            // Use net movement only (macOS may emit a stray mouseDragged even
+            // for a click, so don't gate on didDrag).
             let moved = hypot(loc.x - mouseDownLoc.x, loc.y - mouseDownLoc.y)
-            if !didDrag && moved < 3 {
+            if moved < 4 {
                 let w = view.bounds.width, h = view.bounds.height
                 if w > 0, h > 0 {
                     let ndcX = Float(loc.x / w) * 2 - 1
