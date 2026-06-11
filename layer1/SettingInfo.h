@@ -905,6 +905,8 @@ enum {
   REC_f( 795, salt_bridge_distance                        , global    , 5.0f ),
   REC_b( 796, use_tessellation_shaders                , global    , true ),
   REC_c( 797, cell_color                              , ostate    , "-1" ),
+  REC_b( 798, metal_ssao                              , global    , true ),  /* Metal screen-space ambient occlusion */
+  REC_b( 799, metal_shadows                           , global    , true ),  /* Metal screen-space directional shadows */
 
 #ifdef SETTINGINFO_IMPLEMENTATION
 #undef SETTINGINFO_IMPLEMENTATION

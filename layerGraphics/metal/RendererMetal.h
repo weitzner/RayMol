@@ -137,8 +137,8 @@ public:
   void drawSphereImpostors(const SphereImpostorDrawCall& call) override;
   void drawCylinderImpostors(const CylinderImpostorDrawCall& call) override;
   void setPostParams(int fogEnabled, float fogStart, float fogEnd, float bgR,
-      float bgG, float bgB, int aoEnabled, float projA, float projB,
-      float projX, float projY) override;
+      float bgG, float bgB, int aoEnabled, int shadowEnabled, int aaEnabled,
+      float projA, float projB, float projX, float projY) override;
 
 private:
   void buildImpostorPipelines();
@@ -235,8 +235,9 @@ private:
   int _postFogEnabled = 0;
   float _fogStart = 0.f, _fogEnd = 1.f;
   float _bgR = 0.f, _bgG = 0.f, _bgB = 0.f;
-  int _aoEnabled = 1;          // SSAO on by default
-  int _shadowEnabled = 1;      // screen-space directional shadows on by default
+  int _aoEnabled = 1;          // SSAO (cSetting_metal_ssao)
+  int _shadowEnabled = 1;      // screen-space shadows (cSetting_metal_shadows)
+  int _aaEnabled = 1;          // FXAA (cSetting_antialias_shader != 0)
   float _projA = -1.f, _projB = 0.f;  // projection[10], projection[14]
   float _projX = 1.f, _projY = 1.f;   // projection[0], projection[5]
   // Label/text rendering (screen-aligned textured glyph quads). Initialized to

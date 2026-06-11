@@ -597,14 +597,16 @@ void RendererMetal::buildPostPipelines()
 }
 
 void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
-    float bgR, float bgG, float bgB, int aoEnabled, float projA, float projB,
-    float projX, float projY)
+    float bgR, float bgG, float bgB, int aoEnabled, int shadowEnabled,
+    int aaEnabled, float projA, float projB, float projX, float projY)
 {
   _postFogEnabled = fogEnabled;
   _fogStart = fogStart;
   _fogEnd = fogEnd;
   _bgR = bgR; _bgG = bgG; _bgB = bgB;
   _aoEnabled = aoEnabled;
+  _shadowEnabled = shadowEnabled;
+  _aaEnabled = aaEnabled;
   _projA = projA;
   _projB = projB;
   _projX = projX;
@@ -665,7 +667,7 @@ void RendererMetal::runPostChain()
   _screenPassDesc.stencilAttachment.texture = nil;
   _screenPassDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
   id<MTLRenderPipelineState> finalPipe =
-      (_fxaaPipeline && !noAA) ? _fxaaPipeline : _blitPipeline;
+      (_fxaaPipeline && _aaEnabled && !noAA) ? _fxaaPipeline : _blitPipeline;
   id<MTLRenderCommandEncoder> enc =
       [_cmdBuffer renderCommandEncoderWithDescriptor:_screenPassDesc];
   [enc setRenderPipelineState:finalPipe];

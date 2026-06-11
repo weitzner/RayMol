@@ -266,8 +266,8 @@ public:
   // (eye-space x/y reconstruction + reprojection for the shadow march).
   // Default: no-op.
   virtual void setPostParams(int fogEnabled, float fogStart, float fogEnd,
-      float bgR, float bgG, float bgB, int aoEnabled, float projA, float projB,
-      float projX, float projY)
+      float bgR, float bgG, float bgB, int aoEnabled, int shadowEnabled,
+      int aaEnabled, float projA, float projB, float projX, float projY)
   {
   }
 };
