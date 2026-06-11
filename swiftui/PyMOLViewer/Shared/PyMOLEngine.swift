@@ -56,13 +56,22 @@ final class PyMOLEngine: ObservableObject {
             }
         }
 
-        // Test affordance: pick at an NDC point ("x,y") and record the selection
-        // size to a file for verification (no-op unless env var set).
+        // Test affordance: pick at an NDC point ("x,y") using the real viewport
+        // aspect, and record the selection size for verification.
         if let s = ProcessInfo.processInfo.environment["PYMOL_AUTOPICK"] {
             let parts = s.split(separator: ",").compactMap { Float($0) }
             if parts.count == 2 {
-                pick(ndcX: parts[0], ndcY: parts[1], aspect: 1.0)
-                runPython("import os; from pymol import cmd; open(os.path.join(os.environ.get('TMPDIR','/tmp'),'pymol_pick.txt'),'w').write('selcount=%d' % cmd.count_atoms('sele'))")
+                // Delay so the AUTOCMD load/orient has actually been applied and
+                // a frame has rendered (the view must be live for projection).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    self?.runPython(
+                        "from pymol import cmd as _c\n"
+                        + "from pymol.metal_pick import pick_at as _pa\n"
+                        + "_vp = _c.get_viewport()\n"
+                        + "_asp = (_vp[0] / float(_vp[1])) if (_vp and _vp[1]) else 1.0\n"
+                        + "_pa(\(parts[0]), \(parts[1]), _asp)"
+                    )
+                }
             }
         }
 
