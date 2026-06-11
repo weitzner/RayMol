@@ -389,6 +389,46 @@ fragment float4 post_blit(PostVOut in [[stage_in]],
     texture2d<float> src [[texture(0)]], sampler s [[sampler(0)]]) {
   return src.sample(s, in.uv);
 }
+
+// FXAA (Timothy Lottes' classic console variant) — edge-aware blur that
+// smooths ALL silhouettes, including the impostor ray-cast sphere/cylinder
+// edges that geometry MSAA can't touch. Operates on luma of the composited
+// scene color.
+static float fxaa_luma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+
+fragment float4 post_fxaa(PostVOut in [[stage_in]],
+    texture2d<float> tex [[texture(0)]], sampler smp [[sampler(0)]]) {
+  float2 inv = 1.0 / float2(tex.get_width(), tex.get_height());
+  float3 rgbM = tex.sample(smp, in.uv).rgb;
+  float lumaM  = fxaa_luma(rgbM);
+  float lumaNW = fxaa_luma(tex.sample(smp, in.uv + float2(-1.0, -1.0) * inv).rgb);
+  float lumaNE = fxaa_luma(tex.sample(smp, in.uv + float2( 1.0, -1.0) * inv).rgb);
+  float lumaSW = fxaa_luma(tex.sample(smp, in.uv + float2(-1.0,  1.0) * inv).rgb);
+  float lumaSE = fxaa_luma(tex.sample(smp, in.uv + float2( 1.0,  1.0) * inv).rgb);
+  float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+  float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+  float range = lumaMax - lumaMin;
+  // Skip near-flat regions (no visible edge).
+  if (range < max(0.0312, lumaMax * 0.125))
+    return float4(rgbM, 1.0);
+
+  float2 dir;
+  dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+  dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+  float dirReduce =
+      max((lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * 0.125), 1.0 / 128.0);
+  float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+  dir = clamp(dir * rcpDirMin, -8.0, 8.0) * inv;
+
+  float3 rgbA = 0.5 * (tex.sample(smp, in.uv + dir * (1.0 / 3.0 - 0.5)).rgb +
+                       tex.sample(smp, in.uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+  float3 rgbB = rgbA * 0.5 + 0.25 * (tex.sample(smp, in.uv + dir * -0.5).rgb +
+                                     tex.sample(smp, in.uv + dir *  0.5).rgb);
+  float lumaB = fxaa_luma(rgbB);
+  if (lumaB < lumaMin || lumaB > lumaMax)
+    return float4(rgbA, 1.0);
+  return float4(rgbB, 1.0);
+}
 )";
 
 void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
@@ -462,9 +502,14 @@ void RendererMetal::runPostChain()
   _screenPassDesc.stencilAttachment.texture = nil;
   _screenPassDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
 
+  // Final pass → drawable: FXAA if available, else a 1:1 blit.
+  // PYMOL_NO_AA forces the blit (A/B testing + user escape hatch).
+  static bool noAA = getenv("PYMOL_NO_AA") != nullptr;
+  id<MTLRenderPipelineState> finalPipe =
+      (_fxaaPipeline && !noAA) ? _fxaaPipeline : _blitPipeline;
   id<MTLRenderCommandEncoder> enc =
       [_cmdBuffer renderCommandEncoderWithDescriptor:_screenPassDesc];
-  [enc setRenderPipelineState:_blitPipeline];
+  [enc setRenderPipelineState:finalPipe];
   [enc setFragmentTexture:_sceneColor atIndex:0];
   [enc setFragmentSamplerState:_postSampler atIndex:0];
   [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
