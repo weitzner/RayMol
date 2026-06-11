@@ -1922,9 +1922,10 @@ void SceneRenderMetal(PyMOLGlobals* G)
     int aoEnabled = SettingGetGlobal_b(G, cSetting_metal_ssao) ? 1 : 0;
     int shadowEnabled = SettingGetGlobal_b(G, cSetting_metal_shadows) ? 1 : 0;
     int aaEnabled = SettingGetGlobal_i(G, cSetting_antialias_shader) != 0 ? 1 : 0;
+    int outlineEnabled = SettingGetGlobal_b(G, cSetting_metal_outline) ? 1 : 0;
     G->Renderer->setPostParams(fogEnabled, fogStart, fogEnd, bg[0], bg[1],
-        bg[2], aoEnabled, shadowEnabled, aaEnabled, proj[10], proj[14], proj[0],
-        proj[5]);
+        bg[2], aoEnabled, shadowEnabled, aaEnabled, outlineEnabled, proj[10],
+        proj[14], proj[0], proj[5]);
   }
 
   // --- Scene state needed by RenderInfo ---

@@ -267,7 +267,8 @@ public:
   // Default: no-op.
   virtual void setPostParams(int fogEnabled, float fogStart, float fogEnd,
       float bgR, float bgG, float bgB, int aoEnabled, int shadowEnabled,
-      int aaEnabled, float projA, float projB, float projX, float projY)
+      int aaEnabled, int outlineEnabled, float projA, float projB, float projX,
+      float projY)
   {
   }
 

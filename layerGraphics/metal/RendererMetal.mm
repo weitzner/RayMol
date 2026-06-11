@@ -548,6 +548,42 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   }
   return float4(color, 1.0);
 }
+
+// Silhouette / toon outlines: depth-based Sobel edge detection. Strong depth
+// discontinuities (object silhouettes + where one part occludes another) get a
+// dark contour. Scale-invariant: the gradient is taken relative to the center
+// linear depth. Composited over the resolved scene color.
+struct OutlineU {
+  float projA, projB;     // projection[10]/[14] for linear depth
+  float invW, invH;       // 1/resolution
+  float colR, colG, colB; // outline color
+  float thickness;        // sample step in pixels
+};
+fragment float4 post_outline(PostVOut in [[stage_in]],
+    texture2d<float> colorTex [[texture(0)]],
+    depth2d<float> depthTex [[texture(1)]],
+    sampler s [[sampler(0)]],
+    constant OutlineU& u [[buffer(0)]]) {
+  float3 color = colorTex.sample(s, in.uv).rgb;
+  float dc = depthTex.sample(s, in.uv);
+  float2 px = float2(u.invW, u.invH) * u.thickness;
+  // 3x3 linear-depth samples
+  float zc = post_linear_depth(dc, u.projA, u.projB);
+  float2 o = px;
+  float zl = post_linear_depth(depthTex.sample(s, in.uv + float2(-o.x, 0)), u.projA, u.projB);
+  float zr = post_linear_depth(depthTex.sample(s, in.uv + float2( o.x, 0)), u.projA, u.projB);
+  float zt = post_linear_depth(depthTex.sample(s, in.uv + float2(0, -o.y)), u.projA, u.projB);
+  float zb = post_linear_depth(depthTex.sample(s, in.uv + float2(0,  o.y)), u.projA, u.projB);
+  // gradient magnitude relative to center depth (scale-invariant)
+  float gx = abs(zr - zl);
+  float gy = abs(zb - zt);
+  float grad = (gx + gy) / max(zc, 1e-3);
+  float edge = smoothstep(0.02, 0.08, grad);
+  // don't outline pure background (both center far)
+  edge *= step(dc, 0.99999);
+  color = mix(color, float3(u.colR, u.colG, u.colB), edge);
+  return float4(color, 1.0);
+}
 )";
 
 void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
@@ -643,11 +679,13 @@ void RendererMetal::buildPostPipelines()
   _fxaaPipeline = mkpipe(@"post_fxaa");
   _ssaoPipeline = mkpipe(@"post_ssao_fog");
   _oitResolvePipeline = mkpipe(@"oit_resolve");
+  _outlinePipeline = mkpipe(@"post_outline");
 }
 
 void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
     float bgR, float bgG, float bgB, int aoEnabled, int shadowEnabled,
-    int aaEnabled, float projA, float projB, float projX, float projY)
+    int aaEnabled, int outlineEnabled, float projA, float projB, float projX,
+    float projY)
 {
   _postFogEnabled = fogEnabled;
   _fogStart = fogStart;
@@ -656,6 +694,7 @@ void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
   _aoEnabled = aoEnabled;
   _shadowEnabled = shadowEnabled;
   _aaEnabled = aaEnabled;
+  _outlineEnabled = outlineEnabled;
   _projA = projA;
   _projB = projB;
   _projX = projX;
@@ -727,6 +766,34 @@ void RendererMetal::runPostChain()
     [e2 setFragmentSamplerState:_postSampler atIndex:0];
     [e2 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [e2 endEncoding];
+    sceneSrc = dst;
+  }
+
+  // Pass 3: silhouette/toon outlines (depth-based edges over the scene color).
+  if (_outlineEnabled && _outlinePipeline && _sceneDepth) {
+    id<MTLTexture> dst = (sceneSrc == _sceneColor) ? _postColor : _sceneColor;
+    struct {
+      float projA, projB, invW, invH;
+      float colR, colG, colB, thickness;
+    } u;
+    u.projA = _projA; u.projB = _projB;
+    u.invW = (_rtW > 0) ? 1.0f / (float)_rtW : 0.0f;
+    u.invH = (_rtH > 0) ? 1.0f / (float)_rtH : 0.0f;
+    u.colR = 0.0f; u.colG = 0.0f; u.colB = 0.0f;   // black contour
+    u.thickness = 1.4f;
+    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    pd.colorAttachments[0].texture = dst;
+    pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pd.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e3 =
+        [_cmdBuffer renderCommandEncoderWithDescriptor:pd];
+    [e3 setRenderPipelineState:_outlinePipeline];
+    [e3 setFragmentTexture:sceneSrc atIndex:0];
+    [e3 setFragmentTexture:_sceneDepth atIndex:1];
+    [e3 setFragmentSamplerState:_postSampler atIndex:0];
+    [e3 setFragmentBytes:&u length:sizeof(u) atIndex:0];
+    [e3 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [e3 endEncoding];
     sceneSrc = dst;
   }
 

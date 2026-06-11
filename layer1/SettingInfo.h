@@ -907,6 +907,8 @@ enum {
   REC_c( 797, cell_color                              , ostate    , "-1" ),
   REC_b( 798, metal_ssao                              , global    , true ),  /* Metal screen-space ambient occlusion */
   REC_b( 799, metal_shadows                           , global    , true ),  /* Metal screen-space directional shadows */
+  REC_b( 800, metal_outline                           , global    , false ), /* Metal silhouette/toon outline post pass */
+  REC_b( 801, metal_msaa                              , global    , true ),  /* Metal 4x MSAA scene rendering */
 
 #ifdef SETTINGINFO_IMPLEMENTATION
 #undef SETTINGINFO_IMPLEMENTATION

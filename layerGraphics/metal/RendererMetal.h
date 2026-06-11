@@ -138,7 +138,8 @@ public:
   void drawCylinderImpostors(const CylinderImpostorDrawCall& call) override;
   void setPostParams(int fogEnabled, float fogStart, float fogEnd, float bgR,
       float bgG, float bgB, int aoEnabled, int shadowEnabled, int aaEnabled,
-      float projA, float projB, float projX, float projY) override;
+      int outlineEnabled, float projA, float projB, float projX,
+      float projY) override;
   void beginTransparentOIT() override;
   void endTransparentOIT() override;
   void drawBezierTubes(const void* controlPoints, size_t dataSize, float radius,
@@ -267,6 +268,8 @@ private:
   int _aoEnabled = 1;          // SSAO (cSetting_metal_ssao)
   int _shadowEnabled = 1;      // screen-space shadows (cSetting_metal_shadows)
   int _aaEnabled = 1;          // FXAA (cSetting_antialias_shader != 0)
+  int _outlineEnabled = 0;     // silhouette outline (cSetting_metal_outline)
+  id<MTLRenderPipelineState> _outlinePipeline = nil;
   float _projA = -1.f, _projB = 0.f;  // projection[10], projection[14]
   float _projX = 1.f, _projY = 1.f;   // projection[0], projection[5]
   // Label/text rendering (screen-aligned textured glyph quads). Initialized to
