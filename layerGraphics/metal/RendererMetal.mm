@@ -550,37 +550,47 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
 
   // Real shadow map: reconstruct the eye-space surface point, project it into
   // the light's clip space, and PCF-compare against the stored light-POV depth.
-  // Acne-free on curved faces (standard slope-scaled depth bias + 3x3 PCF) —
-  // unlike the old screen-space march, which self-shadowed curving helices.
+  // To keep shadows that "make visual sense" on cartoons, two gates suppress
+  // self/adjacent shadowing (a ribbon/helix darkening itself) while preserving
+  // shadows cast by clearly-separated geometry and deep surface pockets:
+  //   (1) NORMAL gate — only light-facing surfaces receive shadow; faces turned
+  //       away are already dark from the diffuse term, so shadowing them too
+  //       just reads as nonsense double-darkening.
+  //   (2) SEPARATION gate — the occluder must be meaningfully closer to the
+  //       light than the receiver (a real gap), not the same/adjacent surface.
   if (u.shadowEnabled > 0.5 && d < 0.99999) {
     float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);  // eye z (negative)
     float ndcx = 2.0 * in.uv.x - 1.0;
     float ndcy = 1.0 - 2.0 * in.uv.y;
     float3 p = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-    float4 lc = u.lightViewProj * float4(p, 1.0);       // eye -> light clip
-    if (lc.w > 0.0) {
-      float3 ndc = lc.xyz / lc.w;                       // light NDC, GL [-1,1]
+    // Eye-space surface normal from depth-reconstructed position derivatives.
+    float3 nrm = normalize(cross(dfdx(p), dfdy(p)));
+    if (nrm.z < 0.0) nrm = -nrm;                         // face toward camera
+    float3 Ldir = normalize(float3(0.4, 0.4, 1.0));      // key light (eye space)
+    float faceGate = smoothstep(0.0, 0.35, dot(nrm, Ldir));
+    float4 lc = u.lightViewProj * float4(p, 1.0);        // eye -> light clip
+    if (faceGate > 0.0 && lc.w > 0.0) {
+      float3 ndc = lc.xyz / lc.w;                        // light NDC, GL [-1,1]
       float2 suv = float2(0.5 * ndc.x + 0.5, 0.5 - 0.5 * ndc.y);
-      float fragDepth = 0.5 + 0.5 * ndc.z;              // same 0.5+0.5 remap
+      float fragDepth = 0.5 + 0.5 * ndc.z;               // same 0.5+0.5 remap
       if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0 &&
           fragDepth > 0.0 && fragDepth < 1.0) {
-        // Slope-scaled depth bias. The constant term covers the cartoon slab
-        // thickness (a thin two-faced ribbon would otherwise self-shadow its
-        // own back face — reads as a "wrong-order" band on a front strand). The
-        // slope term (light-space depth gradient) adds margin on faces grazing
-        // to the light. Clamped to limit peter-panning.
+        // Separation threshold (light-space depth). Large enough that a thin
+        // cartoon slab or an adjacent coil does NOT cast onto itself, small
+        // enough that a distinctly-separated caster and deep surface pockets
+        // still do. Slope term adds margin on faces grazing to the light.
         float2 dd = float2(dfdx(fragDepth), dfdy(fragDepth));
-        float bias = 0.006 + 2.5 * (abs(dd.x) + abs(dd.y));
-        bias = min(bias, 0.02);
+        float sep = 0.022 + 2.5 * (abs(dd.x) + abs(dd.y));
+        sep = min(sep, 0.05);
         float2 texel =
             1.0 / float2(shadowTex.get_width(), shadowTex.get_height());
         float lit = 0.0;
         for (int j = -1; j <= 1; j++)
           for (int i = -1; i <= 1; i++) {
             float sd = shadowTex.sample(shadowSamp, suv + float2(i, j) * texel);
-            lit += (fragDepth - bias <= sd) ? 1.0 : 0.0;
+            lit += (fragDepth - sep <= sd) ? 1.0 : 0.0;
           }
-        float shadow = 1.0 - lit / 9.0;                 // 0 lit .. 1 occluded
+        float shadow = (1.0 - lit / 9.0) * faceGate;     // 0 lit .. 1 occluded
         color *= (1.0 - shadow * u.shadowIntensity);
       }
     }
