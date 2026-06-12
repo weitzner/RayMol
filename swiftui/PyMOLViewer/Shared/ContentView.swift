@@ -165,6 +165,7 @@ struct ContentView: View {
                 } label: {
                     Label("Copy Image to Clipboard", systemImage: "doc.on.clipboard")
                 }
+                .keyboardShortcut("c", modifiers: .command)
                 Toggle(isOn: $exportRayTraced) {
                     Label("Ray-traced (AO + shadows)", systemImage: "sparkles")
                 }
