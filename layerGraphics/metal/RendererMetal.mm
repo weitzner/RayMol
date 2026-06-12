@@ -868,6 +868,120 @@ void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
 #pragma mark - Real-time ray tracing: acceleration structures
 // ---------------------------------------------------------------------------
 
+// Separate MSL source (only compiled when the device supports ray tracing, so
+// the #include <metal_raytracing> + intersector code can never break the main
+// post library on non-RT devices). Fullscreen fragment pass: reconstruct the
+// eye-space position + normal from the scene depth, transform to MODEL space
+// (where the acceleration structure lives), trace ambient-occlusion rays + a
+// shadow ray against the atom-sphere instance AS, and composite (+ depth fog).
+static NSString* const kRTSrc = @R"(
+#include <metal_stdlib>
+#include <metal_raytracing>
+using namespace metal;
+using namespace raytracing;
+
+struct PostVOut { float4 position [[position]]; float2 uv; };
+vertex PostVOut rt_vertex(uint vid [[vertex_id]]) {
+  float2 p = float2((vid << 1) & 2, vid & 2);
+  PostVOut o;
+  o.position = float4(p * 2.0 - 1.0, 0.0, 1.0);
+  o.uv = float2(p.x, 1.0 - p.y);
+  return o;
+}
+
+struct RTU {
+  float4x4 invModelview;   // eye -> model/world
+  float4 lightDirModel;    // model-space direction TOWARD the key light
+  float4 bgFog;            // bg.rgb, fogEnabled
+  float projA, projB, projX, projY;
+  float fogStart, fogEnd, aoRadius, aoIntensity;
+  float shadowIntensity, nSamples, frame, _pad;
+};
+
+static float rt_hash(float2 p) {
+  return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+fragment float4 rt_resolve(PostVOut in [[stage_in]],
+    texture2d<float> colorTex [[texture(0)]],
+    depth2d<float> depthTex [[texture(1)]],
+    sampler s [[sampler(0)]],
+    instance_acceleration_structure accel [[buffer(0)]],
+    constant RTU& u [[buffer(1)]]) {
+  float3 col = colorTex.sample(s, in.uv).rgb;
+  float d = depthTex.sample(s, in.uv);
+  if (d >= 0.99999) return float4(col, 1.0);  // background: leave as-is
+
+  // Eye-space position (matches post_ssao_fog reconstruction).
+  float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);
+  float ndcx = 2.0 * in.uv.x - 1.0;
+  float ndcy = 1.0 - 2.0 * in.uv.y;
+  float3 pEye = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
+  float3 nEye = normalize(cross(dfdx(pEye), dfdy(pEye)));
+  if (nEye.z < 0.0) nEye = -nEye;
+
+  // To model space (AS space).
+  float3 pModel = (u.invModelview * float4(pEye, 1.0)).xyz;
+  float3 nModel = normalize((u.invModelview * float4(nEye, 0.0)).xyz);
+
+  // Tangent basis around the surface normal.
+  float3 upv = abs(nModel.z) < 0.9 ? float3(0, 0, 1) : float3(1, 0, 0);
+  float3 tx = normalize(cross(upv, nModel));
+  float3 ty = cross(nModel, tx);
+
+  intersector<instancing> it;
+  it.assume_geometry_type(geometry_type::triangle);
+  it.accept_any_intersection(true);   // occlusion: stop at first hit
+
+  float bias = max(u.aoRadius * 0.03, 0.02);
+  float3 origin = pModel + nModel * bias;
+
+  // Ambient occlusion: cosine-weighted hemisphere rays within aoRadius.
+  int N = int(u.nSamples);
+  float occ = 0.0;
+  for (int i = 0; i < N; ++i) {
+    float2 seed = in.uv * float(i + 3) + float2(u.frame * 0.013, float(i) * 0.07);
+    float h1 = rt_hash(seed);
+    float h2 = rt_hash(seed + 17.31);
+    float r = sqrt(h1);
+    float phi = 6.2831853 * h2;
+    float3 dirT = float3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - h1)));
+    float3 dir = normalize(dirT.x * tx + dirT.y * ty + dirT.z * nModel);
+    ray rr;
+    rr.origin = origin;
+    rr.direction = dir;
+    rr.min_distance = bias;
+    rr.max_distance = u.aoRadius;
+    auto res = it.intersect(rr, accel);
+    if (res.type != intersection_type::none) occ += 1.0;
+  }
+  float ao = 1.0 - (occ / float(max(N, 1))) * u.aoIntensity;
+
+  // Hard shadow ray toward the key light.
+  float sh = 1.0;
+  {
+    ray rr;
+    rr.origin = origin;
+    rr.direction = normalize(u.lightDirModel.xyz);
+    rr.min_distance = bias;
+    rr.max_distance = 1.0e6;
+    auto res = it.intersect(rr, accel);
+    if (res.type != intersection_type::none) sh = 1.0 - u.shadowIntensity;
+  }
+
+  col *= ao * sh;
+
+  // Depth-cue fog toward bg (eye distance), matching the SSAO pass.
+  if (u.bgFog.w > 0.5) {
+    float dist = -ez;
+    float f = clamp((dist - u.fogStart) / max(u.fogEnd - u.fogStart, 1e-3), 0.0, 1.0);
+    col = mix(col, u.bgFog.rgb, f);
+  }
+  return float4(col, 1.0);
+}
+)";
+
+
 // Build (and synchronously complete) an acceleration structure from a descriptor.
 // Used only when geometry changes, so the CPU stall is acceptable.
 id<MTLAccelerationStructure>
@@ -1007,6 +1121,24 @@ void RendererMetal::ensureRayTracingAS()
   _rtSphereHash = h;
   _rtBuiltCount = nSph;
   _rtReady = (_rtInstanceAS != nil);
+
+  // Lazily compile the RT resolve pipeline (separate library so the raytracing
+  // intersector code can't affect the main post library). If it fails, the RT
+  // pass is skipped and the SSAO/shadow path runs — zero regression.
+  if (_rtReady && !_rtResolvePipeline) {
+    NSError* err = nil;
+    id<MTLLibrary> lib = [_device newLibraryWithSource:kRTSrc options:nil error:&err];
+    if (lib) {
+      MTLRenderPipelineDescriptor* pd = [[MTLRenderPipelineDescriptor alloc] init];
+      pd.vertexFunction = [lib newFunctionWithName:@"rt_vertex"];
+      pd.fragmentFunction = [lib newFunctionWithName:@"rt_resolve"];
+      pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+      _rtResolvePipeline = [_device newRenderPipelineStateWithDescriptor:pd error:&err];
+    }
+    if (!_rtResolvePipeline)
+      NSLog(@"RendererMetal RT: rt_resolve pipeline failed: %@", err);
+  }
+
   static int once = 0;
   if (_rtReady && once++ < 3)
     NSLog(@"RendererMetal RT: built instance AS with %zu spheres", nSph);
@@ -1022,10 +1154,58 @@ void RendererMetal::runPostChain()
   bool doAO = _ssaoPipeline && _aoEnabled && !noAO;
   bool doFog = _ssaoPipeline && _postFogEnabled;
   bool doShadow = _ssaoPipeline && _shadowEnabled && !noShadow;
+  bool doRT = _rtEnabled && _rtReady && _rtResolvePipeline && _rtInstanceAS && _postColor;
   id<MTLTexture> sceneSrc = _sceneColor;
 
+  // Pass 1-RT: real ray-traced AO + shadow (+ fog), replacing the SSAO/shadow
+  // pass when metal_raytrace is on. Traces against the atom-sphere instance AS.
+  if (doRT) {
+    struct RTU {
+      float invModelview[16];
+      float lightDirModel[4];
+      float bgFog[4];
+      float projA, projB, projX, projY;
+      float fogStart, fogEnd, aoRadius, aoIntensity;
+      float shadowIntensity, nSamples, frame, _pad;
+    } u;
+    std::memcpy(u.invModelview, _modelviewInv.data(), 16 * sizeof(float));
+    simd_float4x4 inv;
+    std::memcpy(&inv, _modelviewInv.data(), 64);
+    simd_float4 le = simd_normalize(simd_make_float4(0.4f, 0.4f, 1.0f, 0.0f));
+    simd_float4 lm = simd_mul(inv, simd_make_float4(le.x, le.y, le.z, 0.0f));
+    u.lightDirModel[0] = lm.x; u.lightDirModel[1] = lm.y;
+    u.lightDirModel[2] = lm.z; u.lightDirModel[3] = 0.0f;
+    u.bgFog[0] = _bgR; u.bgFog[1] = _bgG; u.bgFog[2] = _bgB;
+    u.bgFog[3] = doFog ? 1.0f : 0.0f;
+    u.projA = _projA; u.projB = _projB; u.projX = _projX; u.projY = _projY;
+    u.fogStart = _fogStart; u.fogEnd = _fogEnd;
+    u.aoRadius = 6.0f; u.aoIntensity = 0.9f;
+    u.shadowIntensity = doShadow ? 0.5f : 0.0f;
+    u.nSamples = 8.0f;
+    static uint32_t rtFrame = 0;
+    u.frame = (float)(rtFrame++ & 1023);
+    u._pad = 0.0f;
+
+    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    pd.colorAttachments[0].texture = _postColor;
+    pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pd.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> er =
+        [_cmdBuffer renderCommandEncoderWithDescriptor:pd];
+    [er setRenderPipelineState:_rtResolvePipeline];
+    [er useResource:_rtSphereProtoAS usage:MTLResourceUsageRead stages:MTLRenderStageFragment];
+    [er setFragmentTexture:_sceneColor atIndex:0];
+    [er setFragmentTexture:_sceneDepth atIndex:1];
+    [er setFragmentSamplerState:_postSampler atIndex:0];
+    [er setFragmentAccelerationStructure:_rtInstanceAS atBufferIndex:0];
+    [er setFragmentBytes:&u length:sizeof(u) atIndex:1];
+    [er drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [er endEncoding];
+    sceneSrc = _postColor;
+  }
+
   // Pass 1: SSAO + screen-space shadows + depth-cue/fog (color+depth -> post).
-  if ((doAO || doFog || doShadow) && _postColor) {
+  else if ((doAO || doFog || doShadow) && _postColor) {
     struct {
       float projA, projB, fogStart, fogEnd;
       float bgR, bgG, bgB, fogEnabled;
