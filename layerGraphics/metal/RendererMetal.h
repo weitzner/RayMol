@@ -288,7 +288,7 @@ private:
   // light space and PCF-compares against it. Depth-only pipelines mirror the
   // opaque ones but write no color and stay single-sample (the scene pass is
   // 4x MSAA; the shadow pass is not). _shadowMode is true during the replay.
-  static constexpr NSUInteger kShadowDim = 2048;
+  static constexpr NSUInteger kShadowDim = 4096;
   id<MTLTexture> _shadowDepth = nil;
   MTLRenderPassDescriptor* _shadowPassDesc = nil;
   id<MTLDepthStencilState> _shadowDepthState = nil;

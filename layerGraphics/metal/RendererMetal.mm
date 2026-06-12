@@ -584,13 +584,17 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
         sep = min(sep, 0.05);
         float2 texel =
             1.0 / float2(shadowTex.get_width(), shadowTex.get_height());
+        // 4x4 taps of hardware-bilinear depth comparison (sample_compare with a
+        // LessEqual comparison sampler). Each tap is sub-texel smooth, and the
+        // 1.5-texel spacing widens the penumbra so the edge reads as a soft
+        // gradient rather than blocky steps at high magnification.
         float lit = 0.0;
-        for (int j = -1; j <= 1; j++)
-          for (int i = -1; i <= 1; i++) {
-            float sd = shadowTex.sample(shadowSamp, suv + float2(i, j) * texel);
-            lit += (fragDepth - sep <= sd) ? 1.0 : 0.0;
+        for (int j = -2; j <= 1; j++)
+          for (int i = -2; i <= 1; i++) {
+            float2 off = (float2(i, j) + 0.5) * 1.5 * texel;
+            lit += shadowTex.sample_compare(shadowSamp, suv + off, fragDepth - sep);
           }
-        float shadow = (1.0 - lit / 9.0) * faceGate;     // 0 lit .. 1 occluded
+        float shadow = (1.0 - lit / 16.0) * faceGate;    // 0 lit .. 1 occluded
         color *= (1.0 - shadow * u.shadowIntensity);
       }
     }
@@ -790,13 +794,17 @@ void RendererMetal::buildPostPipelines()
     _postSampler = [_device newSamplerStateWithDescriptor:sd];
   }
   if (!_shadowSampler) {
-    // Point-sampled, clamped: manual 3x3 PCF reads raw depth texels. Clamp
-    // avoids wrap-around false shadows at the shadow-map border.
+    // Depth-COMPARISON sampler with LINEAR filtering: each sample_compare tap
+    // does hardware 2x2 bilinear PCF (sub-texel-smooth occlusion fraction)
+    // instead of a hard nearest-texel compare, so shadow edges don't stair-step
+    // into blocks at high zoom. compareFunction = LessEqual matches the manual
+    // `fragDepth - sep <= storedDepth` test. Clamp avoids border false shadows.
     MTLSamplerDescriptor* ss = [[MTLSamplerDescriptor alloc] init];
-    ss.minFilter = MTLSamplerMinMagFilterNearest;
-    ss.magFilter = MTLSamplerMinMagFilterNearest;
+    ss.minFilter = MTLSamplerMinMagFilterLinear;
+    ss.magFilter = MTLSamplerMinMagFilterLinear;
     ss.sAddressMode = MTLSamplerAddressModeClampToEdge;
     ss.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    ss.compareFunction = MTLCompareFunctionLessEqual;
     _shadowSampler = [_device newSamplerStateWithDescriptor:ss];
   }
 
