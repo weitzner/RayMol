@@ -2328,6 +2328,10 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   // Apply depth/stencil
   if (_shadowMode) {
     [_encoder setDepthStencilState:_shadowDepthState]; // LESS + write (light POV)
+    // Front-face cull: store the depth of faces pointing AWAY from the light so
+    // a thin cartoon/surface slab cannot self-shadow its own light-facing side
+    // (genuine fold occlusion is preserved). Restored to back/none after.
+    [_encoder setCullMode:MTLCullModeFront];
   } else if (_oitActive) {
     MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
     d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque, no write
@@ -2785,6 +2789,7 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
   if (_shadowMode) {
     [_encoder setRenderPipelineState:_sphereShadowPipeline];
     [_encoder setDepthStencilState:_shadowDepthState]; // LESS + write (light POV)
+    [_encoder setCullMode:MTLCullModeNone]; // billboards: don't inherit VBO cull-front
   } else if (_oitActive) {
     [_encoder setRenderPipelineState:_sphereOitPipeline];
     MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
@@ -3192,6 +3197,7 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
   if (_shadowMode) {
     [_encoder setRenderPipelineState:_cylinderShadowPipeline];
     [_encoder setDepthStencilState:_shadowDepthState]; // LESS + write (light POV)
+    [_encoder setCullMode:MTLCullModeNone]; // boxes: don't inherit VBO cull-front
   } else if (_oitActive) {
     [_encoder setRenderPipelineState:_cylinderOitPipeline];
     MTLDepthStencilDescriptor* dd = [[MTLDepthStencilDescriptor alloc] init];
