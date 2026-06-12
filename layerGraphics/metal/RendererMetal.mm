@@ -1179,9 +1179,9 @@ void RendererMetal::runPostChain()
     u.bgFog[3] = doFog ? 1.0f : 0.0f;
     u.projA = _projA; u.projB = _projB; u.projX = _projX; u.projY = _projY;
     u.fogStart = _fogStart; u.fogEnd = _fogEnd;
-    u.aoRadius = 6.0f; u.aoIntensity = 0.9f;
-    u.shadowIntensity = doShadow ? 0.5f : 0.0f;
-    u.nSamples = 8.0f;
+    u.aoRadius = 5.0f; u.aoIntensity = 0.72f;
+    u.shadowIntensity = doShadow ? 0.45f : 0.0f;
+    u.nSamples = 10.0f;
     static uint32_t rtFrame = 0;
     u.frame = (float)(rtFrame++ & 1023);
     u._pad = 0.0f;
