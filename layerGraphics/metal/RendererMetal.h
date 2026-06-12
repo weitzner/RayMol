@@ -263,6 +263,13 @@ private:
   void buildPostPipelines();
   void runPostChain();
 
+  // Real-time ray tracing: build the shared unit-icosphere primitive
+  // acceleration structure (once) + (re)build the per-atom instance
+  // acceleration structure when the accumulated sphere set changes.
+  void buildSphereProtoAS();
+  void ensureRayTracingAS();
+  id<MTLAccelerationStructure> buildAccelStructure(MTLAccelerationStructureDescriptor* desc);
+
   // Order-independent transparency (weighted-blended). Transparent geometry
   // accumulates here (depth-tested vs opaque _sceneDepth, no write); a resolve
   // pass composites over the opaque color during runPostChain.

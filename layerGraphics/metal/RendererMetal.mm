@@ -1,6 +1,8 @@
 #include "RendererMetal.h"
 
 #import <simd/simd.h>
+#include <algorithm>
+#include <cmath>
 
 namespace pymol {
 
@@ -357,6 +359,14 @@ void RendererMetal::applyDepthStencilState()
 
 void RendererMetal::beginFrame()
 {
+  // Ray tracing: (re)build the atom-sphere acceleration structure from the
+  // PREVIOUS frame's accumulated geometry, BEFORE this frame's command buffer
+  // exists — building (with its own cmd buffer + wait) must not happen while a
+  // render command buffer is in flight (that stalls/blackouts the frame).
+  // Model-space geometry is stable, so one-frame latency is invisible.
+  if (_rtEnabled) ensureRayTracingAS();
+  _rtSpheres.clear();  // re-accumulated during this frame's opaque pass
+
   _cmdBuffer = [_queue commandBuffer];
   _encoder = nil;
   _oitActive = false;
@@ -852,6 +862,154 @@ void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
   _projY = projY;
   static bool noRT = getenv("PYMOL_NO_RT") != nullptr;
   _rtEnabled = (rtEnabled && _rtSupported && !noRT) ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - Real-time ray tracing: acceleration structures
+// ---------------------------------------------------------------------------
+
+// Build (and synchronously complete) an acceleration structure from a descriptor.
+// Used only when geometry changes, so the CPU stall is acceptable.
+id<MTLAccelerationStructure>
+RendererMetal::buildAccelStructure(MTLAccelerationStructureDescriptor* desc)
+{
+  MTLAccelerationStructureSizes sizes =
+      [_device accelerationStructureSizesWithDescriptor:desc];
+  id<MTLAccelerationStructure> as =
+      [_device newAccelerationStructureWithSize:sizes.accelerationStructureSize];
+  if (!as) return nil;
+  id<MTLBuffer> scratch =
+      [_device newBufferWithLength:std::max<NSUInteger>(sizes.buildScratchBufferSize, 16)
+                          options:MTLResourceStorageModePrivate];
+  id<MTLCommandBuffer> cb = [_queue commandBuffer];
+  id<MTLAccelerationStructureCommandEncoder> e = [cb accelerationStructureCommandEncoder];
+  [e buildAccelerationStructure:as descriptor:desc scratchBuffer:scratch scratchBufferOffset:0];
+  [e endEncoding];
+  [cb commit];
+  [cb waitUntilCompleted];
+  return as;
+}
+
+// One shared unit-radius icosphere (icosahedron subdivided once, ~80 tris) used
+// as the instanced primitive — occlusion-only, so a coarse sphere is plenty.
+void RendererMetal::buildSphereProtoAS()
+{
+  if (_rtSphereProtoAS) return;
+
+  const float t = (1.0f + std::sqrt(5.0f)) * 0.5f;
+  std::vector<simd_float3> v = {
+      simd_make_float3(-1, t, 0), simd_make_float3(1, t, 0),
+      simd_make_float3(-1, -t, 0), simd_make_float3(1, -t, 0),
+      simd_make_float3(0, -1, t), simd_make_float3(0, 1, t),
+      simd_make_float3(0, -1, -t), simd_make_float3(0, 1, -t),
+      simd_make_float3(t, 0, -1), simd_make_float3(t, 0, 1),
+      simd_make_float3(-t, 0, -1), simd_make_float3(-t, 0, 1)};
+  std::vector<uint32_t> f = {
+      0,11,5, 0,5,1, 0,1,7, 0,7,10, 0,10,11, 1,5,9, 5,11,4, 11,10,2, 10,7,6,
+      7,1,8, 3,9,4, 3,4,2, 3,2,6, 3,6,8, 3,8,9, 4,9,5, 2,4,11, 6,2,10,
+      8,6,7, 9,8,1};
+  // One level of subdivision (midpoint split), then project to the unit sphere.
+  std::unordered_map<uint64_t, uint32_t> midCache;
+  auto midpoint = [&](uint32_t a, uint32_t b) -> uint32_t {
+    uint64_t key = (uint64_t)std::min(a, b) << 32 | std::max(a, b);
+    auto it = midCache.find(key);
+    if (it != midCache.end()) return it->second;
+    simd_float3 m = simd_normalize((v[a] + v[b]) * 0.5f);
+    v.push_back(m);
+    uint32_t idx = (uint32_t)v.size() - 1;
+    midCache[key] = idx;
+    return idx;
+  };
+  std::vector<uint32_t> f2;
+  f2.reserve(f.size() * 4);
+  for (size_t i = 0; i < f.size(); i += 3) {
+    uint32_t a = f[i], b = f[i + 1], c = f[i + 2];
+    uint32_t ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
+    uint32_t tri[] = {a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca};
+    f2.insert(f2.end(), tri, tri + 12);
+  }
+  for (auto& p : v) p = simd_normalize(p);
+
+  std::vector<float> verts;
+  verts.reserve(v.size() * 3);
+  for (auto& p : v) { verts.push_back(p.x); verts.push_back(p.y); verts.push_back(p.z); }
+
+  _rtProtoVerts = [_device newBufferWithBytes:verts.data()
+                                       length:verts.size() * sizeof(float)
+                                      options:MTLResourceStorageModeShared];
+  _rtProtoIndices = [_device newBufferWithBytes:f2.data()
+                                         length:f2.size() * sizeof(uint32_t)
+                                        options:MTLResourceStorageModeShared];
+  _rtProtoIndexCount = (uint32_t)f2.size();
+
+  MTLAccelerationStructureTriangleGeometryDescriptor* geo =
+      [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
+  geo.vertexBuffer = _rtProtoVerts;
+  geo.vertexStride = 3 * sizeof(float);
+  geo.vertexFormat = MTLAttributeFormatFloat3;
+  geo.indexBuffer = _rtProtoIndices;
+  geo.indexType = MTLIndexTypeUInt32;
+  geo.triangleCount = _rtProtoIndexCount / 3;
+  geo.opaque = YES;
+
+  MTLPrimitiveAccelerationStructureDescriptor* pdesc =
+      [MTLPrimitiveAccelerationStructureDescriptor descriptor];
+  pdesc.geometryDescriptors = @[geo];
+  _rtSphereProtoAS = buildAccelStructure(pdesc);
+}
+
+// (Re)build the instance acceleration structure (one icosphere instance per
+// atom, transform = translate(center)·scale(radius), MODEL space). Rebuilt only
+// when the accumulated sphere set changes — model-space centers are invariant
+// under camera rotation, so this does NOT rebuild while orbiting.
+void RendererMetal::ensureRayTracingAS()
+{
+  if (!_rtEnabled || !_rtSupported) { _rtReady = false; return; }
+  size_t nSph = _rtSpheres.size() / 4;
+  if (nSph == 0) { _rtReady = false; return; }
+
+  buildSphereProtoAS();
+  if (!_rtSphereProtoAS) { _rtReady = false; return; }
+
+  // FNV-1a over the sphere data → rebuild only on change.
+  uint64_t h = 1469598103934665603ULL;
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(_rtSpheres.data());
+  size_t n = _rtSpheres.size() * sizeof(float);
+  for (size_t i = 0; i < n; ++i) { h ^= bytes[i]; h *= 1099511628211ULL; }
+  if (_rtReady && _rtInstanceAS && h == _rtSphereHash && nSph == _rtBuiltCount) return;
+
+  id<MTLBuffer> instBuf =
+      [_device newBufferWithLength:nSph * sizeof(MTLAccelerationStructureInstanceDescriptor)
+                          options:MTLResourceStorageModeShared];
+  auto* inst = (MTLAccelerationStructureInstanceDescriptor*)instBuf.contents;
+  for (size_t i = 0; i < nSph; ++i) {
+    float x = _rtSpheres[i * 4], y = _rtSpheres[i * 4 + 1],
+          z = _rtSpheres[i * 4 + 2], r = _rtSpheres[i * 4 + 3];
+    if (r <= 0.0f) r = 0.001f;
+    MTLPackedFloat4x3 m;
+    m.columns[0].x = r; m.columns[0].y = 0; m.columns[0].z = 0;
+    m.columns[1].x = 0; m.columns[1].y = r; m.columns[1].z = 0;
+    m.columns[2].x = 0; m.columns[2].y = 0; m.columns[2].z = r;
+    m.columns[3].x = x; m.columns[3].y = y; m.columns[3].z = z;
+    inst[i].transformationMatrix = m;
+    inst[i].options = MTLAccelerationStructureInstanceOptionOpaque;
+    inst[i].mask = 0xFF;
+    inst[i].intersectionFunctionTableOffset = 0;
+    inst[i].accelerationStructureIndex = 0;
+  }
+
+  MTLInstanceAccelerationStructureDescriptor* idesc =
+      [MTLInstanceAccelerationStructureDescriptor descriptor];
+  idesc.instancedAccelerationStructures = @[_rtSphereProtoAS];
+  idesc.instanceCount = (NSUInteger)nSph;
+  idesc.instanceDescriptorBuffer = instBuf;
+  _rtInstanceAS = buildAccelStructure(idesc);
+  _rtSphereHash = h;
+  _rtBuiltCount = nSph;
+  _rtReady = (_rtInstanceAS != nil);
+  static int once = 0;
+  if (_rtReady && once++ < 3)
+    NSLog(@"RendererMetal RT: built instance AS with %zu spheres", nSph);
 }
 
 void RendererMetal::runPostChain()
@@ -2841,6 +2999,22 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
   // with corner flags {0,1,3,3,2,0}); draw all verts directly, no index buffer.
   NSUInteger vertexCount = call.stride ? (call.dataSize / call.stride) : 0;
   if (vertexCount < 3) return;
+
+  // Ray tracing: accumulate model-space sphere centers + radii once per frame
+  // (only the main opaque pass, not the shadow/OIT replays). Each sphere is 6
+  // consecutive verts sharing the same a_vertex_radius (float4 @ offset 0).
+  if (_rtEnabled && !_shadowMode && !_oitActive) {
+    const uint8_t* base = static_cast<const uint8_t*>(call.data);
+    NSUInteger nSph = vertexCount / 6;
+    _rtSpheres.reserve(_rtSpheres.size() + nSph * 4);
+    for (NSUInteger k = 0; k < nSph; ++k) {
+      const float* c = reinterpret_cast<const float*>(base + (6 * k) * call.stride + call.posRadiusOff);
+      _rtSpheres.push_back(c[0]);
+      _rtSpheres.push_back(c[1]);
+      _rtSpheres.push_back(c[2]);
+      _rtSpheres.push_back(c[3] * call.sphereSizeScale);
+    }
+  }
 
   if (_shadowMode) {
     [_encoder setRenderPipelineState:_sphereShadowPipeline];
