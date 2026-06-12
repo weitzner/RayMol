@@ -3127,6 +3127,11 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
 
   if (_shadowMode) {
     [_encoder setDepthStencilState:_shadowDepthState];
+    // Front-face cull (mirrors drawVBO): store the depth of faces pointing AWAY
+    // from the light so a closed surface (indexed triangles) can't self-shadow
+    // its own light-facing front — without this the surface stored its near
+    // faces and the front-center read as a dark "lit from below" band.
+    [_encoder setCullMode:MTLCullModeFront];
   } else if (_oitActive) {
     MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
     d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque, no write
