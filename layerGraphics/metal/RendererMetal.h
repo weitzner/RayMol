@@ -153,6 +153,15 @@ public:
   void drawBezierTubes(const void* controlPoints, size_t dataSize, float radius,
       float r, float g, float b) override;
 
+  // Shadow map: SceneRenderMetal replays the opaque geometry a second time
+  // between begin/endShadowPass with the LIGHT view-projection loaded via
+  // matrixMode/loadMatrixf. Draws route to depth-only pipelines that write
+  // into _shadowDepth (the light-POV depth map). setLightViewProjEye hands the
+  // renderer the eye-space light VP so the post pass can sample the map.
+  void beginShadowPass() override;
+  void endShadowPass() override;
+  void setLightViewProjEye(const float* m) override;
+
 private:
   void buildImpostorPipelines();
   // The cylinder VBO layout (stride/offsets/formats) varies with the rep, so
@@ -272,6 +281,31 @@ private:
   id<MTLRenderPipelineState> _oitResolvePipeline = nil;
   bool _oitActive = false;      // true while the transparent pass is rendering
   bool _oitHasContent = false;  // true if any transparent fragments drew
+
+  // --- Real shadow map (light-POV depth pre-pass + PCF in the post pass) ---
+  // _shadowDepth is a fixed-resolution single-sample Depth32Float map rendered
+  // from the light's point of view; the post pass projects each fragment into
+  // light space and PCF-compares against it. Depth-only pipelines mirror the
+  // opaque ones but write no color and stay single-sample (the scene pass is
+  // 4x MSAA; the shadow pass is not). _shadowMode is true during the replay.
+  static constexpr NSUInteger kShadowDim = 2048;
+  id<MTLTexture> _shadowDepth = nil;
+  MTLRenderPassDescriptor* _shadowPassDesc = nil;
+  id<MTLDepthStencilState> _shadowDepthState = nil;
+  id<MTLSamplerState> _shadowSampler = nil;
+  id<MTLFunction> _vboFragmentShadowFunc = nil;  // depth-only VBO fragment
+  id<MTLRenderPipelineState> _vboShadowPipelineUByte = nil; // stride 28
+  id<MTLRenderPipelineState> _vboShadowPipelineFloat = nil; // stride 40
+  id<MTLRenderPipelineState> _sphereShadowPipeline = nil;   // Stage 3
+  id<MTLRenderPipelineState> _cylinderShadowPipeline = nil; // Stage 3
+  NSUInteger _cylinderShadowStride = 0;
+  bool _shadowMode = false;       // true between begin/endShadowPass
+  float _lightViewProjEye[16];    // eye-space light VP, column-major (PostU)
+  void buildShadowPipelines();
+  // Depth-only shadow pipeline for an arbitrary lit vertex layout (e.g. the
+  // surface's stride-44), mirroring oitPipelineForVD.
+  id<MTLRenderPipelineState> shadowPipelineForVD(MTLVertexDescriptor* vd);
+  id<MTLRenderPipelineState> _shadowDebugPipeline = nil; // Stage-1 debug blit
 
   // GPU-tessellated Bezier tube ("tube cartoon") pipeline.
   id<MTLRenderPipelineState> _bezierTubePipeline = nil;

@@ -500,6 +500,7 @@ struct PostU {
   float shadowEnabled;
   float shadowIntensity;
   float _pad;
+  float4x4 lightViewProj; // eye-space light view*proj for shadow-map sampling
 };
 
 // Linear eye distance (positive, toward the scene) from window depth [0,1].
@@ -512,7 +513,9 @@ static float post_linear_depth(float d, float projA, float projB) {
 fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
     texture2d<float> colorTex [[texture(0)]],
     depth2d<float> depthTex [[texture(1)]],
+    depth2d<float> shadowTex [[texture(2)]],
     sampler s [[sampler(0)]],
+    sampler shadowSamp [[sampler(1)]],
     constant PostU& u [[buffer(0)]]) {
   float3 color = colorTex.sample(s, in.uv).rgb;
   float d = depthTex.sample(s, in.uv);
@@ -545,50 +548,37 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   }
   color *= ao;
 
-  // Screen-space directional shadows: march from the surface point toward the
-  // key light through the depth buffer; if a closer surface lies along the
-  // ray, the point is shadowed. Real directional cast shadows for the dense
-  // (mostly on-screen) molecular scenes PyMOL renders.
+  // Real shadow map: reconstruct the eye-space surface point, project it into
+  // the light's clip space, and PCF-compare against the stored light-POV depth.
+  // Acne-free on curved faces (standard slope-scaled depth bias + 3x3 PCF) —
+  // unlike the old screen-space march, which self-shadowed curving helices.
   if (u.shadowEnabled > 0.5 && d < 0.99999) {
     float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);  // eye z (negative)
     float ndcx = 2.0 * in.uv.x - 1.0;
     float ndcy = 1.0 - 2.0 * in.uv.y;
     float3 p = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-    float3 Ldir = normalize(float3(0.4, 0.4, 1.0)); // toward light (eye space)
-    // Slope-scaled depth bias to suppress self-shadow ("shadow acne"). Estimate
-    // how fast the surface recedes per pixel here (linear-depth gradient over
-    // the 4 neighbors); grazing faces recede fast, so the march would otherwise
-    // re-detect its OWN originating surface and stripe it with comb artifacts.
-    // Flat-facing faces get a tiny bias (real contact shadows preserved); steep
-    // faces get a large bias (self-shadow rejected — they're already dark from
-    // the N·L lighting term anyway).
-    float zc = -ez;                                   // linear depth (positive)
-    float2 ir = 1.0 / float2(depthTex.get_width(), depthTex.get_height());
-    float zr = post_linear_depth(depthTex.sample(s, in.uv + float2( ir.x, 0)), u.projA, u.projB);
-    float zl = post_linear_depth(depthTex.sample(s, in.uv + float2(-ir.x, 0)), u.projA, u.projB);
-    float zt = post_linear_depth(depthTex.sample(s, in.uv + float2(0,  ir.y)), u.projA, u.projB);
-    float zb = post_linear_depth(depthTex.sample(s, in.uv + float2(0, -ir.y)), u.projA, u.projB);
-    float slope = max(max(abs(zr - zc), abs(zl - zc)), max(abs(zt - zc), abs(zb - zc)));
-    float stepv = (-ez) * 0.012;
-    float bias = stepv * 1.5 + slope * 12.0;          // skip originating surface
-    float occluded = 0.0;
-    const int KS = 24;
-    for (int i = 1; i <= KS; i++) {
-      // March starts a full bias past the surface, then steps outward.
-      float3 q = p + Ldir * (bias + stepv * float(i));
-      if (q.z > -1e-4) break;                 // crossed in front of camera
-      float2 nq = float2(u.projX * q.x / (-q.z), u.projY * q.y / (-q.z));
-      float2 uvq = float2(0.5 * nq.x + 0.5, 0.5 - 0.5 * nq.y);
-      if (uvq.x < 0.0 || uvq.x > 1.0 || uvq.y < 0.0 || uvq.y > 1.0) break;
-      float dq = depthTex.sample(s, uvq);
-      if (dq >= 0.99999) continue;            // background: not an occluder
-      float zq = -u.projB / ((2.0 * dq - 1.0) + u.projA);
-      float diff = zq - q.z; // > 0 when scene surface is closer than ray point
-      // Occluder must be closer than the ray by more than the bias (rejects the
-      // originating surface) but not so far it's an unrelated background wall.
-      if (diff > bias && diff < bias + stepv * 6.0) { occluded = 1.0; break; }
+    float4 lc = u.lightViewProj * float4(p, 1.0);       // eye -> light clip
+    if (lc.w > 0.0) {
+      float3 ndc = lc.xyz / lc.w;                       // light NDC, GL [-1,1]
+      float2 suv = float2(0.5 * ndc.x + 0.5, 0.5 - 0.5 * ndc.y);
+      float fragDepth = 0.5 + 0.5 * ndc.z;              // same 0.5+0.5 remap
+      if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0 &&
+          fragDepth > 0.0 && fragDepth < 1.0) {
+        // Constant depth bias (light-space); tuned in Stage 4 with a normal
+        // offset. 3x3 PCF softens the shadow boundary.
+        float bias = 0.0015;
+        float2 texel =
+            1.0 / float2(shadowTex.get_width(), shadowTex.get_height());
+        float lit = 0.0;
+        for (int j = -1; j <= 1; j++)
+          for (int i = -1; i <= 1; i++) {
+            float sd = shadowTex.sample(shadowSamp, suv + float2(i, j) * texel);
+            lit += (fragDepth - bias <= sd) ? 1.0 : 0.0;
+          }
+        float shadow = 1.0 - lit / 9.0;                 // 0 lit .. 1 occluded
+        color *= (1.0 - shadow * u.shadowIntensity);
+      }
     }
-    color *= (1.0 - occluded * u.shadowIntensity);
   }
 
   if (u.fogEnabled > 0.5 && d < 0.99999) {
@@ -634,6 +624,15 @@ fragment float4 post_outline(PostVOut in [[stage_in]],
   edge *= step(dc, 0.99999);
   color = mix(color, float3(u.colR, u.colG, u.colB), edge);
   return float4(color, 1.0);
+}
+
+// Stage-1 debug: show the raw light-POV shadow depth map as grayscale (near
+// dark, far/background white). Env-gated (PYMOL_SHADOW_DEBUG). Removed in S2.
+fragment float4 post_shadow_debug(PostVOut in [[stage_in]],
+    depth2d<float> shadowTex [[texture(1)]],
+    sampler s [[sampler(0)]]) {
+  float dpt = shadowTex.sample(s, in.uv);
+  return float4(dpt, dpt, dpt, 1.0);
 }
 )";
 
@@ -738,6 +737,26 @@ void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
   _oitPassDesc.depthAttachment.storeAction = MTLStoreActionStore;
   _oitPassDesc.stencilAttachment.texture = _sceneDepth;
   _oitPassDesc.stencilAttachment.loadAction = MTLLoadActionLoad;
+
+  // Shadow map: fixed-resolution single-sample depth target rendered from the
+  // light POV. Independent of the viewport (kShadowDim^2), so it survives
+  // resize without recreation. A depth-only pass (no color attachment) is valid.
+  if (!_shadowDepth) {
+    MTLTextureDescriptor* sd = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                     width:kShadowDim height:kShadowDim
+                                 mipmapped:NO];
+    sd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    sd.storageMode = MTLStorageModePrivate;
+    _shadowDepth = [_device newTextureWithDescriptor:sd];
+  }
+  if (!_shadowPassDesc) {
+    _shadowPassDesc = [[MTLRenderPassDescriptor alloc] init];
+    _shadowPassDesc.depthAttachment.texture = _shadowDepth;
+    _shadowPassDesc.depthAttachment.loadAction = MTLLoadActionClear;
+    _shadowPassDesc.depthAttachment.clearDepth = 1.0;
+    _shadowPassDesc.depthAttachment.storeAction = MTLStoreActionStore;
+  }
 }
 
 void RendererMetal::buildPostPipelines()
@@ -754,6 +773,16 @@ void RendererMetal::buildPostPipelines()
     sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
     sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     _postSampler = [_device newSamplerStateWithDescriptor:sd];
+  }
+  if (!_shadowSampler) {
+    // Point-sampled, clamped: manual 3x3 PCF reads raw depth texels. Clamp
+    // avoids wrap-around false shadows at the shadow-map border.
+    MTLSamplerDescriptor* ss = [[MTLSamplerDescriptor alloc] init];
+    ss.minFilter = MTLSamplerMinMagFilterNearest;
+    ss.magFilter = MTLSamplerMinMagFilterNearest;
+    ss.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    ss.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    _shadowSampler = [_device newSamplerStateWithDescriptor:ss];
   }
 
   id<MTLFunction> vfn = [lib newFunctionWithName:@"post_vertex"];
@@ -774,6 +803,7 @@ void RendererMetal::buildPostPipelines()
   _ssaoPipeline = mkpipe(@"post_ssao_fog");
   _oitResolvePipeline = mkpipe(@"oit_resolve");
   _outlinePipeline = mkpipe(@"post_outline");
+  _shadowDebugPipeline = mkpipe(@"post_shadow_debug");
 }
 
 void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
@@ -814,6 +844,7 @@ void RendererMetal::runPostChain()
       float bgR, bgG, bgB, fogEnabled;
       float aoEnabled, aoIntensity, aoRadiusPx, projX;
       float projY, shadowEnabled, shadowIntensity, _pad;
+      float lightViewProj[16]; // eye-space light VP (matches MSL PostU)
     } u;
     u.projA = _projA; u.projB = _projB;
     u.fogStart = _fogStart; u.fogEnd = _fogEnd;
@@ -826,6 +857,7 @@ void RendererMetal::runPostChain()
     u.shadowEnabled = doShadow ? 1.0f : 0.0f;
     u.shadowIntensity = 0.45f;
     u._pad = 0.0f;
+    std::memcpy(u.lightViewProj, _lightViewProjEye, 16 * sizeof(float));
 
     MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
     pd.colorAttachments[0].texture = _postColor;
@@ -836,7 +868,9 @@ void RendererMetal::runPostChain()
     [e1 setRenderPipelineState:_ssaoPipeline];
     [e1 setFragmentTexture:_sceneColor atIndex:0];
     [e1 setFragmentTexture:_sceneDepth atIndex:1];
+    [e1 setFragmentTexture:_shadowDepth atIndex:2];
     [e1 setFragmentSamplerState:_postSampler atIndex:0];
+    [e1 setFragmentSamplerState:_shadowSampler atIndex:1];
     [e1 setFragmentBytes:&u length:sizeof(u) atIndex:0];
     [e1 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [e1 endEncoding];
@@ -896,6 +930,21 @@ void RendererMetal::runPostChain()
   _screenPassDesc.depthAttachment.texture = nil;
   _screenPassDesc.stencilAttachment.texture = nil;
   _screenPassDesc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+
+  // Stage-1 debug: blit the raw shadow depth map to the drawable instead of the
+  // scene, so we can eyeball the light-POV depth. Env-gated; removed in S2.
+  static bool shadowDebug = getenv("PYMOL_SHADOW_DEBUG") != nullptr;
+  if (shadowDebug && _shadowDebugPipeline && _shadowDepth) {
+    id<MTLRenderCommandEncoder> dbg =
+        [_cmdBuffer renderCommandEncoderWithDescriptor:_screenPassDesc];
+    [dbg setRenderPipelineState:_shadowDebugPipeline];
+    [dbg setFragmentTexture:_shadowDepth atIndex:1];
+    [dbg setFragmentSamplerState:_postSampler atIndex:0];
+    [dbg drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [dbg endEncoding];
+    return;
+  }
+
   id<MTLRenderPipelineState> finalPipe =
       (_fxaaPipeline && _aaEnabled && !noAA) ? _fxaaPipeline : _blitPipeline;
   id<MTLRenderCommandEncoder> enc =
@@ -945,6 +994,62 @@ void RendererMetal::endTransparentOIT()
   _scenePassDesc.colorAttachments[0].loadAction = MTLLoadActionLoad;
   _scenePassDesc.depthAttachment.loadAction = MTLLoadActionLoad;
   _scenePassDesc.stencilAttachment.loadAction = MTLLoadActionLoad;
+  _encoder = [_cmdBuffer renderCommandEncoderWithDescriptor:_scenePassDesc];
+  if (_encoder) {
+    [_encoder setViewport:_viewport];
+    _depthTestEnabled = true;
+    _depthWriteEnabled = true;
+    _depthStencilDirty = true;
+    applyDepthStencilState();
+    [_encoder setCullMode:_cullFaceEnabled ? MTLCullModeBack : MTLCullModeNone];
+  }
+}
+
+void RendererMetal::setLightViewProjEye(const float* m)
+{
+  if (m) std::memcpy(_lightViewProjEye, m, 16 * sizeof(float));
+}
+
+void RendererMetal::beginShadowPass()
+{
+  if (!_cmdBuffer || !_shadowPassDesc || !_vboShadowPipelineUByte) return;
+  buildShadowPipelines();  // no-op if already built
+  // End the scene encoder opened by beginFrame (it has only the pending clear;
+  // no opaque geometry has drawn yet). Switch to the light-POV depth pass.
+  if (_encoder) { [_encoder endEncoding]; _encoder = nil; }
+  _passDesc = _shadowPassDesc;
+  _shadowPassDesc.depthAttachment.loadAction = MTLLoadActionClear;
+  _encoder = [_cmdBuffer renderCommandEncoderWithDescriptor:_shadowPassDesc];
+  if (!_encoder) { _passDesc = _scenePassDesc; return; }
+  MTLViewport vp = {0.0, 0.0, (double)kShadowDim, (double)kShadowDim, 0.0, 1.0};
+  [_encoder setViewport:vp];
+  if (!_shadowDepthState) {
+    MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
+    d.depthCompareFunction = MTLCompareFunctionLess;
+    d.depthWriteEnabled = YES;
+    _shadowDepthState = [_device newDepthStencilStateWithDescriptor:d];
+  }
+  [_encoder setDepthStencilState:_shadowDepthState];
+  [_encoder setCullMode:MTLCullModeNone];
+  _shadowMode = true;
+}
+
+void RendererMetal::endShadowPass()
+{
+  if (!_shadowMode) return;
+  if (_encoder) { [_encoder endEncoding]; _encoder = nil; }
+  _shadowMode = false;
+  // Re-open the scene pass with a fresh CLEAR — the shadow pre-pass runs BEFORE
+  // the opaque loop, so the scene starts empty (mirrors beginFrame's clear; the
+  // earlier beginFrame encoder we ended above did a redundant, harmless clear).
+  _passDesc = _scenePassDesc;
+  _scenePassDesc.colorAttachments[0].loadAction = MTLLoadActionClear;
+  _scenePassDesc.colorAttachments[0].clearColor =
+      MTLClearColorMake(_clearR, _clearG, _clearB, _clearA);
+  _scenePassDesc.depthAttachment.loadAction = MTLLoadActionClear;
+  _scenePassDesc.depthAttachment.clearDepth = 1.0;
+  _scenePassDesc.stencilAttachment.loadAction = MTLLoadActionClear;
+  _scenePassDesc.stencilAttachment.clearStencil = 0;
   _encoder = [_cmdBuffer renderCommandEncoderWithDescriptor:_scenePassDesc];
   if (_encoder) {
     [_encoder setViewport:_viewport];
@@ -1873,6 +1978,13 @@ fragment OITFragOut vbo_fragment_oit(VBOVertexOut in [[stage_in]])
   o.reveal = c.a;
   return o;
 }
+
+// Depth-only fragment for the shadow pre-pass: no color attachment, the
+// rasterizer writes window depth implicitly from vbo_vertex's clip position
+// (which in shadow mode is light-clip). Used by the depth-only VBO pipelines.
+fragment void vbo_fragment_shadow(VBOVertexOut in [[stage_in]])
+{
+}
 )";
 
   NSError* error = nil;
@@ -1888,6 +2000,7 @@ fragment OITFragOut vbo_fragment_oit(VBOVertexOut in [[stage_in]])
   _vboFragmentFunc = [lib newFunctionWithName:@"vbo_fragment"];
   _vboVertexUnlitFunc = [lib newFunctionWithName:@"vbo_vertex_unlit"];
   _vboFragmentUnlitFunc = [lib newFunctionWithName:@"vbo_fragment_unlit"];
+  _vboFragmentShadowFunc = [lib newFunctionWithName:@"vbo_fragment_shadow"];
   if (!_vboVertexFunc || !_vboFragmentFunc) {
     NSLog(@"RendererMetal: VBO shader functions not found");
     return;
@@ -1999,6 +2112,52 @@ fragment OITFragOut vbo_fragment_oit(VBOVertexOut in [[stage_in]])
         oitPipelineForVD(mkvd(MTLVertexFormatUChar4Normalized, 28));
     _vboOitPipelineFloat = oitPipelineForVD(mkvd(MTLVertexFormatFloat4, 40));
   }
+
+  // Depth-only shadow pipelines (light-POV pre-pass) for the common layouts.
+  buildShadowPipelines();
+}
+
+// Depth-only VBO pipeline for the shadow pre-pass: single-sample, Depth32Float,
+// NO color attachment (the void fragment writes only rasterizer depth). Mirrors
+// oitPipelineForVD but for the light-POV depth map.
+id<MTLRenderPipelineState> RendererMetal::shadowPipelineForVD(
+    MTLVertexDescriptor* vd)
+{
+  if (!_vboVertexFunc || !_vboFragmentShadowFunc) return nil;
+  MTLRenderPipelineDescriptor* p = [[MTLRenderPipelineDescriptor alloc] init];
+  p.vertexFunction = _vboVertexFunc;
+  p.fragmentFunction = _vboFragmentShadowFunc;
+  p.vertexDescriptor = vd;
+  p.rasterSampleCount = 1;  // shadow pass is single-sample (scene is MSAA)
+  p.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;  // NOT _Stencil8
+  // No colorAttachments[0] pixel format: depth-only pass.
+  NSError* e = nil;
+  id<MTLRenderPipelineState> ps =
+      [_device newRenderPipelineStateWithDescriptor:p error:&e];
+  if (!ps) NSLog(@"RendererMetal: VBO shadow pipeline failed: %@", e);
+  return ps;
+}
+
+void RendererMetal::buildShadowPipelines()
+{
+  if (_vboShadowPipelineUByte) return;
+  if (!_vboVertexFunc || !_vboFragmentShadowFunc) return;
+  auto mkvd = [](MTLVertexFormat colorFmt,
+                 NSUInteger strideBytes) -> MTLVertexDescriptor* {
+    MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+    vd.attributes[0].format = MTLVertexFormatFloat3;
+    vd.attributes[0].offset = 0;  vd.attributes[0].bufferIndex = 0;
+    vd.attributes[1].format = MTLVertexFormatFloat3;
+    vd.attributes[1].offset = 12; vd.attributes[1].bufferIndex = 0;
+    vd.attributes[2].format = colorFmt;
+    vd.attributes[2].offset = 24; vd.attributes[2].bufferIndex = 0;
+    vd.layouts[0].stride = strideBytes;
+    vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+    return vd;
+  };
+  _vboShadowPipelineUByte =
+      shadowPipelineForVD(mkvd(MTLVertexFormatUChar4Normalized, 28));
+  _vboShadowPipelineFloat = shadowPipelineForVD(mkvd(MTLVertexFormatFloat4, 40));
 }
 
 id<MTLRenderPipelineState> RendererMetal::oitPipelineForVD(
@@ -2092,8 +2251,21 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   bool unlit = (normalOffset < 0) || (mode == PrimitiveType::Points);
   id<MTLRenderPipelineState> pipeline = nil;
 
+  // Shadow pre-pass: route lit geometry to the depth-only shadow pipelines
+  // (light VP already loaded). Lines/ribbon/dots don't cast meaningful shadows.
+  if (_shadowMode) {
+    if (unlit) return;
+    if (posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
+      if (colorType == 0 && stride == 28) pipeline = _vboShadowPipelineUByte;
+      else if (colorType == 1 && stride == 40) pipeline = _vboShadowPipelineFloat;
+    }
+    if (!pipeline) pipeline = shadowPipelineForVD(vd); // e.g. surface stride 44
+    if (!pipeline) return;
+  }
+
   // Check if layout matches pre-built pipelines
-  if (!unlit && posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
+  if (!_shadowMode && !unlit && posOffset == 0 && normalOffset == 12 &&
+      colorOffset == 24) {
     if (_oitActive) {
       // Transparent pass: route lit common layouts to the OIT MRT pipelines.
       if (colorType == 0 && stride == 28) pipeline = _vboOitPipelineUByte;
@@ -2149,7 +2321,9 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   [_encoder setRenderPipelineState:pipeline];
 
   // Apply depth/stencil
-  if (_oitActive) {
+  if (_shadowMode) {
+    [_encoder setDepthStencilState:_shadowDepthState]; // LESS + write (light POV)
+  } else if (_oitActive) {
     MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
     d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque, no write
     d.depthWriteEnabled = NO;
@@ -2236,7 +2410,18 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   // Select or create pipeline (same logic as drawVBO)
   id<MTLRenderPipelineState> pipeline = nil;
   bool unlit = (normalOffset < 0);
-  if (!unlit && posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
+  // Shadow pre-pass: depth-only pipeline (e.g. surface stride 44 -> one-off).
+  if (_shadowMode) {
+    if (unlit) return;
+    if (posOffset == 0 && normalOffset == 12 && colorOffset == 24) {
+      if (colorType == 0 && stride == 28) pipeline = _vboShadowPipelineUByte;
+      else if (colorType == 1 && stride == 40) pipeline = _vboShadowPipelineFloat;
+    }
+    if (!pipeline) pipeline = shadowPipelineForVD(vd);
+    if (!pipeline) return;
+  }
+  if (!_shadowMode && !unlit && posOffset == 0 && normalOffset == 12 &&
+      colorOffset == 24) {
     if (_oitActive) {
       if (colorType == 0 && stride == 28) pipeline = _vboOitPipelineUByte;
       else if (colorType == 1 && stride == 40) pipeline = _vboOitPipelineFloat;
@@ -2282,7 +2467,9 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
 
   [_encoder setRenderPipelineState:pipeline];
 
-  if (_oitActive) {
+  if (_shadowMode) {
+    [_encoder setDepthStencilState:_shadowDepthState];
+  } else if (_oitActive) {
     MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
     d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque, no write
     d.depthWriteEnabled = NO;
@@ -2467,6 +2654,18 @@ fragment SphereOITOut sphere_impostor_fragment_oit(SphereVOut in [[stage_in]],
   out.depth = depth;
   return out;
 }
+
+// Shadow pre-pass: depth-only. u.projection is the light VP (eye space), so the
+// ray-cast intersection's depth is the light-space window depth. Reusing the
+// same ray-cast keeps the analytic round silhouette and self-consistency with
+// the receiver (which reconstructs the same camera-near point).
+struct SphereShadowOut { float depth [[depth(any)]]; };
+fragment SphereShadowOut sphere_impostor_fragment_shadow(
+    SphereVOut in [[stage_in]], constant SphereU& u [[buffer(1)]]) {
+  float3 rgb; float a; float depth;
+  sphere_shade(in, u, rgb, a, depth);  // discards on ray miss
+  SphereShadowOut out; out.depth = depth; return out;
+}
 )";
 
 void RendererMetal::buildImpostorPipelines()
@@ -2529,6 +2728,18 @@ void RendererMetal::buildImpostorPipelines()
     if (!_sphereOitPipeline)
       NSLog(@"RendererMetal: sphere OIT pipeline failed: %@", err);
   }
+
+  // Shadow-map variant: depth-only, single-sample (no color, Depth32Float).
+  id<MTLFunction> sfn = [lib newFunctionWithName:@"sphere_impostor_fragment_shadow"];
+  if (sfn) {
+    MTLRenderPipelineDescriptor* sp = [[MTLRenderPipelineDescriptor alloc] init];
+    sp.vertexFunction = vfn; sp.fragmentFunction = sfn; sp.vertexDescriptor = vd;
+    sp.rasterSampleCount = 1;
+    sp.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    _sphereShadowPipeline = [_device newRenderPipelineStateWithDescriptor:sp error:&err];
+    if (!_sphereShadowPipeline)
+      NSLog(@"RendererMetal: sphere shadow pipeline failed: %@", err);
+  }
 }
 
 void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
@@ -2539,6 +2750,7 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
   buildImpostorPipelines();
   if (!_sphereImpostorPipeline) return;
   if (_oitActive && !_sphereOitPipeline) return; // no OIT variant: skip
+  if (_shadowMode && !_sphereShadowPipeline) return; // can't cast: skip safely
 
   // Only the canonical packing (pos@0, color@16, rightUp@20 Float, stride 24)
   // is handled by the prebuilt pipeline. Log and bail otherwise (revisit if hit).
@@ -2565,7 +2777,10 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
   NSUInteger vertexCount = call.stride ? (call.dataSize / call.stride) : 0;
   if (vertexCount < 3) return;
 
-  if (_oitActive) {
+  if (_shadowMode) {
+    [_encoder setRenderPipelineState:_sphereShadowPipeline];
+    [_encoder setDepthStencilState:_shadowDepthState]; // LESS + write (light POV)
+  } else if (_oitActive) {
     [_encoder setRenderPipelineState:_sphereOitPipeline];
     MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
     d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque
@@ -2838,6 +3053,16 @@ fragment CylOITOut cyl_impostor_fragment_oit(CylVOut in [[stage_in]],
   o.depth = depth;
   return o;
 }
+
+// Shadow pre-pass: depth-only. u.projection is the light VP, so the ray-cast
+// intersection writes light-space window depth (cap geometry preserved).
+struct CylShadowOut { float depth [[depth(any)]]; };
+fragment CylShadowOut cyl_impostor_fragment_shadow(CylVOut in [[stage_in]],
+    constant CylU& u [[buffer(1)]]) {
+  float3 rgb; float a; float depth;
+  cyl_shade(in, u, rgb, a, depth);  // discards on ray miss
+  CylShadowOut o; o.depth = depth; return o;
+}
 )";
 
 void RendererMetal::buildCylinderImpostorPipeline(
@@ -2913,6 +3138,18 @@ void RendererMetal::buildCylinderImpostorPipeline(
     if (!_cylinderOitPipeline)
       NSLog(@"RendererMetal: cyl OIT pipeline failed: %@", err);
   }
+
+  // Shadow-map variant: depth-only, single-sample.
+  id<MTLFunction> sfn = [lib newFunctionWithName:@"cyl_impostor_fragment_shadow"];
+  if (sfn) {
+    MTLRenderPipelineDescriptor* sp = [[MTLRenderPipelineDescriptor alloc] init];
+    sp.vertexFunction = vfn; sp.fragmentFunction = sfn; sp.vertexDescriptor = vd;
+    sp.rasterSampleCount = 1;
+    sp.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+    _cylinderShadowPipeline = [_device newRenderPipelineStateWithDescriptor:sp error:&err];
+    if (_cylinderShadowPipeline) _cylinderShadowStride = call.stride;
+    else NSLog(@"RendererMetal: cyl shadow pipeline failed: %@", err);
+  }
 }
 
 void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
@@ -2932,6 +3169,7 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
   buildCylinderImpostorPipeline(call);
   if (!_cylinderImpostorPipeline) return;
   if (_oitActive && !_cylinderOitPipeline) return; // no OIT variant: skip
+  if (_shadowMode && !_cylinderShadowPipeline) return; // can't cast: skip safely
 
   id<MTLBuffer> vbo = nil, ibo = nil;
   { auto it = _vboCache.find(call.vdata);
@@ -2946,7 +3184,10 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
            if (ibo) _vboCache[call.idata] = ibo; } }
   if (!vbo || !ibo) return;
 
-  if (_oitActive) {
+  if (_shadowMode) {
+    [_encoder setRenderPipelineState:_cylinderShadowPipeline];
+    [_encoder setDepthStencilState:_shadowDepthState]; // LESS + write (light POV)
+  } else if (_oitActive) {
     [_encoder setRenderPipelineState:_cylinderOitPipeline];
     MTLDepthStencilDescriptor* dd = [[MTLDepthStencilDescriptor alloc] init];
     dd.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque
@@ -3120,6 +3361,9 @@ void RendererMetal::drawBezierTubes(const void* cp, size_t dataSize,
     float radius, float r, float g, float b)
 {
   if (!cp || dataSize < 48) return;       // need at least one 4-point patch
+  // The tube has no depth-only shadow pipeline yet; skip casting in shadow mode
+  // (it still receives shadows). Avoids a pipeline/attachment mismatch crash.
+  if (_shadowMode) return;
   ensureEncoder();
   if (!_encoder) return;
   buildBezierTubePipeline();

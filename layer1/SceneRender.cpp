@@ -1836,6 +1836,39 @@ static void SceneRenderPostProcessStack(PyMOLGlobals* G, const GLFramebufferConf
   SceneRenderAA(G, parentImage);
 }
 
+// Build the directional key light's view*projection in EYE space, so the post
+// pass can reuse its existing eye-space position reconstruction (no camera
+// inverse needed). The light dir matches the shading key light (eye-space
+// normalize(0.4,0.4,1)). We look down -Ldir at the scene center (transformed to
+// eye space by the camera modelview), with an orthographic frustum sized to the
+// scene radius. Loaded as the renderer's PROJECTION while MODELVIEW stays the
+// camera modelview, so vbo_vertex's projection*(modelview*model) yields light
+// clip for model-space vertices.
+static glm::mat4 SceneBuildLightViewProjEye(PyMOLGlobals* G)
+{
+  float mn[3], mx[3];
+  glm::vec3 centerEye(0.0f);
+  float radius = 10.0f;
+  if (ExecutiveGetExtent(G, "all", mn, mx, true, -1, false)) {
+    glm::vec3 cw(
+        (mn[0] + mx[0]) * 0.5f, (mn[1] + mx[1]) * 0.5f, (mn[2] + mx[2]) * 0.5f);
+    glm::vec3 dw(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]);
+    radius = 0.5f * glm::length(dw) * 1.2f; // 1.2x safety margin
+    glm::mat4 mv = glm::make_mat4(SceneGetModelViewMatrixPtr(G)); // world->eye
+    centerEye = glm::vec3(mv * glm::vec4(cw, 1.0f));
+  }
+  if (radius < 1.0f)
+    radius = 1.0f;
+  glm::vec3 Ldir = glm::normalize(glm::vec3(0.4f, 0.4f, 1.0f)); // toward light
+  glm::vec3 up = (Ldir.z * Ldir.z < 0.81f) ? glm::vec3(0, 1, 0)
+                                           : glm::vec3(1, 0, 0);
+  glm::vec3 lightPos = centerEye + Ldir * (radius * 2.0f);
+  glm::mat4 lightView = glm::lookAt(lightPos, centerEye, up);
+  glm::mat4 lightProj =
+      glm::ortho(-radius, radius, -radius, radius, 0.05f, radius * 4.0f);
+  return lightProj * lightView;
+}
+
 /*========================================================================
  * SceneRenderMetal: Lightweight render path for Metal backend.
  *
@@ -1970,6 +2003,29 @@ void SceneRenderMetal(PyMOLGlobals* G)
       I->AlphaCGO = CGONew(G);
   } else {
     CGOFree(I->AlphaCGO);
+  }
+
+  // --- Shadow map pre-pass: render the opaque geometry from the light's POV
+  // into the depth map, so the post pass can PCF-sample real cast shadows. The
+  // light VP is loaded as PROJECTION (camera MODELVIEW kept), the renderer
+  // routes draws to depth-only pipelines, then restores the scene pass. ---
+  if (SettingGetGlobal_b(G, cSetting_metal_shadows)) {
+    glm::mat4 lightVP_eye = SceneBuildLightViewProjEye(G);
+    const float* mvp = SceneGetModelViewMatrixPtr(G);
+    G->Renderer->setLightViewProjEye(glm::value_ptr(lightVP_eye));
+    G->Renderer->matrixMode(0x1701); // PROJECTION = light VP (eye space)
+    G->Renderer->loadMatrixf(glm::value_ptr(lightVP_eye));
+    G->Renderer->matrixMode(0x1700); // MODELVIEW = camera modelview
+    G->Renderer->loadMatrixf(mvp);
+    G->Renderer->beginShadowPass();
+    SceneRenderAll(G, &context, normal, nullptr, RenderPass::Opaque, false, 0.0f,
+        &I->grid, 0, SceneRenderWhich::All, SceneRenderOrder::GadgetsLast);
+    G->Renderer->endShadowPass();
+    // Restore the camera matrices for the normal scene pass.
+    G->Renderer->matrixMode(0x1701);
+    G->Renderer->loadMatrixf(SceneGetProjectionMatrixPtr(G));
+    G->Renderer->matrixMode(0x1700);
+    G->Renderer->loadMatrixf(mvp);
   }
 
   // --- Render objects: opaque first, then transparent via order-independent

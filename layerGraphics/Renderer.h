@@ -287,6 +287,15 @@ public:
   virtual void beginTransparentOIT() {}
   virtual void endTransparentOIT() {}
 
+  // Real shadow map. SceneRenderMetal sets the light's eye-space view-projection
+  // via setLightViewProjEye, then replays the opaque geometry between
+  // beginShadowPass/endShadowPass with the light VP loaded (matrixMode/
+  // loadMatrixf); draws route to depth-only pipelines writing the light-POV
+  // depth map, which the post pass PCF-samples. Default: no-op (GL unaffected).
+  virtual void beginShadowPass() {}
+  virtual void endShadowPass() {}
+  virtual void setLightViewProjEye(const float* m) {}
+
   // GPU-tessellated Bezier tubes ("tube cartoon"). controlPoints is a tightly
   // packed array of cubic Bezier patches: 4 Float3 control points each
   // (P0,P1,P2,P3), dataSize bytes total. radius = tube radius; r/g/b = color.
