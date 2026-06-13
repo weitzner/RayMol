@@ -25,6 +25,14 @@ struct CCGORenderer {
   // so the Metal cylinder draw can pass it as a uniform. Default =
   // cCylShaderBothCapsRound (0x0F).
   float metalCylCapConst = 15.0f;
+  // Metal impostor path: the cylinder shader's `uni_radius` uniform. Sticks
+  // bake their physical radius into attr_radius and leave this 0, but
+  // measurement dashes (distances/H-bonds, dihedrals, angles) bake a 1.0
+  // placeholder into attr_radius and deliver the real radius via the
+  // CYLINDER_WIDTH_FOR_DISTANCES special op (which on GL sets uni_radius).
+  // With no GL shader on Metal we capture it here so the draw can scale
+  // attr_radius. Reset to 0 when the cylinder shader is (re)enabled.
+  float metalCylUniRadius = 0.0f;
 };
 
 bool CGORendererInit(PyMOLGlobals* G);

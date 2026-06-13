@@ -178,7 +178,10 @@ static void drawCylinderImpostorsViaMetal(CCGORenderer* I, VertexBufferGL* vbo,
       call.flagsIsFloat = (d.m_format == VertexFormat::Float) ? 1 : 0;
     }
   }
-  call.uniRadius = 0.0f; // sticks bake the radius into attr_radius (uni_radius=0)
+  // Sticks bake their radius into attr_radius and leave uniRadius 0; dashes
+  // (distances/dihedrals/angles) supply the real radius via the
+  // CYLINDER_WIDTH_FOR_DISTANCES special op, captured into metalCylUniRadius.
+  call.uniRadius = I->metalCylUniRadius;
   call.capConst = I->metalCylCapConst; // captured from CGO_VERTEX_ATTRIBUTE_1F
   call.noFlatCaps = 1;   // round caps (matches Get_CylinderShader GL default)
   call.ortho = SettingGetGlobal_b(G, cSetting_ortho) ? 1 : 0;
@@ -1539,7 +1542,20 @@ static void CGO_gl_special(CCGORenderer* I, CGO_op_data pc)
 
     line_width = SceneGetDynamicLineWidth(I->info, line_width);
 
-    if (shaderPrg) {
+    if (I->G->Renderer) {
+      // Metal path: no GL shader to set uni_radius on. RepDistDash (and
+      // RepDihedral/RepAngle) bake a 1.0 placeholder into attr_radius and rely
+      // on this op to supply the real dash radius, so capture it for the
+      // subsequent cylinder-impostor draw. Mirrors the GL Set1f below.
+      if (radius == 0.0F) {
+        float dash_size =
+            SettingGet_f(I->G, csSetting, objSetting, cSetting_dash_width);
+        I->metalCylUniRadius = SceneGetLineWidthForCylindersStatic(
+            I->G, I->info, line_width, dash_size);
+      } else {
+        I->metalCylUniRadius = radius;
+      }
+    } else if (shaderPrg) {
       if (radius == 0.0F) {
         float dash_size =
             SettingGet_f(I->G, csSetting, objSetting, cSetting_dash_width);
@@ -1883,6 +1899,11 @@ static void CGO_gl_enable(CCGORenderer* I, CGO_op_data pc)
             I->info ? I->info->pass : RenderPass::Antialias);
         break;
       case GL_CYLINDER_SHADER:
+        // Metal path: uni_radius is per-rep state. Reset it at shader-enable so
+        // sticks (which never emit CYLINDER_WIDTH_FOR_DISTANCES) use attr_radius
+        // directly; a following dash special op sets it before that rep's draw.
+        if (I->G->Renderer)
+          I->metalCylUniRadius = 0.0f;
         shaderMgr->Enable_CylinderShader(
             I->info ? I->info->pass : RenderPass::Antialias);
         break;
