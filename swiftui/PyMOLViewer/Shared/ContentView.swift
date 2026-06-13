@@ -184,6 +184,13 @@ struct ContentView: View {
                     panelCollapsed = true
                     engine.sequenceVisible = false
                 }
+                // Test affordance (screenshot harness): force the panel open so
+                // the responsive layout can be captured without a tap, which
+                // simctl can't synthesize. PYMOL_AUTOPANEL=open|closed.
+                if let p = ProcessInfo.processInfo.environment["PYMOL_AUTOPANEL"] {
+                    panelCollapsed = (p != "open")
+                    engine.sequenceVisible = (p == "open")
+                }
             }
         }
     }
