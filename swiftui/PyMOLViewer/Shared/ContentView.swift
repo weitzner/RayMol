@@ -101,33 +101,45 @@ struct ContentView: View {
     // exists so it doesn't occupy a top-level slot.
     private let kShowChatTab = false
 
-    // Adaptive control surface: the controls follow the LONG axis so the 3D
-    // viewport stays maximal in both orientations — a resizable side column in
-    // landscape, a resizable bottom panel in portrait. `panelFrac` (committed at
-    // each drag end) is the panel's share of the short axis.
-    @State private var panelFrac: CGFloat = 0.33
-    @State private var committedFrac: CGFloat = 0.33
+    // Adaptive control surface. Placement + sizing depend on size class AND
+    // orientation: a resizable SIDE column only on a regular-width iPad in
+    // landscape (where there's horizontal surplus); otherwise — portrait, or any
+    // COMPACT-width device (iPhone) — a resizable BOTTOM panel, so the 3D viewport
+    // stays maximal. `panelFrac` (committed at each drag end) is the panel's share
+    // of the short axis; `panelCollapsed` hides it for a full-bleed viewport.
+    @Environment(\.horizontalSizeClass) private var hSize
+    @State private var panelFrac: CGFloat = 0.28
+    @State private var committedFrac: CGFloat = 0.28
+    @State private var panelCollapsed = false
+    @State private var didConfigForCompact = false
     @AppStorage("ipadGestureCoachSeen") private var gestureCoachSeen = false
     @State private var showGestureLegend = false
 
     private var iPadOSLayout: some View {
         NavigationStack {
             GeometryReader { geo in
+                let compact = hSize == .compact
                 let landscape = geo.size.width > geo.size.height
-                let total = landscape ? geo.size.width : geo.size.height
-                let panel = min(max(total * panelFrac, landscape ? 300 : 200), total * 0.6)
+                let side = !compact && landscape   // side column only on a wide iPad
+                let total = side ? geo.size.width : geo.size.height
+                let panelSize = min(max(total * panelFrac, side ? 280 : 200),
+                                    total * (side ? 0.45 : 0.6))
                 Group {
-                    if landscape {
+                    if side {
                         HStack(spacing: 0) {
                             viewportView
-                            resizeDivider(landscape: true, total: geo.size.width)
-                            panelContent.frame(width: panel)
+                            if !panelCollapsed {
+                                resizeDivider(landscape: true, total: geo.size.width)
+                                panelContent.frame(width: panelSize)
+                            }
                         }
                     } else {
                         VStack(spacing: 0) {
                             viewportView
-                            resizeDivider(landscape: false, total: geo.size.height)
-                            panelContent.frame(height: panel)
+                            if !panelCollapsed {
+                                resizeDivider(landscape: false, total: geo.size.height)
+                                panelContent.frame(height: panelSize)
+                            }
                         }
                     }
                 }
@@ -135,9 +147,9 @@ struct ContentView: View {
                     if !gestureCoachSeen && !engine.objects.isEmpty { gestureCoachOverlay }
                 }
             }
-            .navigationTitle("PyMOL")
+            .navigationTitle(hSize == .compact ? "" : "PyMOL")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { iosOpenToolbar; iosViewToolbar; iosExportToolbar }
+            .toolbar { iosOpenToolbar; iosViewToolbar; iosPanelToggle; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -164,6 +176,29 @@ struct ContentView: View {
         .preferredColorScheme(.dark)   // consistent dark chrome (no white nav bar)
         .onAppear {
             initializeEngine()
+            // iPhone (compact): start full-screen with the panel collapsed and
+            // the 64pt sequence strip off — the controls are a peek to expand.
+            if !didConfigForCompact {
+                didConfigForCompact = true
+                if hSize == .compact {
+                    panelCollapsed = true
+                    engine.sequenceVisible = false
+                }
+            }
+        }
+    }
+
+    // Panel show/hide toggle — lets the viewport go full-bleed. In the toolbar
+    // (standard inspector-toggle spot) so it never conflicts with the resize
+    // divider's drag gesture.
+    private var iosPanelToggle: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { panelCollapsed.toggle() }
+            } label: {
+                Image(systemName: panelCollapsed ? "square.split.1x2" : "square.split.1x2.fill")
+            }
+            .accessibilityLabel(panelCollapsed ? "Show controls" : "Hide controls")
         }
     }
 
@@ -248,12 +283,13 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Touch gestures").font(.headline)
             ForEach(gestureHints) { h in
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Image(systemName: h.icon)
-                        .frame(width: 26).foregroundStyle(.tint)
+                        .frame(width: 24).foregroundStyle(.tint)
                     Text(h.title).fontWeight(.medium)
-                        .frame(width: 96, alignment: .leading)
+                        .frame(width: 78, alignment: .leading)
                     Text(h.detail).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
                 .font(.subheadline)
