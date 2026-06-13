@@ -6,6 +6,9 @@ import Combine
 #if canImport(AppKit)
 import AppKit
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Representation inspector: polled state models
 // (Inlined here rather than a separate file so they're in both app targets
@@ -806,6 +809,10 @@ private func rgb01List(_ color: Color) -> String {
 #if canImport(AppKit)
     let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor.white
     return String(format: "[%.3f,%.3f,%.3f]", ns.redComponent, ns.greenComponent, ns.blueComponent)
+#elseif canImport(UIKit)
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+    return String(format: "[%.3f,%.3f,%.3f]", r, g, b)
 #else
     return "[1,1,1]"
 #endif

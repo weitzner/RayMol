@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 #if canImport(AppKit)
 import AppKit
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct ContentView: View {
     @EnvironmentObject var engine: PyMOLEngine
@@ -92,35 +95,137 @@ struct ContentView: View {
     @State private var selectedTab = 0
 
     private var iPadOSLayout: some View {
-        VStack(spacing: 0) {
-            // Main viewport
-            MetalViewport()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Main viewport
+                MetalViewport()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if engine.sequenceVisible {
-                SequencePanel()
-                    .frame(height: 44)
+                if engine.sequenceVisible {
+                    SequencePanel()
+                        .frame(height: 44)
+                }
+
+                // Bottom panel area (swipeable tabs)
+                TabView(selection: $selectedTab) {
+                    CommandPanel()
+                        .tabItem { Label("Console", systemImage: "terminal") }
+                        .tag(0)
+
+                    ObjectPanel()
+                        .tabItem { Label("Objects", systemImage: "cube") }
+                        .tag(1)
+
+                    ChatPanel()
+                        .tabItem { Label("AI Chat", systemImage: "bubble.left.and.bubble.right") }
+                        .tag(2)
+                }
+                .frame(height: 250)
             }
-
-            // Bottom panel area (swipeable tabs)
-            TabView(selection: $selectedTab) {
-                CommandPanel()
-                    .tabItem { Label("Console", systemImage: "terminal") }
-                    .tag(0)
-
-                ObjectPanel()
-                    .tabItem { Label("Objects", systemImage: "cube") }
-                    .tag(1)
-
-                ChatPanel()
-                    .tabItem { Label("AI Chat", systemImage: "bubble.left.and.bubble.right") }
-                    .tag(2)
-            }
-            .frame(height: 250)
+            .navigationTitle("PyMOL")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { iosExportToolbar }
         }
         .onAppear {
             initializeEngine()
         }
+    }
+
+    // iPad export/share menu (the macOS Export menu lives in the window toolbar;
+    // iPadOSLayout has its own NavigationStack toolbar). Renders the Metal frame
+    // to a temp PNG/PSE via the shared engine, then copies to the pasteboard or
+    // hands off to the system share sheet (Save to Files / Mail / AirDrop / …).
+    private var iosExportToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Menu {
+                    Button("Current View Size") { iosShareImage(scale: 1) }
+                    Button("2× View") { iosShareImage(scale: 2) }
+                    Button("4K · 3840 × 2160") { iosShareImage(size: CGSize(width: 3840, height: 2160)) }
+                } label: {
+                    Label("Share Image", systemImage: "photo")
+                }
+                Button {
+                    iosCopyImage()
+                } label: {
+                    Label("Copy Image", systemImage: "doc.on.clipboard")
+                }
+                Toggle(isOn: $exportRayTraced) {
+                    Label("Ray-traced (AO + shadows)", systemImage: "sparkles")
+                }
+                Divider()
+                Button {
+                    iosShareSession()
+                } label: {
+                    Label("Share Session (.pse)", systemImage: "doc.text")
+                }
+                Toggle(isOn: $engine.sequenceVisible) {
+                    Label("Sequence", systemImage: "textformat.abc")
+                }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+        }
+    }
+
+    // MARK: iPad export helpers
+
+    private func iosExportWH(scale: CGFloat) -> (Int, Int) {
+        var s = engine.viewportPixelSize
+        if s.width < 1 || s.height < 1 { s = CGSize(width: 1600, height: 1200) }
+        return (Int((s.width * scale).rounded()), Int((s.height * scale).rounded()))
+    }
+
+    private func iosRenderPNG(width: Int, height: Int) -> URL? {
+        guard width > 0, height > 0 else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("PyMOL.png")
+        engine.renderHiResPNG(url.path, width: width, height: height,
+                              rayTraced: exportRayTraced ? 1 : 0)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private func iosShareImage(scale: CGFloat) {
+        let (w, h) = iosExportWH(scale: scale)
+        if let url = iosRenderPNG(width: w, height: h) { presentShareSheet(url) }
+    }
+
+    private func iosShareImage(size: CGSize) {
+        if let url = iosRenderPNG(width: Int(size.width), height: Int(size.height)) {
+            presentShareSheet(url)
+        }
+    }
+
+    private func iosCopyImage() {
+        let (w, h) = iosExportWH(scale: 2)
+        if let url = iosRenderPNG(width: w, height: h),
+           let img = UIImage(contentsOfFile: url.path) {
+            UIPasteboard.general.image = img
+        }
+    }
+
+    private func iosShareSession() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("PyMOL.pse")
+        engine.runPython("from pymol import cmd as _c; _c.save(r'''\(url.path)''')")
+        if FileManager.default.fileExists(atPath: url.path) { presentShareSheet(url) }
+    }
+
+    // Present a UIActivityViewController from the top-most VC, anchored centered
+    // (iPad requires a popover source or it throws). Avoids hosting the activity
+    // controller inside a SwiftUI .sheet (which crashes without a source view).
+    private func presentShareSheet(_ url: URL) {
+        guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).first,
+              let root = scene.keyWindow?.rootViewController else { return }
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let pop = av.popoverPresentationController {
+            pop.sourceView = top.view
+            pop.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY,
+                                    width: 0, height: 0)
+            pop.permittedArrowDirections = []
+        }
+        top.present(av, animated: true)
     }
     #endif
 
