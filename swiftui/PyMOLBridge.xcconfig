@@ -8,13 +8,15 @@ PYMOL_ROOT = $(SRCROOT)/..
 
 // Platform-conditional build directories
 PYMOL_BUILD_MACOS = $(SRCROOT)/../build_macos_swiftui
+// PYMOL_BUILD_IOS = iphonesimulator core; PYMOL_BUILD_IOS_DEVICE = iphoneos core
 PYMOL_BUILD_IOS = $(SRCROOT)/../build_ios
+PYMOL_BUILD_IOS_DEVICE = $(SRCROOT)/../build_ios_device
 
 // --- Library search paths (platform-conditional) ---
 // macOS: the NO_OPENGL+Metal core (build_macos_swiftui) + embedded standalone
 // Python 3.13; /opt/homebrew/lib only supplies freetype/png at LINK time.
 LIBRARY_SEARCH_PATHS[sdk=macosx*] = $(PYMOL_BUILD_MACOS) $(SRCROOT)/../deps_macos/python-standalone/python/lib /opt/homebrew/lib
-LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PYMOL_BUILD_IOS)
+LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PYMOL_BUILD_IOS_DEVICE)
 LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PYMOL_BUILD_IOS)
 
 // Embedded Python lives in the .app's Contents/Resources/python; the app must
@@ -33,7 +35,7 @@ PYMOL_INCLUDE_FLAGS = $(PYMOL_INCLUDE_FLAGS_COMMON) $(PYMOL_PYTHON_INC)
 
 // Generated shader headers (platform-conditional build dir)
 PYMOL_GENERATED_FLAGS[sdk=macosx*] = -I$(PYMOL_BUILD_MACOS)/generated
-PYMOL_GENERATED_FLAGS[sdk=iphoneos*] = -I$(PYMOL_BUILD_IOS)/generated
+PYMOL_GENERATED_FLAGS[sdk=iphoneos*] = -I$(PYMOL_BUILD_IOS_DEVICE)/generated
 PYMOL_GENERATED_FLAGS[sdk=iphonesimulator*] = -I$(PYMOL_BUILD_IOS)/generated
 
 // On iOS, define _PYMOL_NO_OPENGL and _PYMOL_IOS to compile out GL code (Metal-only)
@@ -44,12 +46,14 @@ OTHER_CPLUSPLUSFLAGS = $(inherited) $(PYMOL_INCLUDE_FLAGS) $(PYMOL_GENERATED_FLA
 
 // --- Linker flags ---
 // iOS cross-compiled dependencies
+// PYMOL_IOS_DEPS = iphonesimulator libs (platform 7); _DEVICE = iphoneos (platform 2)
 PYMOL_IOS_DEPS = $(SRCROOT)/../deps_ios/install
+PYMOL_IOS_DEPS_DEVICE = $(SRCROOT)/../deps_ios/install_device
 
 // Inject library search paths via -L in OTHER_LDFLAGS to take precedence
 // over the hardcoded LIBRARY_SEARCH_PATHS in the project file.
 PYMOL_LIB_PATH_FLAGS[sdk=macosx*] =
-PYMOL_LIB_PATH_FLAGS[sdk=iphoneos*] = -L$(PYMOL_BUILD_IOS) -L$(PYMOL_IOS_DEPS)/lib
+PYMOL_LIB_PATH_FLAGS[sdk=iphoneos*] = -L$(PYMOL_BUILD_IOS_DEVICE) -L$(PYMOL_IOS_DEPS_DEVICE)/lib
 PYMOL_LIB_PATH_FLAGS[sdk=iphonesimulator*] = -L$(PYMOL_BUILD_IOS) -L$(PYMOL_IOS_DEPS)/lib
 
 // Python.xcframework dylib paths (linked directly to avoid macOS Homebrew Python being found
