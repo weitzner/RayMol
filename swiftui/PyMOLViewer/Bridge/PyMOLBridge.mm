@@ -27,6 +27,7 @@ typedef void* PyMOLHandle;
 extern "C" {
   PyObject *PyInit__cmd(void);
   void init_cmd(void);
+  PyObject *PyInit__champ(void);  // chempy.champ._champ (statically linked)
 }
 
 // C++-linkage forward decl (defined in layer1/SceneRender.cpp). Declared
@@ -72,6 +73,10 @@ void PyMOLBridge_InitPython(PyMOLHandle h, const char *resourcePath)
 
     // Register the statically-linked _cmd builtin BEFORE init (top-level name only).
     PyImport_AppendInittab("_cmd", PyInit__cmd);
+    // Same for _champ (chemistry/charge assignment for vacuum electrostatics
+    // etc.). inittab only takes top-level names; chempy imports it as the
+    // submodule chempy.champ._champ, so we pre-seed sys.modules after init.
+    PyImport_AppendInittab("_champ", PyInit__champ);
 
     NSString *resPath     = [NSString stringWithUTF8String:resourcePath];
     NSString *pythonHome  = [resPath stringByAppendingPathComponent:@"python"];   // contains lib/python3.13
@@ -108,6 +113,17 @@ void PyMOLBridge_InitPython(PyMOLHandle h, const char *resourcePath)
 
     setenv("PYMOL_PATH", [resPath UTF8String], 1);
     setenv("PYMOL_DATA", [dataPath UTF8String], 1);
+
+    // _champ is a TOP-LEVEL builtin (inittab), but chempy/champ/__init__.py does
+    // `from . import _champ` (i.e. imports chempy.champ._champ). Pre-seed
+    // sys.modules so that submodule import resolves to the builtin — otherwise
+    // charge assignment (util.protein_vacuum_esp etc.) raises ImportError.
+    PyRun_SimpleString(
+        "import sys, importlib\n"
+        "try:\n"
+        "    sys.modules.setdefault('chempy.champ._champ', importlib.import_module('_champ'))\n"
+        "except Exception as _e:\n"
+        "    import os; os.write(2, ('[PyMOL] _champ seed failed: %r\\n' % (_e,)).encode())\n");
 
     // NOTE: PInit / PyMOL_Start / stage-1 happen in PyMOLBridge_Start, AFTER the
     // C subsystems exist. Calling them here (before PyMOL_Start) dereferences

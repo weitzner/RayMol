@@ -178,6 +178,19 @@ set(CORE_SOURCES
 # Static library for use by SwiftUI project (and potentially other frontends)
 add_library(pymol_core STATIC ${CORE_SOURCES})
 
+# CHAMP (chempy.champ._champ): chemistry / charge-assignment native module used
+# by vacuum electrostatics, fix_chemistry, etc. Built as an OBJECT library with
+# its OWN include dir (contrib/champ ships os_python.h / vla.h / os_std.h that
+# must NOT shadow the core's same-named headers) and folded into the core static
+# lib so the SwiftUI app — which already links pymol_core — gets PyInit__champ.
+# The bridge registers it via PyImport_AppendInittab("_champ", PyInit__champ).
+file(GLOB CHAMP_OBJ_SOURCES "${PYMOL_ROOT}/contrib/champ/*.c")
+add_library(champ_obj OBJECT ${CHAMP_OBJ_SOURCES})
+target_include_directories(champ_obj PRIVATE
+    ${PYMOL_ROOT}/contrib/champ
+    ${Python3_INCLUDE_DIRS})
+target_sources(pymol_core PRIVATE $<TARGET_OBJECTS:champ_obj>)
+
 # Shared include directories
 set(PYMOL_INCLUDE_DIRS
     ${PYMOL_ROOT}/include
