@@ -22,6 +22,21 @@ import math
 # Screen pick radius (squared, in NDC). Clicks farther than this from any
 # atom's projection are treated as empty space (which clears 'sele').
 _MAX_PICK_NDC2 = 0.0100  # ~0.1 NDC radius
+# Atoms whose screen distance² is within this of the closest are treated as
+# overlapping under the cursor; among them the front-most (min depth) is picked.
+_CLUSTER_NDC2 = 0.0009   # ~0.03 NDC
+
+# Atoms that are actually DRAWN (so a click can't select an invisible atom).
+# Per-rep selectors mirror the visRep bitmask. The catch: `show cartoon`/`ribbon`
+# OR their bit onto EVERY selected atom (incl. solvent), but the cartoon renderer
+# only draws guide/polymer atoms — so cartoon/ribbon are intersected with
+# `(polymer or guide)` (flags independent of visRep). Every other rep draws
+# exactly the atoms carrying its bit. ('labels' omitted — not pickable geometry.)
+# This is strictly better than `not solvent`: a genuinely-shown water (e.g.
+# `show nb_spheres, solvent`) stays pickable via its rep clause.
+_DRAWN_REPS = ('rep spheres or rep sticks or rep lines or rep nb_spheres or '
+               'rep nonbonded or rep surface or rep dots or rep mesh or '
+               'rep ellipsoid or ((rep cartoon or rep ribbon) and (polymer or guide))')
 
 
 def _pickdbg(ndc_x, ndc_y, aspect, best, ncand):
@@ -93,6 +108,7 @@ def pick_at(ndc_x, ndc_y, aspect):
             return
 
         best = None  # (screen_d2, obj, chain, resi, resn, segi, name, sx, sy)
+        cands = []   # (d2, depth, obj, chain, resi, resn, segi, name, sx, sy)
         ncand = 0    # atoms whose projection fell within the pick radius
         _ext = [1e9, -1e9, 1e9, -1e9]  # projected-NDC extent: sx_min,sx_max,sy_min,sy_max
 
@@ -100,13 +116,13 @@ def pick_at(ndc_x, ndc_y, aspect):
             if obj.startswith('_'):
                 continue
             try:
-                # Exclude solvent from picking: get_model(obj) returns EVERY atom
-                # (incl. hidden waters), so the screen-nearest one is often an
-                # invisible water => "wrong/none residue" selected when clicking a
-                # cartoon. (The `visible` selector would be the right filter but
-                # is unreliable on this build — it reports all atoms visible — so
-                # we exclude solvent explicitly, the dominant offender.)
-                model = cmd.get_model('(%s) and not solvent' % obj)
+                # Only consider atoms that are actually DRAWN, so a click can't
+                # select an invisible atom (e.g. a hidden water under a cartoon).
+                # get_model(obj) alone returns EVERY atom; the `visible` selector
+                # over-reports because cartoon/ribbon set their visRep bit on all
+                # atoms (incl. solvent) though only guide atoms draw — hence the
+                # per-rep _DRAWN_REPS filter (see its definition).
+                model = cmd.get_model('(%s) and (%s)' % (obj, _DRAWN_REPS))
             except Exception:
                 continue
             if not model or not model.atom:
@@ -134,9 +150,20 @@ def pick_at(ndc_x, ndc_y, aspect):
                 if d2 > _MAX_PICK_NDC2:
                     continue
                 ncand += 1
-                if best is None or d2 < best[0]:
-                    best = (d2, obj, at.chain or '', at.resi,
-                            at.resn, at.segi or (at.chain or ''), at.name, sx, sy)
+                cands.append((d2, depth, obj, at.chain or '', at.resi,
+                              at.resn, at.segi or (at.chain or ''), at.name, sx, sy))
+
+        # Choose the FRONT-MOST atom among those clustered nearest the click, so
+        # that where atoms overlap on screen we select the one actually visible
+        # (closest to the camera), not whichever projects marginally nearer the
+        # cursor. Atoms within _CLUSTER_NDC2 of the closest are treated as
+        # overlapping; the smallest depth (front-most) wins.
+        if cands:
+            cands.sort(key=lambda c: c[0])           # by screen distance²
+            d2min = cands[0][0]
+            cluster = [c for c in cands if c[0] <= d2min + _CLUSTER_NDC2]
+            c = min(cluster, key=lambda c: c[1])     # front-most (min depth)
+            best = (c[0], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9])
 
         _pickdbg(ndc_x, ndc_y, aspect, best, ncand)
         import os as _os
