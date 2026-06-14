@@ -383,6 +383,12 @@ void RendererMetal::applyDepthStencilState()
   }
 }
 
+void RendererMetal::setInteriorCapColor(float r, float g, float b, bool overrideColor)
+{
+  _capColor[0] = r; _capColor[1] = g; _capColor[2] = b;
+  _capColorOverride = overrideColor;
+}
+
 // ---------------------------------------------------------------------------
 #pragma mark - Frame lifecycle
 // ---------------------------------------------------------------------------
@@ -3189,7 +3195,10 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
                    vertexCount:static_cast<NSUInteger>(vertexCount)];
       [_encoder setRenderPipelineState:_capFillPipeline];
       [_encoder setDepthStencilState:_capFillDSS];
-      const float interior[4] = {0.32f, 0.32f, 0.36f, 1.0f};
+      const float interior[4] = {
+          _capColorOverride ? _capColor[0] : 0.32f,
+          _capColorOverride ? _capColor[1] : 0.32f,
+          _capColorOverride ? _capColor[2] : 0.36f, 1.0f};
       [_encoder setFragmentBytes:interior length:sizeof(interior) atIndex:0];
       [_encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
       [_encoder setCullMode:_cullFaceEnabled ? MTLCullModeBack : MTLCullModeNone];
@@ -3403,7 +3412,10 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
                     indexBufferOffset:0];
       [_encoder setRenderPipelineState:_capFillPipeline];
       [_encoder setDepthStencilState:_capFillDSS];
-      const float interior[4] = {0.32f, 0.32f, 0.36f, 1.0f}; // darkened interior
+      const float interior[4] = {
+          _capColorOverride ? _capColor[0] : 0.32f,
+          _capColorOverride ? _capColor[1] : 0.32f,
+          _capColorOverride ? _capColor[2] : 0.36f, 1.0f}; // darkened interior
       [_encoder setFragmentBytes:interior length:sizeof(interior) atIndex:0];
       [_encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
       // Restore default state for subsequent geometry.
@@ -3442,6 +3454,7 @@ struct SphereU {
   float ortho;          // 1 = orthographic
   float depthZeroToOne; // 1 if clip Z already [0,1]; else apply 0.5+0.5 remap
   float interiorCap;    // 1 = cap the slab cross-section with a solid interior color
+  float4 interiorColor; // rgb cap color; .a > 0.5 => use it (else atom*0.45)
 };
 struct SphereVOut {
   float4 position [[position]];
@@ -3537,7 +3550,8 @@ static void sphere_shade(SphereVOut in, constant SphereU& u,
                                              : (0.5 + 0.5 * fclip.z / fclip.w);
     if (fdepth <= 0.0) discard_fragment();  // whole sphere in front of the slab
     depth = 1e-5;                           // flat disc at the slab plane (front)
-    rgb = in.color.rgb * 0.45;              // darkened solid interior
+    rgb = (u.interiorColor.a > 0.5) ? u.interiorColor.rgb  // ray_interior_color
+                                    : in.color.rgb * 0.45; // else atom darkened
     alpha = in.color.a;
     return;
   }
@@ -3750,6 +3764,7 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
     float ortho;
     float depthZeroToOne;
     float interiorCap;
+    float interiorColor[4];
   } u;
   std::memcpy(u.modelview, _modelviewMatrix.data(), 64);
   std::memcpy(u.projection, _projectionMatrix.data(), 64);
@@ -3760,6 +3775,9 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
   u.depthZeroToOne = 0.0f;
   // Cap the slab cross-section only in the opaque pass (not shadow/OIT).
   u.interiorCap = (call.interiorCap && !_shadowMode && !_oitActive) ? 1.0f : 0.0f;
+  // ray_interior_color: .a>0.5 => use this rgb for the cap (else atom*0.45).
+  u.interiorColor[0] = _capColor[0]; u.interiorColor[1] = _capColor[1];
+  u.interiorColor[2] = _capColor[2]; u.interiorColor[3] = _capColorOverride ? 1.0f : 0.0f;
   [_encoder setVertexBytes:&u length:sizeof(u) atIndex:1];
   // The fragment shader also reads `u` (projection for depth, ortho flag) at
   // buffer index 1 — it must be bound to the fragment stage too, otherwise it
@@ -3804,6 +3822,7 @@ struct CylU {
   float half_bond;
   float inv_height;
   float interiorCap;    // 1 = cap the slab cross-section with a solid interior color
+  float4 interiorColor; // rgb cap color; .a > 0.5 => use it (else bond*0.45)
 };
 struct CylVOut {
   float4 position [[position]];
@@ -3974,7 +3993,8 @@ static void cyl_shade(CylVOut in, constant CylU& u,
     float d2 = (u.depthZeroToOne >= 0.5) ? (c2.z / c2.w) : (0.5 + 0.5 * c2.z / c2.w);
     if (d2 <= 0.0) discard_fragment();             // whole stick in front of slab
     depth = 1e-5;                                  // flat disc at the slab plane
-    rgb = color.rgb * 0.45;                        // darkened solid interior
+    rgb = (u.interiorColor.a > 0.5) ? u.interiorColor.rgb  // ray_interior_color
+                                    : color.rgb * 0.45;    // else bond darkened
     alpha = color.a;
     return;
   }
@@ -4197,6 +4217,7 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
     float half_bond;
     float inv_height;
     float interiorCap;
+    float interiorColor[4];
   } u;
   std::memcpy(u.modelview, _modelviewMatrix.data(), 64);
   std::memcpy(u.projection, _projectionMatrix.data(), 64);
@@ -4209,6 +4230,9 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
   u.inv_height = 1.0f;     // only used when half_bond != 0
   // Cap the slab cross-section only in the opaque pass (not shadow/OIT).
   u.interiorCap = (call.interiorCap && !_shadowMode && !_oitActive) ? 1.0f : 0.0f;
+  // ray_interior_color: .a>0.5 => use this rgb for the cap (else bond*0.45).
+  u.interiorColor[0] = _capColor[0]; u.interiorColor[1] = _capColor[1];
+  u.interiorColor[2] = _capColor[2]; u.interiorColor[3] = _capColorOverride ? 1.0f : 0.0f;
   [_encoder setVertexBytes:&u length:sizeof(u) atIndex:1];
   [_encoder setFragmentBytes:&u length:sizeof(u) atIndex:1];
 

@@ -185,6 +185,11 @@ public:
       int posOffset, int normalOffset, int colorOffset, int colorType,
       const void* indexData, size_t indexDataSize, int interiorCap = 0) {}
 
+  // Color for interior-cap cross-sections (ray_interior_color). overrideColor=
+  // true => use this rgb for caps; false => per-primitive default (atom color
+  // darkened for spheres/sticks, gray for surface). Default: no-op.
+  virtual void setInteriorCapColor(float r, float g, float b, bool overrideColor) {}
+
   // VBO buffer cache — returns a cached buffer ID for the given key,
   // creating it from data if not already cached.
   virtual void invalidateVBOCache(uint64_t key) {}

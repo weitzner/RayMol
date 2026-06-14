@@ -141,6 +141,7 @@ public:
       const void* vertexData, size_t vertexDataSize, size_t stride,
       int posOffset, int normalOffset, int colorOffset, int colorType,
       const void* indexData, size_t indexDataSize, int interiorCap = 0) override;
+  void setInteriorCapColor(float r, float g, float b, bool overrideColor) override;
   void invalidateVBOCache(uint64_t key) override;
   void drawLabels(const LabelDrawCall& call) override;
   void drawSphereImpostors(const SphereImpostorDrawCall& call) override;
@@ -342,6 +343,10 @@ private:
   id<MTLDepthStencilState> _capMarkDSS = nil;
   id<MTLDepthStencilState> _capFillDSS = nil;
   size_t _capMarkStride = 0;
+  // Interior-cap color (ray_interior_color). Override => use _capColor for caps;
+  // else per-primitive default (atom color darkened / surface gray).
+  float _capColor[3] = {0.32f, 0.32f, 0.36f};
+  bool _capColorOverride = false;
   id<MTLFunction> _capMarkVtxFunc = nil, _capMarkFragFunc = nil;
   id<MTLFunction> _capFillVtxFunc = nil, _capFillFragFunc = nil;
   id<MTLRenderPipelineState> _vboShadowPipelineUByte = nil; // stride 28

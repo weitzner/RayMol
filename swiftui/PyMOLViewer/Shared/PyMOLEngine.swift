@@ -72,7 +72,7 @@ final class PyMOLEngine: ObservableObject {
         // cached/stale install) when verifying gesture-direction fixes. Bump the
         // tag whenever gesture behavior changes; it shows at the top of the log.
         DispatchQueue.main.async { [weak self] in
-            self?.feedbackLog.append(" [build] v18  (surface interior cap: stencil-filled clipped cross-section)")
+            self?.feedbackLog.append(" [build] v19  (interior cap honors ray_interior_color)")
         }
 
         // `fetch` downloads into fetch_path; the process cwd is read-only on iOS,

@@ -3,6 +3,7 @@
 #include "CGO.h"
 #include "CGOGL.h"
 #include "CGORenderer.h"
+#include "Color.h"
 #include "CoordSet.h"
 #include "Feedback.h"
 #include "GLVertexBuffer.h"
@@ -28,12 +29,31 @@
 // Per-object interior-cap flag for a SURFACE mesh (closed solid). Cartoons share
 // the indexed/non-indexed mesh paths but are not closed solids, so gate on the
 // surface-shader flag captured at shader-enable.
+// Resolve ray_interior_color for the interior cap and push it to the renderer.
+// A real color (>=0) overrides the cap color; -1 (default) keeps the per-
+// primitive default (atom/bond darkened for impostors, gray for surface).
+static void metalApplyInteriorCapColor(CCGORenderer* I)
+{
+  auto* G = I->G;
+  CSetting *s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
+  CSetting *s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
+  int ci = SettingGet_color(G, s1, s2, cSetting_ray_interior_color);
+  if (ci >= 0) {
+    const float* c = ColorGet(G, ci);
+    G->Renderer->setInteriorCapColor(c[0], c[1], c[2], true);
+  } else {
+    G->Renderer->setInteriorCapColor(0.32f, 0.32f, 0.36f, false);
+  }
+}
+
 static int metalSurfaceInteriorCap(CCGORenderer* I)
 {
   if (!I || !I->metalIsSurfaceShader) return 0;
   CSetting *s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
   CSetting *s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
-  return SettingGet_b(I->G, s1, s2, cSetting_metal_interior_cap) ? 1 : 0;
+  if (!SettingGet_b(I->G, s1, s2, cSetting_metal_interior_cap)) return 0;
+  metalApplyInteriorCapColor(I);
+  return 1;
 }
 
 static bool drawVBOViaMetal(CCGORenderer* I, VertexBufferGL* vbo,
@@ -136,6 +156,7 @@ static void drawSphereImpostorsViaMetal(
     CSetting *s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
     CSetting *s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
     call.interiorCap = SettingGet_b(G, s1, s2, cSetting_metal_interior_cap) ? 1 : 0;
+    if (call.interiorCap) metalApplyInteriorCapColor(I);
   }
 
   G->Renderer->drawSphereImpostors(call);
@@ -211,6 +232,7 @@ static void drawCylinderImpostorsViaMetal(CCGORenderer* I, VertexBufferGL* vbo,
     CSetting *s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
     CSetting *s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
     call.interiorCap = SettingGet_b(G, s1, s2, cSetting_metal_interior_cap) ? 1 : 0;
+    if (call.interiorCap) metalApplyInteriorCapColor(I);
   }
 
   G->Renderer->drawCylinderImpostors(call);
