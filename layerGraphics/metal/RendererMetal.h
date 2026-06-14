@@ -259,6 +259,12 @@ private:
   id<MTLFunction> _vboFragmentFunc;
   id<MTLFunction> _vboVertexUnlitFunc;   // flat-color (no normal) for lines/dots
   id<MTLFunction> _vboFragmentUnlitFunc;
+  // Unlit, position-ONLY (no per-vertex color attribute): used for uniform-
+  // colored line geometry (alignment objects, distance/angle dashes) whose VBO
+  // has no a_Color. Reads its color from a uniform (buffer 2) instead of an
+  // attribute, so the pipeline can be created (the regular unlit shader requires
+  // attribute 2 and would fail to compile a pipeline for such a layout).
+  id<MTLFunction> _vboVertexUnlitFlatFunc;
   // Impostor ray-casting (analytic spheres/cylinders). nil-init (MRC).
   id<MTLRenderPipelineState> _sphereImpostorPipeline = nil;
   id<MTLRenderPipelineState> _cylinderImpostorPipeline = nil;

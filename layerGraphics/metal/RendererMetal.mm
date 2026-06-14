@@ -157,6 +157,7 @@ RendererMetal::RendererMetal(id<MTLDevice> device, id<MTLCommandQueue> queue)
     , _vboFragmentFunc(nil)
     , _vboVertexUnlitFunc(nil)
     , _vboFragmentUnlitFunc(nil)
+    , _vboVertexUnlitFlatFunc(nil)
     , _batchBuffer(nil)
     , _sphereImpostorPipeline(nil)
     , _cylinderImpostorPipeline(nil)
@@ -2617,6 +2618,28 @@ fragment float4 vbo_fragment_unlit(VBOVertexOutUnlit in [[stage_in]])
   return in.color;
 }
 
+// Unlit, position-only: for uniform-colored line geometry whose VBO carries NO
+// per-vertex color (alignment objects, distance/angle dashes). The regular
+// unlit shader declares a color attribute [[attribute(2)]]; binding it against
+// a VBO layout that has no color attribute makes pipeline creation FAIL ("Vertex
+// attribute 2 is not defined in the vertex descriptor"), which on device floods
+// every frame and gets the app killed. This variant takes only position and
+// reads the color from a uniform (buffer 2), so the pipeline always builds.
+struct VBOVertexInPosOnly {
+  float3 position [[attribute(0)]];
+};
+vertex VBOVertexOutUnlit vbo_vertex_unlit_flat(
+    VBOVertexInPosOnly in [[stage_in]],
+    constant VBOUniforms& uniforms [[buffer(1)]],
+    constant float4& flatColor [[buffer(2)]])
+{
+  VBOVertexOutUnlit out;
+  out.position = uniforms.projection * (uniforms.modelview * float4(in.position, 1.0));
+  out.color = flatColor;
+  out.pointSize = max(uniforms.pointSize, 1.0);
+  return out;
+}
+
 // Weighted-blended OIT output (McGuire/Bavoil). Transparent geometry writes
 // premultiplied color*weight to the accum target and its alpha to the reveal
 // target; the weight de-emphasizes far/low-alpha fragments. z = window depth.
@@ -2659,6 +2682,7 @@ fragment void vbo_fragment_shadow(VBOVertexOut in [[stage_in]])
   _vboFragmentFunc = [lib newFunctionWithName:@"vbo_fragment"];
   _vboVertexUnlitFunc = [lib newFunctionWithName:@"vbo_vertex_unlit"];
   _vboFragmentUnlitFunc = [lib newFunctionWithName:@"vbo_fragment_unlit"];
+  _vboVertexUnlitFlatFunc = [lib newFunctionWithName:@"vbo_vertex_unlit_flat"];
   _vboFragmentShadowFunc = [lib newFunctionWithName:@"vbo_fragment_shadow"];
   if (!_vboVertexFunc || !_vboFragmentFunc) {
     NSLog(@"RendererMetal: VBO shader functions not found");
@@ -2912,6 +2936,10 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   // the unlit flat-color + point-size shader, so they skip the prebuilt
   // (lit) pipelines even when their interleaved layout happens to match.
   bool unlit = (normalOffset < 0) || (mode == PrimitiveType::Points);
+  // Uniform-colored geometry (no per-vertex color attribute): use the
+  // position-only flat shader so the pipeline can be created (the normal unlit
+  // shader needs attribute 2). Color comes from a uniform (buffer 2) below.
+  bool flat = unlit && (colorOffset < 0);
   id<MTLRenderPipelineState> pipeline = nil;
 
   // Shadow pre-pass: route lit geometry to the depth-only shadow pipelines
@@ -2950,8 +2978,9 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
 
   // Fallback: create pipeline on-the-fly (cached by Metal driver). `unlit`
   // (lines/ribbon without a normal, or Points/dots) uses the flat-color +
-  // point-size shader.
-  id<MTLFunction> vfn = unlit ? _vboVertexUnlitFunc : _vboVertexFunc;
+  // point-size shader; `flat` (no per-vertex color) uses the position-only one.
+  id<MTLFunction> vfn = flat ? _vboVertexUnlitFlatFunc
+                             : (unlit ? _vboVertexUnlitFunc : _vboVertexFunc);
   id<MTLFunction> ffn = unlit ? _vboFragmentUnlitFunc : _vboFragmentFunc;
   if (!pipeline && vfn && ffn) {
     MTLRenderPipelineDescriptor* psd =
@@ -3018,6 +3047,15 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   uniforms._pad[0] = uniforms._pad[1] = uniforms._pad[2] = 0.0f;
   [_encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
 
+  // Flat (uniform-colored) geometry: supply the color the flat shader reads
+  // from buffer 2. No per-vertex color is available here (the GL path would set
+  // an a_Color uniform that the Metal backend drops), so render white — visible
+  // and, crucially, non-crashing. TODO: thread the CGO's current color through.
+  if (flat) {
+    const float flatColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    [_encoder setVertexBytes:flatColor length:sizeof(flatColor) atIndex:2];
+  }
+
   // Draw
   [_encoder drawPrimitives:toMTL(mode)
                vertexStart:0
@@ -3081,6 +3119,7 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   // Select or create pipeline (same logic as drawVBO)
   id<MTLRenderPipelineState> pipeline = nil;
   bool unlit = (normalOffset < 0);
+  bool flat = unlit && (colorOffset < 0);  // uniform-colored: position-only shader
   // Shadow pre-pass: depth-only pipeline (e.g. surface stride 44 -> one-off).
   if (_shadowMode) {
     if (unlit) return;
@@ -3107,7 +3146,8 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
     pipeline = oitPipelineForVD(vd);
     if (!pipeline) return;
   }
-  id<MTLFunction> vfn = unlit ? _vboVertexUnlitFunc : _vboVertexFunc;
+  id<MTLFunction> vfn = flat ? _vboVertexUnlitFlatFunc
+                             : (unlit ? _vboVertexUnlitFunc : _vboVertexFunc);
   id<MTLFunction> ffn = unlit ? _vboFragmentUnlitFunc : _vboFragmentFunc;
   if (!pipeline && vfn && ffn) {
     MTLRenderPipelineDescriptor* psd =
@@ -3170,6 +3210,12 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   matrices.pointSize = _pointSize > 0.0f ? _pointSize : 1.0f;
   matrices._pad[0] = matrices._pad[1] = matrices._pad[2] = 0.0f;
   [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
+
+  // Flat (uniform-colored) geometry reads its color from buffer 2 — see drawVBO.
+  if (flat) {
+    const float flatColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    [_encoder setVertexBytes:flatColor length:sizeof(flatColor) atIndex:2];
+  }
 
   [_encoder drawIndexedPrimitives:toMTL(mode)
                        indexCount:static_cast<NSUInteger>(indexCount)
