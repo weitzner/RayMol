@@ -90,6 +90,7 @@ enum RepCatalog {
                 RepProperty(setting: "surface_quality", label: "Quality", kind: .segmented,
                             options: [("0", 0), ("1", 1), ("2", 2)]),
                 RepProperty(setting: "solvent_radius", label: "Solvent radius", kind: .slider, min: 0.5, max: 3, step: 0.1, decimals: 1),
+                RepProperty(setting: "metal_interior_cap", label: "Solid interior", kind: .toggle),
             ]),
         "sticks": RepSpec(rep: "sticks", display: "Sticks",
             colorSetting: "stick_color", defaultColor: -1, properties: [

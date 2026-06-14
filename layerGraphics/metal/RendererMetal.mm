@@ -2655,6 +2655,32 @@ vertex VBOVertexOutUnlit vbo_vertex_unlit_flat(
   return out;
 }
 
+// --- Interior cap for a clipped closed SURFACE (stencil capping) ---
+// MARK: render the surface's NOT-clipped faces position-only (cull none, no
+// color/depth write, stencil = INVERT). Each face toggles stencil bit 0, so odd
+// parity == the near (slab) plane is inside the solid the surface encloses.
+struct CapMarkIn { float3 position [[attribute(0)]]; };
+vertex float4 cap_mark_vertex(CapMarkIn in [[stage_in]],
+    constant VBOUniforms& u [[buffer(1)]]) {
+  float4 p = u.projection * (u.modelview * float4(in.position, 1.0));
+  p.z = 0.5 * (p.z + p.w);   // GL [-1,1] -> Metal [0,1] (match the VBO)
+  return p;
+}
+fragment float4 cap_mark_fragment() { return float4(0.0); }  // color discarded
+// FILL: a full-screen triangle at the near-plane sentinel depth; a stencil EQUAL
+// test keeps only the interior pixels, filled with a flat interior color (and the
+// pass clears the stencil bit so multiple capped surfaces don't interfere).
+struct CapFillOut { float4 position [[position]]; };
+vertex CapFillOut cap_fill_vertex(uint vid [[vertex_id]]) {
+  float2 p = float2(float((vid << 1) & 2), float(vid & 2));   // (0,0)(2,0)(0,2)
+  CapFillOut o;
+  o.position = float4(p * 2.0 - 1.0, 1e-5, 1.0);  // cover screen at sentinel depth
+  return o;
+}
+fragment float4 cap_fill_fragment(constant float4& interiorColor [[buffer(0)]]) {
+  return interiorColor;
+}
+
 // Weighted-blended OIT output (McGuire/Bavoil). Transparent geometry writes
 // premultiplied color*weight to the accum target and its alpha to the reveal
 // target; the weight de-emphasizes far/low-alpha fragments. z = window depth.
@@ -2699,9 +2725,56 @@ fragment void vbo_fragment_shadow(VBOVertexOut in [[stage_in]])
   _vboFragmentUnlitFunc = [lib newFunctionWithName:@"vbo_fragment_unlit"];
   _vboVertexUnlitFlatFunc = [lib newFunctionWithName:@"vbo_vertex_unlit_flat"];
   _vboFragmentShadowFunc = [lib newFunctionWithName:@"vbo_fragment_shadow"];
+  _capMarkVtxFunc = [lib newFunctionWithName:@"cap_mark_vertex"];
+  _capMarkFragFunc = [lib newFunctionWithName:@"cap_mark_fragment"];
+  _capFillVtxFunc = [lib newFunctionWithName:@"cap_fill_vertex"];
+  _capFillFragFunc = [lib newFunctionWithName:@"cap_fill_fragment"];
   if (!_vboVertexFunc || !_vboFragmentFunc) {
     NSLog(@"RendererMetal: VBO shader functions not found");
     return;
+  }
+
+  // Surface interior-cap states + fill pipeline (mark pipeline is stride-keyed,
+  // built lazily in drawVBOIndexed). MARK: stencil INVERT on every not-clipped
+  // face (depth ALWAYS, no depth write). FILL: stencil EQUAL 1 -> write cap +
+  // clear the bit (ZERO) so multiple capped surfaces don't accumulate.
+  {
+    MTLStencilDescriptor* sm = [[MTLStencilDescriptor alloc] init];
+    sm.stencilCompareFunction = MTLCompareFunctionAlways;
+    sm.depthStencilPassOperation = MTLStencilOperationInvert;
+    sm.depthFailureOperation = MTLStencilOperationInvert;
+    sm.stencilFailureOperation = MTLStencilOperationKeep;
+    sm.readMask = 0x1; sm.writeMask = 0x1;
+    MTLDepthStencilDescriptor* md = [[MTLDepthStencilDescriptor alloc] init];
+    md.depthCompareFunction = MTLCompareFunctionAlways;
+    md.depthWriteEnabled = NO;
+    md.frontFaceStencil = sm; md.backFaceStencil = sm;
+    _capMarkDSS = [_device newDepthStencilStateWithDescriptor:md];
+
+    MTLStencilDescriptor* sf = [[MTLStencilDescriptor alloc] init];
+    sf.stencilCompareFunction = MTLCompareFunctionEqual;       // ref = 1
+    sf.depthStencilPassOperation = MTLStencilOperationZero;    // clear the bit
+    sf.depthFailureOperation = MTLStencilOperationZero;
+    sf.stencilFailureOperation = MTLStencilOperationKeep;
+    sf.readMask = 0x1; sf.writeMask = 0x1;
+    MTLDepthStencilDescriptor* fd = [[MTLDepthStencilDescriptor alloc] init];
+    fd.depthCompareFunction = MTLCompareFunctionAlways;
+    fd.depthWriteEnabled = YES;
+    fd.frontFaceStencil = sf; fd.backFaceStencil = sf;
+    _capFillDSS = [_device newDepthStencilStateWithDescriptor:fd];
+
+    if (_capFillVtxFunc && _capFillFragFunc) {
+      MTLRenderPipelineDescriptor* fp = [[MTLRenderPipelineDescriptor alloc] init];
+      fp.vertexFunction = _capFillVtxFunc;
+      fp.fragmentFunction = _capFillFragFunc;
+      fp.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+      fp.rasterSampleCount = _sampleCount;
+      fp.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      fp.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      NSError* ce = nil;
+      _capFillPipeline = [_device newRenderPipelineStateWithDescriptor:fp error:&ce];
+      if (!_capFillPipeline) NSLog(@"RendererMetal: cap fill pipeline failed: %@", ce);
+    }
   }
 
   // Create pipeline for UByte4Norm color format:
@@ -2895,7 +2968,8 @@ id<MTLRenderPipelineState> RendererMetal::oitPipelineForVD(
 
 void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
     const void* data, size_t dataSize, size_t stride,
-    int posOffset, int normalOffset, int colorOffset, int colorType)
+    int posOffset, int normalOffset, int colorOffset, int colorType,
+    int interiorCap)
 {
   if (!data || dataSize == 0 || vertexCount <= 0) return;
   ensureEncoder();
@@ -3075,12 +3149,60 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   [_encoder drawPrimitives:toMTL(mode)
                vertexStart:0
                vertexCount:static_cast<NSUInteger>(vertexCount)];
+
+  // --- Surface interior cap (stencil) — non-indexed (opaque surface) path.
+  // MARK the slab's interior cross-section via stencil parity over the surface's
+  // not-clipped faces, then FILL it flat at the near-plane sentinel depth.
+  if (interiorCap && !_shadowMode && !_oitActive && _capFillPipeline &&
+      _capMarkVtxFunc && _capMarkFragFunc) {
+    if (!_capMarkPipeline || _capMarkStride != stride) {
+      MTLVertexDescriptor* mvd = [[MTLVertexDescriptor alloc] init];
+      mvd.attributes[0].format = MTLVertexFormatFloat3;
+      mvd.attributes[0].offset = static_cast<NSUInteger>(posOffset < 0 ? 0 : posOffset);
+      mvd.attributes[0].bufferIndex = 0;
+      mvd.layouts[0].stride = static_cast<NSUInteger>(stride);
+      mvd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+      MTLRenderPipelineDescriptor* mp = [[MTLRenderPipelineDescriptor alloc] init];
+      mp.vertexFunction = _capMarkVtxFunc;
+      mp.fragmentFunction = _capMarkFragFunc;
+      mp.vertexDescriptor = mvd;
+      mp.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+      mp.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
+      mp.rasterSampleCount = _sampleCount;
+      mp.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      mp.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      NSError* me = nil;
+      _capMarkPipeline = [_device newRenderPipelineStateWithDescriptor:mp error:&me];
+      _capMarkStride = stride;
+      if (!_capMarkPipeline)
+        NSLog(@"RendererMetal: cap mark pipeline failed: %@", me);
+    }
+    if (_capMarkPipeline) {
+      [_encoder setRenderPipelineState:_capMarkPipeline];
+      [_encoder setDepthStencilState:_capMarkDSS];
+      [_encoder setStencilReferenceValue:1];
+      [_encoder setCullMode:MTLCullModeNone];
+      [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
+      [_encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+      [_encoder drawPrimitives:toMTL(mode)
+                   vertexStart:0
+                   vertexCount:static_cast<NSUInteger>(vertexCount)];
+      [_encoder setRenderPipelineState:_capFillPipeline];
+      [_encoder setDepthStencilState:_capFillDSS];
+      const float interior[4] = {0.32f, 0.32f, 0.36f, 1.0f};
+      [_encoder setFragmentBytes:interior length:sizeof(interior) atIndex:0];
+      [_encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+      [_encoder setCullMode:_cullFaceEnabled ? MTLCullModeBack : MTLCullModeNone];
+      applyDepthStencilState();
+      if (_depthStencilState) [_encoder setDepthStencilState:_depthStencilState];
+    }
+  }
 }
 
 void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
     const void* vertexData, size_t vertexDataSize, size_t stride,
     int posOffset, int normalOffset, int colorOffset, int colorType,
-    const void* indexData, size_t indexDataSize)
+    const void* indexData, size_t indexDataSize, int interiorCap)
 {
   if (!vertexData || !indexData || vertexDataSize == 0 ||
       indexDataSize == 0 || indexCount <= 0) return;
@@ -3237,6 +3359,59 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
                         indexType:MTLIndexTypeUInt32
                       indexBuffer:ibo
                 indexBufferOffset:0];
+
+  // --- Surface interior cap (stencil) ---
+  // For a clipped closed surface with metal_interior_cap on: MARK the slab's
+  // interior cross-section (stencil parity over the not-clipped faces), then FILL
+  // it with a flat darkened color at the near-plane sentinel depth (which the
+  // post passes already exclude from SSAO/shadows). Opaque pass only.
+  if (interiorCap && !_shadowMode && !_oitActive && _capFillPipeline &&
+      _capMarkVtxFunc && _capMarkFragFunc) {
+    if (!_capMarkPipeline || _capMarkStride != stride) {
+      MTLVertexDescriptor* mvd = [[MTLVertexDescriptor alloc] init];
+      mvd.attributes[0].format = MTLVertexFormatFloat3;
+      mvd.attributes[0].offset = static_cast<NSUInteger>(posOffset < 0 ? 0 : posOffset);
+      mvd.attributes[0].bufferIndex = 0;
+      mvd.layouts[0].stride = static_cast<NSUInteger>(stride);
+      mvd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+      MTLRenderPipelineDescriptor* mp = [[MTLRenderPipelineDescriptor alloc] init];
+      mp.vertexFunction = _capMarkVtxFunc;
+      mp.fragmentFunction = _capMarkFragFunc;
+      mp.vertexDescriptor = mvd;
+      mp.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+      mp.colorAttachments[0].writeMask = MTLColorWriteMaskNone; // stencil only
+      mp.rasterSampleCount = _sampleCount;
+      mp.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      mp.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      NSError* me = nil;
+      _capMarkPipeline = [_device newRenderPipelineStateWithDescriptor:mp error:&me];
+      _capMarkStride = stride;
+      if (!_capMarkPipeline)
+        NSLog(@"RendererMetal: cap mark pipeline failed: %@", me);
+    }
+    if (_capMarkPipeline) {
+      [_encoder setRenderPipelineState:_capMarkPipeline];
+      [_encoder setDepthStencilState:_capMarkDSS];
+      [_encoder setStencilReferenceValue:1];
+      [_encoder setCullMode:MTLCullModeNone];
+      [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
+      [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
+      [_encoder drawIndexedPrimitives:toMTL(mode)
+                           indexCount:static_cast<NSUInteger>(indexCount)
+                            indexType:MTLIndexTypeUInt32
+                          indexBuffer:ibo
+                    indexBufferOffset:0];
+      [_encoder setRenderPipelineState:_capFillPipeline];
+      [_encoder setDepthStencilState:_capFillDSS];
+      const float interior[4] = {0.32f, 0.32f, 0.36f, 1.0f}; // darkened interior
+      [_encoder setFragmentBytes:interior length:sizeof(interior) atIndex:0];
+      [_encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+      // Restore default state for subsequent geometry.
+      [_encoder setCullMode:_cullFaceEnabled ? MTLCullModeBack : MTLCullModeNone];
+      applyDepthStencilState();
+      if (_depthStencilState) [_encoder setDepthStencilState:_depthStencilState];
+    }
+  }
 }
 
 void RendererMetal::invalidateVBOCache(uint64_t key)

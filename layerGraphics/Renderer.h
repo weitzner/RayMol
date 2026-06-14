@@ -176,11 +176,14 @@ public:
   // colorType: 0 = UByte4Norm, 1 = Float4
   virtual void drawVBO(PrimitiveType mode, int vertexCount,
       const void* data, size_t dataSize, size_t stride,
-      int posOffset, int normalOffset, int colorOffset, int colorType) {}
+      int posOffset, int normalOffset, int colorOffset, int colorType,
+      int interiorCap = 0) {}
+  // interiorCap: 1 => this is a clipped closed SURFACE; fill the slab
+  // cross-section with a flat interior color (stencil cap). Default 0.
   virtual void drawVBOIndexed(PrimitiveType mode, int indexCount,
       const void* vertexData, size_t vertexDataSize, size_t stride,
       int posOffset, int normalOffset, int colorOffset, int colorType,
-      const void* indexData, size_t indexDataSize) {}
+      const void* indexData, size_t indexDataSize, int interiorCap = 0) {}
 
   // VBO buffer cache — returns a cached buffer ID for the given key,
   // creating it from data if not already cached.

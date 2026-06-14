@@ -33,6 +33,10 @@ struct CCGORenderer {
   // With no GL shader on Metal we capture it here so the draw can scale
   // attr_radius. Reset to 0 when the cylinder shader is (re)enabled.
   float metalCylUniRadius = 0.0f;
+  // Metal interior-cap path: true while the SURFACE shader is the active shader,
+  // so the indexed-mesh draw can tell a (closed, cappable) surface apart from a
+  // cartoon (both are stride-44 lit triangle meshes). Set at shader-enable.
+  bool metalIsSurfaceShader = false;
 };
 
 bool CGORendererInit(PyMOLGlobals* G);

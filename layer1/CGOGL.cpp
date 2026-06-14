@@ -25,9 +25,21 @@
 
 // Helper: extract attribute offsets from a VBO's CPU descriptor and draw
 // via the Renderer. Returns true if handled (Metal path), false if not.
-static bool drawVBOViaMetal(pymol::Renderer* renderer, VertexBufferGL* vbo,
+// Per-object interior-cap flag for a SURFACE mesh (closed solid). Cartoons share
+// the indexed/non-indexed mesh paths but are not closed solids, so gate on the
+// surface-shader flag captured at shader-enable.
+static int metalSurfaceInteriorCap(CCGORenderer* I)
+{
+  if (!I || !I->metalIsSurfaceShader) return 0;
+  CSetting *s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
+  CSetting *s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
+  return SettingGet_b(I->G, s1, s2, cSetting_metal_interior_cap) ? 1 : 0;
+}
+
+static bool drawVBOViaMetal(CCGORenderer* I, VertexBufferGL* vbo,
     pymol::PrimitiveType mode, int vertexCount)
 {
+  auto* renderer = I ? I->G->Renderer : nullptr;
   if (!renderer || !vbo || !vbo->hasCPUData()) return false;
 
   const auto& desc = vbo->getDesc();
@@ -50,14 +62,16 @@ static bool drawVBOViaMetal(pymol::Renderer* renderer, VertexBufferGL* vbo,
 
   renderer->drawVBO(mode, vertexCount,
       vbo->cpuData(), vbo->cpuDataSize(), stride,
-      posOffset, normalOffset, colorOffset, colorType);
+      posOffset, normalOffset, colorOffset, colorType,
+      metalSurfaceInteriorCap(I));
   return true;
 }
 
-static bool drawVBOIndexedViaMetal(pymol::Renderer* renderer,
+static bool drawVBOIndexedViaMetal(CCGORenderer* I,
     VertexBufferGL* vbo, IndexBufferGL* ibo,
     pymol::PrimitiveType mode, int indexCount)
 {
+  auto* renderer = I ? I->G->Renderer : nullptr;
   if (!renderer || !vbo || !vbo->hasCPUData() ||
       !ibo || !ibo->hasCPUData()) return false;
 
@@ -82,7 +96,7 @@ static bool drawVBOIndexedViaMetal(pymol::Renderer* renderer,
   renderer->drawVBOIndexed(mode, indexCount,
       vbo->cpuData(), vbo->cpuDataSize(), stride,
       posOffset, normalOffset, colorOffset, colorType,
-      ibo->cpuData(), ibo->cpuDataSize());
+      ibo->cpuData(), ibo->cpuDataSize(), metalSurfaceInteriorCap(I));
   return true;
 }
 
@@ -703,7 +717,7 @@ static void CGO_gl_draw_buffers_indexed(CCGORenderer* I, CGO_op_data pc)
     if (I->isPicking) return; // picking not yet supported in Metal
     auto* vbo = I->G->ShaderMgr->getGPUBuffer<VertexBufferGL>(sp->vboid);
     auto* ibo = I->G->ShaderMgr->getGPUBuffer<IndexBufferGL>(sp->iboid);
-    drawVBOIndexedViaMetal(I->G->Renderer, vbo, ibo,
+    drawVBOIndexedViaMetal(I, vbo, ibo,
         glModeToPrimitive(sp->mode), sp->nindices);
     return;
   }
@@ -795,7 +809,7 @@ static void CGO_gl_draw_buffers_not_indexed(CCGORenderer* I, CGO_op_data pc)
   if (I->G->Renderer) {
     if (I->isPicking) return; // picking not yet supported in Metal
     auto* vbo = I->G->ShaderMgr->getGPUBuffer<VertexBufferGL>(sp->vboid);
-    drawVBOViaMetal(I->G->Renderer, vbo,
+    drawVBOViaMetal(I, vbo,
         glModeToPrimitive(sp->mode), sp->nverts);
     return;
   }
@@ -899,10 +913,10 @@ static void CGO_gl_draw_custom(CCGORenderer* I, CGO_op_data pc)
     }
     if (sp->iboid) {
       auto* ibo = I->G->ShaderMgr->getGPUBuffer<IndexBufferGL>(sp->iboid);
-      drawVBOIndexedViaMetal(I->G->Renderer, vbo, ibo,
+      drawVBOIndexedViaMetal(I, vbo, ibo,
           glModeToPrimitive(sp->mode), sp->nindices);
     } else {
-      drawVBOViaMetal(I->G->Renderer, vbo,
+      drawVBOViaMetal(I, vbo,
           glModeToPrimitive(sp->mode), sp->nverts);
     }
     return;
@@ -1900,14 +1914,19 @@ static void CGO_gl_enable(CCGORenderer* I, CGO_op_data pc)
         }
       } break;
       case GL_DEFAULT_SHADER:
+        if (I->G->Renderer) I->metalIsSurfaceShader = false;
         shaderMgr->Enable_DefaultShader(
             I->info ? I->info->pass : RenderPass::Antialias);
         break;
       case GL_LINE_SHADER:
+        if (I->G->Renderer) I->metalIsSurfaceShader = false;
         shaderMgr->Enable_LineShader(
             I->info ? I->info->pass : RenderPass::Antialias);
         break;
       case GL_SURFACE_SHADER:
+        // Metal interior-cap: mark that following indexed-mesh draws are a
+        // (closed) surface, so they may be stencil-capped when clipped.
+        if (I->G->Renderer) I->metalIsSurfaceShader = true;
         shaderMgr->Enable_SurfaceShader(
             I->info ? I->info->pass : RenderPass::Antialias);
         break;

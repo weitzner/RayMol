@@ -136,11 +136,11 @@ public:
   void drawVBO(PrimitiveType mode, int vertexCount,
       const void* data, size_t dataSize, size_t stride,
       int posOffset, int normalOffset, int colorOffset,
-      int colorType) override;
+      int colorType, int interiorCap = 0) override;
   void drawVBOIndexed(PrimitiveType mode, int indexCount,
       const void* vertexData, size_t vertexDataSize, size_t stride,
       int posOffset, int normalOffset, int colorOffset, int colorType,
-      const void* indexData, size_t indexDataSize) override;
+      const void* indexData, size_t indexDataSize, int interiorCap = 0) override;
   void invalidateVBOCache(uint64_t key) override;
   void drawLabels(const LabelDrawCall& call) override;
   void drawSphereImpostors(const SphereImpostorDrawCall& call) override;
@@ -335,6 +335,15 @@ private:
   id<MTLDepthStencilState> _shadowDepthState = nil;
   id<MTLSamplerState> _shadowSampler = nil;
   id<MTLFunction> _vboFragmentShadowFunc = nil;  // depth-only VBO fragment
+  // Surface interior-cap (stencil): mark = position-only/no-color/stencil-INVERT,
+  // fill = full-screen quad gated on stencil. Built once; mark rebuilt per stride.
+  id<MTLRenderPipelineState> _capMarkPipeline = nil;
+  id<MTLRenderPipelineState> _capFillPipeline = nil;
+  id<MTLDepthStencilState> _capMarkDSS = nil;
+  id<MTLDepthStencilState> _capFillDSS = nil;
+  size_t _capMarkStride = 0;
+  id<MTLFunction> _capMarkVtxFunc = nil, _capMarkFragFunc = nil;
+  id<MTLFunction> _capFillVtxFunc = nil, _capFillFragFunc = nil;
   id<MTLRenderPipelineState> _vboShadowPipelineUByte = nil; // stride 28
   id<MTLRenderPipelineState> _vboShadowPipelineFloat = nil; // stride 40
   id<MTLRenderPipelineState> _sphereShadowPipeline = nil;   // Stage 3
