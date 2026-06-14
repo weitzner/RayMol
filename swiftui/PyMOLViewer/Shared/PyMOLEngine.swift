@@ -26,9 +26,13 @@ final class PyMOLEngine: ObservableObject {
     @Published var objectDetails: [String: [RepState]] = [:]
     // Global "Scene" parameters (metal_*, depth_cue, fog, fov, surface_quality, bg).
     @Published var sceneState = SceneState()
-    // Which object cards are expanded — drives which objects the detail poll
-    // queries (so collapsed cards cost nothing).
-    @Published var expandedObjects: Set<String> = []
+    // The single detail view that is currently open (accordion: at most one).
+    // nil = none, `sceneDetailKey` = the SCENE card, otherwise an object name.
+    // Drives which object the detail poll queries (collapsed = cheap).
+    @Published var expandedDetail: String? = nil
+    // Sentinel for "the SCENE card is the open detail view" — a control char so
+    // it can never collide with a real object name.
+    static let sceneDetailKey = "\u{1}scene"
 
     // The opaque PyMOL instance pointer
     private(set) var instance: PyMOLHandle?
@@ -61,7 +65,7 @@ final class PyMOLEngine: ObservableObject {
         // cached/stale install) when verifying gesture-direction fixes. Bump the
         // tag whenever gesture behavior changes; it shows at the top of the log.
         DispatchQueue.main.async { [weak self] in
-            self?.feedbackLog.append(" [build] v8  (b-factor color; align/dash lines no longer crash Metal)")
+            self?.feedbackLog.append(" [build] v11  (full-bleed viewport: uses every pixel incl. under the notch)")
         }
 
         // `fetch` downloads into fetch_path; the process cwd is read-only on iOS,
@@ -195,7 +199,7 @@ final class PyMOLEngine: ObservableObject {
         if let ex = ProcessInfo.processInfo.environment["PYMOL_AUTOEXPAND"] {
             let names = ex.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                self?.expandedObjects = Set(names.filter { !$0.isEmpty })
+                self?.expandedDetail = names.first(where: { !$0.isEmpty })
             }
         }
 
@@ -606,7 +610,9 @@ final class PyMOLEngine: ObservableObject {
         // Always run (cheap when nothing expanded — just the ~8 scene gets) so
         // the Scene card stays fresh; per-object rep detail is queried only for
         // expanded cards.
-        let names = expandedObjects
+        // At most one object card is open; the SCENE sentinel polls no object.
+        var names: [String] = []
+        if let d = expandedDetail, d != Self.sceneDetailKey { names = [d] }
         let pyList = names.map { "'\($0.replacingOccurrences(of: "'", with: ""))'" }.joined(separator: ", ")
         runPython("from pymol import appkit_inspector as _ai\n_ai.poll([\(pyList)])")
     }

@@ -1086,7 +1086,7 @@ private struct ObjectCard: View {
     @EnvironmentObject var engine: PyMOLEngine
     @State private var selectedRep: String?
 
-    private var expanded: Bool { engine.expandedObjects.contains(entry.name) }
+    private var expanded: Bool { engine.expandedDetail == entry.name }
     private var reps: [RepState] { engine.objectDetails[entry.name] ?? [] }
     private var activeReps: [String] {
         RepCatalog.order.filter { r in reps.contains(where: { $0.rep == r }) }
@@ -1142,8 +1142,8 @@ private struct ObjectCard: View {
     }
 
     private func toggleExpand() {
-        if expanded { engine.expandedObjects.remove(entry.name) }
-        else { engine.expandedObjects.insert(entry.name) }
+        // Accordion: opening this card closes whatever else was open.
+        engine.expandedDetail = expanded ? nil : entry.name
     }
 }
 
@@ -1265,11 +1265,16 @@ private struct RepPropertyGrid: View {
 
 private struct SceneCard: View {
     @EnvironmentObject var engine: PyMOLEngine
-    @State private var expanded = true
+    // Collapsed by default and part of the accordion: at most one detail view
+    // (SCENE or an object card) is open at a time. This is the single home for
+    // display settings now (the redundant toolbar "View" menu was removed).
+    private var expanded: Bool { engine.expandedDetail == PyMOLEngine.sceneDetailKey }
 
     var body: some View {
         VStack(spacing: 0) {
-            Button(action: { expanded.toggle() }) {
+            Button(action: {
+                engine.expandedDetail = expanded ? nil : PyMOLEngine.sceneDetailKey
+            }) {
                 HStack(spacing: 4) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9)).foregroundColor(PanelTheme.headerColor)

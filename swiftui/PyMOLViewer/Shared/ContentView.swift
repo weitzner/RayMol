@@ -111,6 +111,10 @@ struct ContentView: View {
     @State private var panelFrac: CGFloat = 0.28
     @State private var committedFrac: CGFloat = 0.28
     @State private var panelCollapsed = false
+    // Panel share to return to when no detail view is open. While a detail view
+    // (SCENE or an object card) is expanded the panel auto-grows to its max so
+    // the options are visible; collapsing restores this remembered size.
+    @State private var collapsedFrac: CGFloat = 0.28
     @State private var didConfigForCompact = false
     @AppStorage("ipadGestureCoachSeen") private var gestureCoachSeen = false
     @State private var showGestureLegend = false
@@ -147,8 +151,29 @@ struct ContentView: View {
                     if !gestureCoachSeen && !engine.objects.isEmpty { gestureCoachOverlay }
                 }
             }
+            // Full-bleed: the viewport uses every pixel, including under the
+            // notch / Dynamic Island and behind the (transparent) nav bar. The
+            // toolbar buttons are chrome and stay within the safe area, so they
+            // remain tappable and clear of the notch while the 3D view fills
+            // behind them.
+            .ignoresSafeArea()
             .navigationTitle(hSize == .compact ? "" : "PyMOL")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            // Auto-grow the panel when a detail view opens so its options are
+            // visible (the panel's ScrollView covers any remaining overflow);
+            // restore the user's size when everything collapses.
+            .onChange(of: engine.expandedDetail) { detail in
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    if detail != nil {
+                        panelFrac = 0.6
+                        committedFrac = 0.6
+                    } else {
+                        panelFrac = collapsedFrac
+                        committedFrac = collapsedFrac
+                    }
+                }
+            }
             .toolbar { iosOpenToolbar; iosViewToolbar; iosPanelToggle; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
@@ -278,7 +303,12 @@ struct ContentView: View {
                     let d = landscape ? -v.translation.width : -v.translation.height
                     panelFrac = min(max(committedFrac + d / total, 0.12), 0.6)
                 }
-                .onEnded { _ in committedFrac = panelFrac }
+                .onEnded { _ in
+                    committedFrac = panelFrac
+                    // Remember the manual size only while collapsed, so it's what
+                    // we restore to after an auto-grown detail view closes.
+                    if engine.expandedDetail == nil { collapsedFrac = panelFrac }
+                }
         )
     }
 
@@ -367,40 +397,19 @@ struct ContentView: View {
         .allowsHitTesting(true)
     }
 
-    // Toolbar "View" menu: the live display settings (formerly reachable only by
-    // leaving the viewport, switching to the Objects tab, and scrolling to the
-    // SCENE card). Toggles drive the same metal_* / depth_cue settings.
+    // Sequence-viewer toggle. (The display-settings "View" menu that used to live
+    // here duplicated the Objects → SCENE card, so it was removed; the SCENE card
+    // is now the single home for render settings. Sequence isn't in that card, so
+    // it stays here as a standalone toggle.)
     private var iosViewToolbar: some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
-            Menu {
-                if engine.rayTracingSupported {
-                    iosViewToggle("Ray tracing", "metal_raytrace")
-                } else {
-                    // No hardware RT on this GPU (Simulator / A-series iPad);
-                    // the setting would be a no-op, so surface it as unavailable.
-                    Label("Ray tracing — unavailable", systemImage: "sparkles")
-                        .disabled(true)
-                }
-                iosViewToggle("Shadows", "metal_shadows")
-                iosViewToggle("Ambient occlusion", "metal_ssao")
-                iosViewToggle("Outline", "metal_outline")
-                iosViewToggle("MSAA 4×", "metal_msaa")
-                iosViewToggle("Depth cue / fog", "depth_cue")
-                Divider()
-                Toggle(isOn: $engine.sequenceVisible) {
-                    Label("Sequence", systemImage: "textformat.abc")
-                }
+            Button {
+                engine.sequenceVisible.toggle()
             } label: {
-                Label("View", systemImage: "slider.horizontal.3")
+                Label("Sequence", systemImage: "textformat.abc")
             }
+            .tint(engine.sequenceVisible ? .accentColor : .secondary)
         }
-    }
-
-    @ViewBuilder
-    private func iosViewToggle(_ label: String, _ setting: String) -> some View {
-        Toggle(label, isOn: Binding(
-            get: { (engine.sceneState.values[setting] ?? 0) != 0 },
-            set: { engine.runCommand("set \(setting), \($0 ? 1 : 0)") }))
     }
 
     private func iosFetch() {
