@@ -752,6 +752,19 @@ void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
   if (_sceneColor && _rtW == w && _rtH == h) return;
   _rtW = w; _rtH = h;
 
+  // MRC (no ARC): release the PREVIOUS size's targets before reallocating.
+  // Without this, every resize leaks a full target set, and a continuous
+  // resize drag leaks dozens of full-res (MSAA) sets per second → the app is
+  // OOM-jettisoned on a memory-constrained device ("crashes on resize").
+  // The render-pass descriptors are updated below, so any in-flight command
+  // buffer keeps its own retain until it completes — this is safe.
+  [_sceneColor release];   [_postColor release];   [_sceneDepth release];
+  [_sceneColorMS release];  [_sceneDepthMS release];
+  [_oitAccum release];      [_oitReveal release];
+  _sceneColor = _postColor = _sceneDepth = nil;
+  _sceneColorMS = _sceneDepthMS = nil;
+  _oitAccum = _oitReveal = nil;
+
   MTLTextureDescriptor* cd = [MTLTextureDescriptor
       texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                    width:w height:h mipmapped:NO];
