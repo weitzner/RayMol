@@ -116,6 +116,13 @@ static void drawSphereImpostorsViaMetal(
   // Radius is already baked into a_vertex_radius.w by the rep, so no extra scale.
   call.sphereSizeScale = 1.0f;
   call.ortho = SettingGetGlobal_b(G, cSetting_ortho) ? 1 : 0;
+  {
+    // Per-object: fill the slab cross-section of clipped spheres with a solid
+    // interior color instead of seeing through them (metal_interior_cap).
+    CSetting *s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
+    CSetting *s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
+    call.interiorCap = SettingGet_b(G, s1, s2, cSetting_metal_interior_cap) ? 1 : 0;
+  }
 
   G->Renderer->drawSphereImpostors(call);
 }
@@ -185,6 +192,12 @@ static void drawCylinderImpostorsViaMetal(CCGORenderer* I, VertexBufferGL* vbo,
   call.capConst = I->metalCylCapConst; // captured from CGO_VERTEX_ATTRIBUTE_1F
   call.noFlatCaps = 1;   // round caps (matches Get_CylinderShader GL default)
   call.ortho = SettingGetGlobal_b(G, cSetting_ortho) ? 1 : 0;
+  {
+    // Per-object slab interior cap (metal_interior_cap) — same as spheres.
+    CSetting *s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
+    CSetting *s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
+    call.interiorCap = SettingGet_b(G, s1, s2, cSetting_metal_interior_cap) ? 1 : 0;
+  }
 
   G->Renderer->drawCylinderImpostors(call);
 }

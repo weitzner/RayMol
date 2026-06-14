@@ -232,6 +232,7 @@ public:
     int rightUpIsFloat = 1;  // 1 = Float, 0 = UByte
     float sphereSizeScale = 1.0f;
     int ortho = 0;           // 1 = orthographic
+    int interiorCap = 0;     // 1 = fill the slab cross-section with interior color
   };
   virtual void drawSphereImpostors(const SphereImpostorDrawCall&) {}
 
@@ -257,6 +258,7 @@ public:
     float capConst = 15.0f;  // a_cap bits (default cCylShaderBothCapsRound)
     int ortho = 0;
     int noFlatCaps = 1;      // 1 => round caps (matches GL shader default)
+    int interiorCap = 0;     // 1 = fill the slab cross-section with interior color
   };
   virtual void drawCylinderImpostors(const CylinderImpostorDrawCall&) {}
 

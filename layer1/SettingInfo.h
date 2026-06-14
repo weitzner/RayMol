@@ -910,6 +910,7 @@ enum {
   REC_b( 800, metal_outline                           , global    , false ), /* Metal silhouette/toon outline post pass */
   REC_b( 801, metal_msaa                              , global    , true ),  /* Metal 4x MSAA scene rendering */
   REC_b( 802, metal_raytrace                          , global    , false ), /* Metal real-time ray-traced AO + shadows */
+  REC_b( 803, metal_interior_cap                      , object    , false ), /* Metal: fill (cap) the slab cross-section of clipped spheres/sticks with a solid interior color */
 
 #ifdef SETTINGINFO_IMPLEMENTATION
 #undef SETTINGINFO_IMPLEMENTATION

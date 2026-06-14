@@ -96,11 +96,13 @@ enum RepCatalog {
                 RepProperty(setting: "stick_transparency", label: "Transparency", kind: .slider),
                 RepProperty(setting: "stick_radius",   label: "Radius",  kind: .slider),
                 RepProperty(setting: "stick_h_scale",  label: "H scale", kind: .slider),
+                RepProperty(setting: "metal_interior_cap", label: "Solid interior", kind: .toggle),
             ]),
         "spheres": RepSpec(rep: "spheres", display: "Spheres",
             colorSetting: "sphere_color", defaultColor: -1, properties: [
                 RepProperty(setting: "sphere_transparency", label: "Transparency", kind: .slider),
                 RepProperty(setting: "sphere_scale", label: "Scale", kind: .slider, max: 3, step: 0.05),
+                RepProperty(setting: "metal_interior_cap", label: "Solid interior", kind: .toggle),
             ]),
         "ribbon": RepSpec(rep: "ribbon", display: "Ribbon",
             colorSetting: "ribbon_color", defaultColor: -1, properties: [

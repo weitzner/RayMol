@@ -611,8 +611,14 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   float3 color = colorTex.sample(s, in.uv).rgb;
   float d = depthTex.sample(s, in.uv);
 
+  // Interior-cap cross-sections are drawn at a sentinel depth right at the near
+  // plane (~1e-5); nothing else sits that close (it would be clipped). Treat
+  // those pixels as a flat solid fill: skip AO + shadow so the cut face stays
+  // clean instead of being shaded by the screen-space post passes.
+  bool flatCap = (d <= 0.0015);
+
   float ao = 1.0;
-  if (u.aoEnabled > 0.5 && d < 0.99999) {
+  if (u.aoEnabled > 0.5 && d < 0.99999 && !flatCap) {
     float zc = post_linear_depth(d, u.projA, u.projB);
     float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
     const int N = 12;
@@ -649,7 +655,7 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   //       just reads as nonsense double-darkening.
   //   (2) SEPARATION gate — the occluder must be meaningfully closer to the
   //       light than the receiver (a real gap), not the same/adjacent surface.
-  if (u.shadowEnabled > 0.5 && d < 0.99999) {
+  if (u.shadowEnabled > 0.5 && d < 0.99999 && !flatCap) {
     float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);  // eye z (negative)
     float ndcx = 2.0 * in.uv.x - 1.0;
     float ndcy = 1.0 - 2.0 * in.uv.y;
@@ -1004,6 +1010,7 @@ fragment float4 rt_resolve(PostVOut in [[stage_in]],
   float3 col = colorTex.sample(s, in.uv).rgb;
   float d = depthTex.sample(s, in.uv);
   if (d >= 0.99999) return float4(col, 1.0);  // background: leave as-is
+  if (d <= 0.0015) return float4(col, 1.0);   // interior-cap cross-section: flat
 
   // Eye-space position (matches post_ssao_fog reconstruction).
   float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);
@@ -3259,7 +3266,7 @@ struct SphereU {
   float sphere_size_scale;
   float ortho;          // 1 = orthographic
   float depthZeroToOne; // 1 if clip Z already [0,1]; else apply 0.5+0.5 remap
-  float _pad;
+  float interiorCap;    // 1 = cap the slab cross-section with a solid interior color
 };
 struct SphereVOut {
   float4 position [[position]];
@@ -3338,11 +3345,28 @@ static void sphere_shade(SphereVOut in, constant SphereU& u,
   if (position < 0.0) discard_fragment();
   float nearest = b - sqrt(position);
   float3 ipoint = nearest * ray_dir + ray_origin;
-  float3 normal = normalize(ipoint - in.sphere_center);
   float4 clip = u.projection * float4(ipoint, 1.0);
   float ndcz = clip.z / clip.w;
   depth = (u.depthZeroToOne >= 0.5) ? ndcz : (0.5 + 0.5 * ndcz);
-  if (depth <= 0.0 || depth >= 1.0) discard_fragment();
+
+  if (depth >= 1.0) discard_fragment();   // behind the far plane
+  if (depth <= 0.0) {
+    // The near (slab) plane cuts in front of this surface point. If the BACK of
+    // the sphere is still inside the slab, the plane slices through the sphere:
+    // cap the cross-section with a flat interior color, else discard (=see-thru).
+    if (u.interiorCap < 0.5) discard_fragment();
+    float farthest = b + sqrt(position);
+    float3 fpoint = farthest * ray_dir + ray_origin;
+    float4 fclip = u.projection * float4(fpoint, 1.0);
+    float fdepth = (u.depthZeroToOne >= 0.5) ? (fclip.z / fclip.w)
+                                             : (0.5 + 0.5 * fclip.z / fclip.w);
+    if (fdepth <= 0.0) discard_fragment();  // whole sphere in front of the slab
+    depth = 1e-5;                           // flat disc at the slab plane (front)
+    rgb = in.color.rgb * 0.45;              // darkened solid interior
+    alpha = in.color.a;
+    return;
+  }
+  float3 normal = normalize(ipoint - in.sphere_center);
 
   // PyMOL default two-light model (see data/shaders/compute_color_for_light.fs):
   // ambient .14, headlight direct .45, key reflect .481, specular .5, shine 55.
@@ -3550,7 +3574,7 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
     float sphere_size_scale;
     float ortho;
     float depthZeroToOne;
-    float _pad;
+    float interiorCap;
   } u;
   std::memcpy(u.modelview, _modelviewMatrix.data(), 64);
   std::memcpy(u.projection, _projectionMatrix.data(), 64);
@@ -3559,7 +3583,8 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
   // Projection is GL-convention ([-1,1] clip Z): remap to [0,1] for Metal's
   // fragment depth (matches the GL sphere.fs `0.5 + 0.5 * clipZ/clipW`).
   u.depthZeroToOne = 0.0f;
-  u._pad = 0.0f;
+  // Cap the slab cross-section only in the opaque pass (not shadow/OIT).
+  u.interiorCap = (call.interiorCap && !_shadowMode && !_oitActive) ? 1.0f : 0.0f;
   [_encoder setVertexBytes:&u length:sizeof(u) atIndex:1];
   // The fragment shader also reads `u` (projection for depth, ortho flag) at
   // buffer index 1 — it must be bound to the fragment stage too, otherwise it
@@ -3603,7 +3628,7 @@ struct CylU {
   float cap_const;
   float half_bond;
   float inv_height;
-  float _pad;
+  float interiorCap;    // 1 = cap the slab cross-section with a solid interior color
 };
 struct CylVOut {
   float4 position [[position]];
@@ -3763,7 +3788,21 @@ static void cyl_shade(CylVOut in, constant CylU& u,
   float4 clip = u.projection * float4(new_point, 1.0);
   float ndcz = clip.z / clip.w;
   depth = (u.depthZeroToOne >= 0.5) ? ndcz : (0.5 + 0.5 * ndcz);
-  if (depth <= 0.0) discard_fragment();
+  if (depth <= 0.0) {
+    // Surface point is in front of the slab. If the cylinder body still straddles
+    // the slab (its far wall is inside), cap the cross-section with a flat
+    // interior color instead of discarding (= see-through). Else discard.
+    if (u.interiorCap < 0.5) discard_fragment();
+    float dist2 = (-a1 - sqrt(d)) / a2;            // far body intersection
+    float3 p2 = ray_target + dist2 * ray_dir;
+    float4 c2 = u.projection * float4(p2, 1.0);
+    float d2 = (u.depthZeroToOne >= 0.5) ? (c2.z / c2.w) : (0.5 + 0.5 * c2.z / c2.w);
+    if (d2 <= 0.0) discard_fragment();             // whole stick in front of slab
+    depth = 1e-5;                                  // flat disc at the slab plane
+    rgb = color.rgb * 0.45;                        // darkened solid interior
+    alpha = color.a;
+    return;
+  }
 
   // PyMOL default two-light model (identical to the sphere impostor).
   const float ambient    = 0.14;
@@ -3982,7 +4021,7 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
     float cap_const;
     float half_bond;
     float inv_height;
-    float _pad;
+    float interiorCap;
   } u;
   std::memcpy(u.modelview, _modelviewMatrix.data(), 64);
   std::memcpy(u.projection, _projectionMatrix.data(), 64);
@@ -3993,7 +4032,8 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
   u.cap_const = call.capConst;
   u.half_bond = 0.0f;      // smooth_half_bonds default off
   u.inv_height = 1.0f;     // only used when half_bond != 0
-  u._pad = 0.0f;
+  // Cap the slab cross-section only in the opaque pass (not shadow/OIT).
+  u.interiorCap = (call.interiorCap && !_shadowMode && !_oitActive) ? 1.0f : 0.0f;
   [_encoder setVertexBytes:&u length:sizeof(u) atIndex:1];
   [_encoder setFragmentBytes:&u length:sizeof(u) atIndex:1];
 
