@@ -241,6 +241,7 @@ private let colorOptions: [ColorOption] = [
     ColorOption(label: "by chain",    command: "util.cbc",   swatch: nil),
     ColorOption(label: "by ss",       command: "util.cbss",  swatch: nil),
     ColorOption(label: "spectrum",    command: "spectrum",    swatch: nil),
+    ColorOption(label: "by b-factor", command: "spectrum_b",  swatch: nil),
     ColorOption(label: "auto",        command: "util.cba",   swatch: nil),
     ColorOption(label: "---",         command: nil,           swatch: nil),
     ColorOption(label: "red",         command: "red",         swatch: Color(.sRGB, red: 1.0, green: 0.0, blue: 0.0)),
@@ -802,6 +803,10 @@ private struct ColorMenuButton: View {
             engine.runCommand("python\ncmd.util.\(funcName)('\(name)')\npython end")
         } else if command == "spectrum" {
             engine.runCommand("spectrum count, selection=\(name)")
+        } else if command == "spectrum_b" {
+            // Color by B-factor: blue (low) → white → red (high), the classic
+            // temperature look. Falls back gracefully if b is uniform/zero.
+            engine.runCommand("spectrum b, blue_white_red, \(name)")
         } else {
             engine.runCommand("color \(command), \(name)")
         }
