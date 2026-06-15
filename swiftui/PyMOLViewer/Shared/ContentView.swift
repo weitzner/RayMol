@@ -619,12 +619,15 @@ struct ContentView: View {
                 renderOptionToggles
                 #endif
                 Divider()
+                // Same format set as the macOS export menu (parity).
                 Menu {
                     Button("PDB (.pdb)") { iosShareStructure(ext: "pdb") }
                     Button("mmCIF (.cif)") { iosShareStructure(ext: "cif") }
-                    Button("MOL2 (.mol2)") { iosShareStructure(ext: "mol2") }
                     Button("SDF (.sdf)") { iosShareStructure(ext: "sdf") }
+                    Button("MOL (.mol)") { iosShareStructure(ext: "mol") }
+                    Button("MOL2 (.mol2)") { iosShareStructure(ext: "mol2") }
                     Button("XYZ (.xyz)") { iosShareStructure(ext: "xyz") }
+                    Button("PQR (.pqr)") { iosShareStructure(ext: "pqr") }
                     Divider()
                     // 3D models that work on this NO_OPENGL / libxml-off build
                     // (CPU-ray export path). glTF/COLLADA/STL are unavailable.
@@ -662,41 +665,46 @@ struct ContentView: View {
         return (Int((s.width * scale).rounded()), Int((s.height * scale).rounded()))
     }
 
-    private func iosRenderPNG(width: Int, height: Int) -> URL? {
-        guard width > 0, height > 0 else { return nil }
+    // Renders the export PNG through runHeavy so the "Calculating…" overlay shows
+    // during the (slow, ray-traced) render, then delivers the file URL on the
+    // main thread via `done` (nil if it didn't write).
+    private func iosRenderPNG(width: Int, height: Int, done: @escaping (URL?) -> Void) {
+        guard width > 0, height > 0 else { done(nil); return }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("PyMOL.png")
         try? FileManager.default.removeItem(at: url)
-        if exportTransparent {
-            // The Metal fast path bakes the background color (its post chain
-            // composites onto bg). For a true transparent PNG, use the CPU
-            // ray-tracer, which honors ray_opaque_background. Slower but correct
-            // (and genuinely ray-traced). Synchronous via cmd.do.
-            engine.runCommand("set ray_opaque_background, 0")
-            engine.runCommand("png \(url.path), width=\(width), height=\(height), ray=1")
-        } else {
-            engine.runCommand("set ray_opaque_background, 1")
-            engine.renderHiResPNG(url.path, width: width, height: height,
-                                  rayTraced: exportRayTraced ? 1 : 0)
+        engine.runHeavy("Rendering image…") {
+            if exportTransparent {
+                // The Metal fast path bakes the background color (its post chain
+                // composites onto bg). For a true transparent PNG, use the CPU
+                // ray-tracer, which honors ray_opaque_background. Slower but correct.
+                engine.runCommand("set ray_opaque_background, 0")
+                engine.runCommand("png \(url.path), width=\(width), height=\(height), ray=1")
+            } else {
+                engine.runCommand("set ray_opaque_background, 1")
+                engine.renderHiResPNG(url.path, width: width, height: height,
+                                      rayTraced: exportRayTraced ? 1 : 0)
+            }
+            done(FileManager.default.fileExists(atPath: url.path) ? url : nil)
         }
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     private func iosShareImage(scale: CGFloat) {
         let (w, h) = iosExportWH(scale: scale)
-        if let url = iosRenderPNG(width: w, height: h) { presentShareSheet(url) }
+        iosRenderPNG(width: w, height: h) { url in if let url { presentShareSheet(url) } }
     }
 
     private func iosShareImage(size: CGSize) {
-        if let url = iosRenderPNG(width: Int(size.width), height: Int(size.height)) {
-            presentShareSheet(url)
+        iosRenderPNG(width: Int(size.width), height: Int(size.height)) { url in
+            if let url { presentShareSheet(url) }
         }
     }
 
     private func iosCopyImage() {
         let (w, h) = iosExportWH(scale: 2)
-        if let url = iosRenderPNG(width: w, height: h),
-           let img = UIImage(contentsOfFile: url.path) {
-            UIPasteboard.general.image = img
+        iosRenderPNG(width: w, height: h) { url in
+            if let url, let img = UIImage(contentsOfFile: url.path) {
+                UIPasteboard.general.image = img
+            }
         }
     }
 
@@ -787,10 +795,20 @@ struct ContentView: View {
 
                 Divider()
 
-                Button {
-                    saveStructure()
+                // Per-format structure submenu (mirrors the mobile export menu).
+                Menu {
+                    Button("PDB (.pdb)") { saveStructure(ext: "pdb") }
+                    Button("mmCIF (.cif)") { saveStructure(ext: "cif") }
+                    Button("SDF (.sdf)") { saveStructure(ext: "sdf") }
+                    Button("MOL (.mol)") { saveStructure(ext: "mol") }
+                    Button("MOL2 (.mol2)") { saveStructure(ext: "mol2") }
+                    Button("XYZ (.xyz)") { saveStructure(ext: "xyz") }
+                    Button("PQR (.pqr)") { saveStructure(ext: "pqr") }
+                    Divider()
+                    Button("VRML (.wrl)") { saveStructure(ext: "wrl") }
+                    Button("POV-Ray (.pov)") { saveStructure(ext: "pov") }
                 } label: {
-                    Label("Save Structure As…", systemImage: "atom")
+                    Label("Save Structure", systemImage: "atom")
                 }
                 Button {
                     saveSession()
@@ -855,13 +873,19 @@ struct ContentView: View {
     // Render a PNG to `path`. Transparent → CPU ray-trace (honors
     // ray_opaque_background; the Metal fast path bakes the bg color via its post
     // chain). Else the Metal fast path with the background color.
-    private func renderExportPNG(_ path: String, _ w: Int, _ h: Int) {
-        if exportTransparent {
-            engine.runCommand("set ray_opaque_background, 0")
-            engine.runCommand("png \(path), width=\(w), height=\(h), ray=1")
-        } else {
-            engine.runCommand("set ray_opaque_background, 1")
-            engine.renderHiResPNG(path, width: w, height: h, rayTraced: rtFlag)
+    // Renders through runHeavy so the "Calculating…" overlay shows during the
+    // (slow, ray-traced) render; `done` runs on the main thread once written.
+    private func renderExportPNG(_ path: String, _ w: Int, _ h: Int,
+                                 done: @escaping () -> Void = {}) {
+        engine.runHeavy("Rendering image…") {
+            if exportTransparent {
+                engine.runCommand("set ray_opaque_background, 0")
+                engine.runCommand("png \(path), width=\(w), height=\(h), ray=1")
+            } else {
+                engine.runCommand("set ray_opaque_background, 1")
+                engine.renderHiResPNG(path, width: w, height: h, rayTraced: rtFlag)
+            }
+            done()
         }
     }
 
@@ -881,11 +905,12 @@ struct ContentView: View {
         let size = exportSize(scale: 2)
         let w = Int(size.width.rounded()), h = Int(size.height.rounded())
         let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("pymol_clip.png")
-        renderExportPNG(tmp, w, h)
-        guard let img = NSImage(contentsOfFile: tmp) else { return }
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.writeObjects([img])
+        renderExportPNG(tmp, w, h) {
+            guard let img = NSImage(contentsOfFile: tmp) else { return }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([img])
+        }
     }
 
     private func saveSession() {
@@ -902,14 +927,13 @@ struct ContentView: View {
     // from the extension; the user types the extension (.pdb/.cif/.mol2/.sdf/.xyz
     // /.mae/.pqr molecular, or .wrl/.pov 3D — glTF/COLLADA/STL aren't available
     // on this libxml-off / NO_OPENGL build).
-    private func saveStructure() {
+    private func saveStructure(ext: String) {
         let panel = NSSavePanel()
-        let exts = ["pdb", "cif", "sdf", "mol", "mol2", "xyz", "mae", "pqr", "wrl", "pov"]
-        panel.allowedContentTypes = exts.compactMap { UTType(filenameExtension: $0) }
+        if let t = UTType(filenameExtension: ext) { panel.allowedContentTypes = [t] }
         panel.allowsOtherFileTypes = true
-        panel.nameFieldStringValue = "structure.pdb"
+        panel.nameFieldStringValue = "structure.\(ext)"
         panel.canCreateDirectories = true
-        panel.title = "Save Structure As"
+        panel.title = "Save Structure (.\(ext))"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         engine.runPython("from pymol import cmd as _c\n_c.save(r'''\(url.path)''')")
     }
@@ -918,8 +942,7 @@ struct ContentView: View {
         let size = exportSize(scale: 2)
         let w = Int(size.width.rounded()), h = Int(size.height.rounded())
         let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("pymol_share.png")
-        renderExportPNG(tmp, w, h)
-        presentShare(forFileAt: tmp)
+        renderExportPNG(tmp, w, h) { presentShare(forFileAt: tmp) }
     }
 
     private func shareSession() {
