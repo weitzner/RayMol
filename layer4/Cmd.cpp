@@ -3864,6 +3864,7 @@ static PyObject *CmdSystem(PyObject * self, PyObject * args)
     API_HANDLE_ERROR;
   }
   if(ok) {
+#ifndef _PYMOL_IOS
     if(async) {
       PUnblock(G);              /* free up PyMOL and the API */
       ok = system(str1);
@@ -3872,6 +3873,9 @@ static PyObject *CmdSystem(PyObject * self, PyObject * args)
       ok = system(str1);
       APIExit(G);
     }
+#else
+    ok = false; /* system() not available on iOS */
+#endif
   }
   return APIResultOk(ok);
 }

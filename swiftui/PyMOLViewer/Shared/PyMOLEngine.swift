@@ -19,6 +19,15 @@ final class PlaybackState: ObservableObject {
 
 enum MeasureKind: String { case distance, angle, dihedral }
 
+/// One PyMOL setting for the Settings panel. type: 1 bool, 2 int, 3 float,
+/// 4 float3, 5 color, 6 string (pymol.setting type codes).
+struct SettingItem: Identifiable, Equatable, Codable {
+    let name: String
+    let type: Int
+    var val: String
+    var id: String { name }
+}
+
 final class PyMOLEngine: ObservableObject {
     static let shared = PyMOLEngine()
 
@@ -52,6 +61,8 @@ final class PyMOLEngine: ObservableObject {
     // distance/angle/dihedral. measureStatus is the prompt/result shown in the UI.
     @Published var measureMode: MeasureKind? = nil
     @Published var measureStatus: String = ""
+    // Full settings catalog for the searchable Settings panel (loaded on demand).
+    @Published var settingsCatalog: [SettingItem] = []
     // The single detail view that is currently open (accordion: at most one).
     // nil = none, `sceneDetailKey` = the SCENE card, otherwise an object name.
     // Drives which object the detail poll queries (collapsed = cheap).
@@ -121,7 +132,7 @@ final class PyMOLEngine: ObservableObject {
         // cached/stale install) when verifying gesture-direction fixes. Bump the
         // tag whenever gesture behavior changes; it shows at the top of the log.
         DispatchQueue.main.async { [weak self] in
-            self?.feedbackLog.append(" [build] v24  (selection mode: atom/residue/chain/segment/object/molecule)")
+            self?.feedbackLog.append(" [build] v29  (Transparent export via CPU ray-tracer — honors ray_opaque_background)")
         }
 
         // `fetch` downloads into fetch_path; the process cwd is read-only on iOS,
@@ -603,6 +614,40 @@ final class PyMOLEngine: ObservableObject {
         runPython("from pymol import appkit_measure as _am\n_am.clear_all()")
     }
 
+    // MARK: - Settings panel
+
+    func loadSettingsCatalog() {
+        runPython("from pymol import appkit_settings as _as\n_as.catalog()")
+    }
+
+    func setSetting(_ name: String, _ value: String) {
+        let n = name.replacingOccurrences(of: "'", with: "")
+        let v = value.replacingOccurrences(of: "'", with: "")
+        runPython("from pymol import appkit_settings as _as\n_as.set_value(r'''\(n)''', r'''\(v)''')")
+    }
+
+    // Read the settings catalog JSON the bridge wrote to the temp dir.
+    private func loadSettingsCatalogFile() {
+        let path = NSTemporaryDirectory() + "pymol_settings.json"
+        guard let data = FileManager.default.contents(atPath: path),
+              let items = try? JSONDecoder().decode([SettingItem].self, from: data)
+        else { return }
+        DispatchQueue.main.async { self.settingsCatalog = items }
+    }
+
+    // SETVAL:<name>=<val> — update one row after an edit (reflects clamping/parse).
+    private func parseSetValFeedback(_ line: String) {
+        let body = String(line.dropFirst("SETVAL:".count))
+        guard let eq = body.firstIndex(of: "=") else { return }
+        let name = String(body[..<eq])
+        let val = String(body[body.index(after: eq)...])
+        DispatchQueue.main.async {
+            if let i = self.settingsCatalog.firstIndex(where: { $0.name == name }) {
+                self.settingsCatalog[i].val = val
+            }
+        }
+    }
+
     // Parse MEASURE:<json> {kind,count,need,value?} → measureStatus text.
     func parseMeasureFeedback(_ line: String) {
         let js = String(line.dropFirst("MEASURE:".count))
@@ -794,6 +839,12 @@ final class PyMOLEngine: ObservableObject {
                     parseMeasureFeedback(line)
                 } else if line.hasPrefix("MEASURE_ERR:") {
                     // swallow
+                } else if line.hasPrefix("SETTINGS:ready") {
+                    loadSettingsCatalogFile()
+                } else if line.hasPrefix("SETTINGS:err") {
+                    // swallow
+                } else if line.hasPrefix("SETVAL:") {
+                    parseSetValFeedback(line)
                 } else if !line.isEmpty {
                     DispatchQueue.main.async {
                         self.feedbackLog.append(line)

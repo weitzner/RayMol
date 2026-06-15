@@ -19,5 +19,5 @@
 # This file is loaded as an initial-cache script (-C) to set iOS defaults
 set(PYMOL_IOS ON CACHE BOOL "Building for iOS")
 set(PYMOL_LIBXML OFF CACHE BOOL "Disable libxml2 for iOS")
-set(PYMOL_VMD_PLUGINS OFF CACHE BOOL "Disable VMD plugins for iOS")
+set(PYMOL_VMD_PLUGINS ON CACHE BOOL "VMD molfile plugins (DCD/XTC/TRR/CCP4/MRC/DX); netcdf excluded")
 set(PYMOL_MSGPACKC OFF CACHE BOOL "Disable msgpack-c for iOS")

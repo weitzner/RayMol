@@ -19,9 +19,22 @@ struct ContentView: View {
     // Export menu state. exportRayTraced persists across launches; when on, all
     // image exports are ray-traced (AO + shadows) regardless of the live view.
     @AppStorage("exportRayTraced") private var exportRayTraced = true
+    // Transparent background for exported images (sets ray_opaque_background=0
+    // just before the offscreen render). Persists across launches.
+    @AppStorage("exportTransparent") private var exportTransparent = false
     @State private var showCustomSizeSheet = false
     @State private var customWidth = "3840"
     @State private var customHeight = "2160"
+
+    // Export render-option toggles (shared by the iOS + macOS export menus).
+    @ViewBuilder private var renderOptionToggles: some View {
+        Toggle(isOn: $exportRayTraced) {
+            Label("Ray-traced (AO + shadows)", systemImage: "sparkles")
+        }
+        Toggle(isOn: $exportTransparent) {
+            Label("Transparent background", systemImage: "square.dashed")
+        }
+    }
 
     var body: some View {
         #if os(macOS)
@@ -124,6 +137,7 @@ struct ContentView: View {
     // sheet so the screenshot harness can capture it (simctl can't tap).
     @State private var showBuilderSheet = false
     @State private var showExportSheet = false
+    @State private var showSettingsSheet = false
     // Test affordance (PYMOL_AUTOEXPORTMOVIE="mp4|gif,first,last"): run a headless
     // movie export and copy the result to /tmp so the harness can validate it.
     @StateObject private var exportTester = MovieExporter()
@@ -237,6 +251,7 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showBuilderSheet) { MovieBuilderSheet() }
             .sheet(isPresented: $showExportSheet) { MovieExportSheet() }
+            .sheet(isPresented: $showSettingsSheet) { SettingsSheet() }
         }
         .preferredColorScheme(.dark)   // consistent dark chrome (no white nav bar)
         .onAppear {
@@ -261,6 +276,7 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
                     if s == "builder" { showBuilderSheet = true }
                     if s == "export" { showExportSheet = true }
+                    if s == "settings" { showSettingsSheet = true }
                 }
             }
             if let m = ProcessInfo.processInfo.environment["PYMOL_AUTOMEASURE"] {
@@ -571,9 +587,22 @@ struct ContentView: View {
                 } label: {
                     Label("Copy Image", systemImage: "doc.on.clipboard")
                 }
-                Toggle(isOn: $exportRayTraced) {
-                    Label("Ray-traced (AO + shadows)", systemImage: "sparkles")
+                // Render options in a submenu whose toggles DON'T dismiss the
+                // menu (flip both before exporting). dismiss-disabled is iOS-only.
+                #if os(iOS)
+                if #available(iOS 16.4, *) {
+                    Menu {
+                        renderOptionToggles
+                    } label: {
+                        Label("Render Options", systemImage: "slider.horizontal.3")
+                    }
+                    .menuActionDismissBehavior(.disabled)
+                } else {
+                    renderOptionToggles
                 }
+                #else
+                renderOptionToggles
+                #endif
                 Divider()
                 Menu {
                     Button("PDB (.pdb)") { iosShareStructure(ext: "pdb") }
@@ -621,8 +650,19 @@ struct ContentView: View {
     private func iosRenderPNG(width: Int, height: Int) -> URL? {
         guard width > 0, height > 0 else { return nil }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("PyMOL.png")
-        engine.renderHiResPNG(url.path, width: width, height: height,
-                              rayTraced: exportRayTraced ? 1 : 0)
+        try? FileManager.default.removeItem(at: url)
+        if exportTransparent {
+            // The Metal fast path bakes the background color (its post chain
+            // composites onto bg). For a true transparent PNG, use the CPU
+            // ray-tracer, which honors ray_opaque_background. Slower but correct
+            // (and genuinely ray-traced). Synchronous via cmd.do.
+            engine.runCommand("set ray_opaque_background, 0")
+            engine.runCommand("png \(url.path), width=\(width), height=\(height), ray=1")
+        } else {
+            engine.runCommand("set ray_opaque_background, 1")
+            engine.renderHiResPNG(url.path, width: width, height: height,
+                                  rayTraced: exportRayTraced ? 1 : 0)
+        }
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
@@ -713,9 +753,22 @@ struct ContentView: View {
                     Label("Copy Image to Clipboard", systemImage: "doc.on.clipboard")
                 }
                 .keyboardShortcut("c", modifiers: .command)
-                Toggle(isOn: $exportRayTraced) {
-                    Label("Ray-traced (AO + shadows)", systemImage: "sparkles")
+                // Render options in a submenu whose toggles DON'T dismiss the
+                // menu (flip both before exporting). dismiss-disabled is iOS-only.
+                #if os(iOS)
+                if #available(iOS 16.4, *) {
+                    Menu {
+                        renderOptionToggles
+                    } label: {
+                        Label("Render Options", systemImage: "slider.horizontal.3")
+                    }
+                    .menuActionDismissBehavior(.disabled)
+                } else {
+                    renderOptionToggles
                 }
+                #else
+                renderOptionToggles
+                #endif
 
                 Divider()
 
@@ -784,6 +837,19 @@ struct ContentView: View {
 
     private var rtFlag: Int { exportRayTraced ? 1 : 0 }
 
+    // Render a PNG to `path`. Transparent → CPU ray-trace (honors
+    // ray_opaque_background; the Metal fast path bakes the bg color via its post
+    // chain). Else the Metal fast path with the background color.
+    private func renderExportPNG(_ path: String, _ w: Int, _ h: Int) {
+        if exportTransparent {
+            engine.runCommand("set ray_opaque_background, 0")
+            engine.runCommand("png \(path), width=\(w), height=\(h), ray=1")
+        } else {
+            engine.runCommand("set ray_opaque_background, 1")
+            engine.renderHiResPNG(path, width: w, height: h, rayTraced: rtFlag)
+        }
+    }
+
     private func saveImage(size: CGSize) {
         let w = Int(size.width.rounded()), h = Int(size.height.rounded())
         guard w > 0, h > 0 else { return }
@@ -793,14 +859,14 @@ struct ContentView: View {
         panel.canCreateDirectories = true
         panel.title = "Save Image (\(w) × \(h))"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        engine.renderHiResPNG(url.path, width: w, height: h, rayTraced: rtFlag)
+        renderExportPNG(url.path, w, h)
     }
 
     private func copyImageToClipboard() {
         let size = exportSize(scale: 2)
         let w = Int(size.width.rounded()), h = Int(size.height.rounded())
         let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("pymol_clip.png")
-        engine.renderHiResPNG(tmp, width: w, height: h, rayTraced: rtFlag)
+        renderExportPNG(tmp, w, h)
         guard let img = NSImage(contentsOfFile: tmp) else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -837,7 +903,7 @@ struct ContentView: View {
         let size = exportSize(scale: 2)
         let w = Int(size.width.rounded()), h = Int(size.height.rounded())
         let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("pymol_share.png")
-        engine.renderHiResPNG(tmp, width: w, height: h, rayTraced: rtFlag)
+        renderExportPNG(tmp, w, h)
         presentShare(forFileAt: tmp)
     }
 

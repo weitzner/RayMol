@@ -33,10 +33,15 @@ typedef unsigned short GLushort;
 typedef char          GLchar;
 typedef ptrdiff_t     GLsizeiptr;
 typedef ptrdiff_t     GLintptr;
+typedef unsigned int  GLbitfield;
 
 /* Boolean */
 #define GL_FALSE 0
 #define GL_TRUE  1
+
+/* Error codes */
+#define GL_INVALID_ENUM   0x0500
+#define GL_INVALID_VALUE  0x0501
 
 /* Data types */
 #define GL_BYTE           0x1400
@@ -65,15 +70,34 @@ typedef ptrdiff_t     GLintptr;
 #define GL_PROJECTION 0x1701
 
 /* Capabilities */
-#define GL_DEPTH_TEST  0x0B71
-#define GL_BLEND       0x0BE2
-#define GL_LINE_SMOOTH 0x0B20
-#define GL_SCISSOR_TEST 0x0C11
+#define GL_DEPTH_TEST      0x0B71
+#define GL_BLEND           0x0BE2
+#define GL_LINE_SMOOTH     0x0B20
+#define GL_POLYGON_SMOOTH  0x0B41
+#define GL_SCISSOR_TEST    0x0C11
 
 /* Buffers / draw */
-#define GL_BACK       0x0405
-#define GL_BACK_LEFT  0x0402
-#define GL_BACK_RIGHT 0x0403
+#define GL_FRONT_LEFT  0x0400
+#define GL_FRONT_RIGHT 0x0401
+#define GL_BACK_LEFT   0x0402
+#define GL_BACK_RIGHT  0x0403
+#define GL_BACK        0x0405
+
+/* Limits */
+#define GL_MAX_VIEWPORT_DIMS 0x0D3A
+
+/* State queries */
+#define GL_ALPHA_TEST_FUNC   0x0BC1
+#define GL_ALPHA_TEST_REF    0x0BC2
+#define GL_DEPTH_WRITEMASK   0x0B72
+#define GL_POINT_SPRITE      0x8861
+#define GL_VERTEX_PROGRAM_POINT_SIZE 0x8642
+
+/* String queries */
+#define GL_VENDOR             0x1F00
+#define GL_RENDERER           0x1F01
+#define GL_VERSION            0x1F02
+#define GL_EXTENSIONS         0x1F03
 
 /* Texture */
 #define GL_TEXTURE_2D 0x0DE1
@@ -89,6 +113,15 @@ typedef ptrdiff_t     GLintptr;
 #define GL_TEXTURE_2D         0x0DE1
 #define GL_TEXTURE_3D         0x806F
 #define GL_TEXTURE0           0x84C0
+#define GL_TEXTURE1           0x84C1
+#define GL_TEXTURE2           0x84C2
+#define GL_TEXTURE3           0x84C3
+#define GL_TEXTURE4           0x84C4
+#define GL_TEXTURE5           0x84C5
+#define GL_TEXTURE6           0x84C6
+#define GL_TEXTURE7           0x84C7
+#define GL_TEXTURE_CUBE_MAP   0x8513
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
 #define GL_TEXTURE_MIN_FILTER 0x2801
 #define GL_TEXTURE_MAG_FILTER 0x2800
 #define GL_TEXTURE_WRAP_S     0x2802
@@ -125,6 +158,19 @@ typedef ptrdiff_t     GLintptr;
 #define GL_RGBA16F            0x881A
 #define GL_HALF_FLOAT         0x140B
 #define GL_LUMINANCE          0x1909
+#define GL_LUMINANCE_ALPHA    0x190A
+
+/* Pixel store */
+#define GL_PACK_ROW_LENGTH    0x0D02
+#define GL_PACK_SKIP_ROWS     0x0D03
+#define GL_PACK_SKIP_PIXELS   0x0D04
+#define GL_PACK_SWAP_BYTES    0x0D00
+#define GL_PACK_LSB_FIRST     0x0D01
+#define GL_UNPACK_LSB_FIRST   0x0CF1
+#define GL_UNPACK_SWAP_BYTES  0x0CF0
+#define GL_UNPACK_ROW_LENGTH  0x0CF2
+#define GL_UNPACK_SKIP_ROWS   0x0CF3
+#define GL_UNPACK_SKIP_PIXELS 0x0CF4
 
 /* Framebuffer */
 #define GL_FRAMEBUFFER        0x8D40
@@ -137,8 +183,25 @@ typedef ptrdiff_t     GLintptr;
 #define GL_DEPTH_COMPONENT16  0x81A5
 #define GL_DEPTH_COMPONENT24  0x81A6
 #define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT 0x8CD6
+#define GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT 0x8CD7
+#define GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS_EXT 0x8CD9
+#define GL_FRAMEBUFFER_UNSUPPORTED 0x8CDD
 #define GL_DRAW_FRAMEBUFFER   0x8CA9
 #define GL_READ_FRAMEBUFFER   0x8CA8
+#define GL_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#define GL_READ_BUFFER        0x0C02
+
+/* Channel bit queries */
+#define GL_RED_BITS           0x0D52
+#define GL_GREEN_BITS         0x0D53
+#define GL_BLUE_BITS          0x0D54
+#define GL_ALPHA_BITS         0x0D55
+
+/* Misc queries */
+#define GL_ALIASED_LINE_WIDTH_RANGE 0x846E
 
 /* Buffer objects */
 #define GL_ARRAY_BUFFER       0x8892
@@ -236,7 +299,7 @@ typedef ptrdiff_t     GLintptr;
 #define GL_VERSION            0x1F02
 #define GL_PATCHES            0x000E
 #define GL_PATCH_VERTICES     0x8E72
-#define GL_DEBUG_OUTPUT       0x92E2
+/* GL_DEBUG_OUTPUT intentionally not defined — debug callbacks are GL-only */
 #define GL_DEBUG_SOURCE_APPLICATION 0x824A
 #define GL_DEBUG_TYPE_ERROR   0x824C
 
@@ -277,7 +340,7 @@ static inline void glDepthMask(GLboolean) {}
 static inline void glDepthFunc(GLenum) {}
 static inline void glColorMask(GLboolean, GLboolean, GLboolean, GLboolean) {}
 static inline void glBlendFunc(GLenum, GLenum) {}
-static inline void* glBlendFuncSeparate = nullptr;
+static inline void glBlendFuncSeparate(GLenum, GLenum, GLenum, GLenum) {}
 static inline void glStencilFunc(GLenum, GLint, GLuint) {}
 static inline void glStencilOp(GLenum, GLenum, GLenum) {}
 static inline void glCullFace(GLenum) {}

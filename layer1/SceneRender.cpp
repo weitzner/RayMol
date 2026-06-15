@@ -1958,6 +1958,13 @@ void SceneRenderMetal(PyMOLGlobals* G)
         (SettingGetGlobal_b(G, cSetting_depth_cue) && fog_density != 0.0f) ? 1
                                                                            : 0;
     const float* bg = ColorGet(G, SettingGetGlobal_color(G, cSetting_bg_rgb));
+    // Drive the Metal scene-clear from bg_rgb (the GL path uses glClearColor;
+    // the Metal renderer never read the setting, so the background stayed black).
+    // Applied to the next beginFrame's clear — imperceptible at 60 fps. The clear
+    // ALPHA follows ray_opaque_background: 0 → transparent (the offscreen PNG
+    // export preserves alpha; the live view's layer is opaque so it's unaffected).
+    int opaqueBg = SettingGetGlobal_b(G, cSetting_ray_opaque_background);
+    G->Renderer->clearColor(bg[0], bg[1], bg[2], opaqueBg ? 1.0f : 0.0f);
     int aoEnabled = SettingGetGlobal_b(G, cSetting_metal_ssao) ? 1 : 0;
     int shadowEnabled = SettingGetGlobal_b(G, cSetting_metal_shadows) ? 1 : 0;
     int aaEnabled = SettingGetGlobal_i(G, cSetting_antialias_shader) != 0 ? 1 : 0;

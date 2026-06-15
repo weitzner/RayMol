@@ -163,6 +163,11 @@ if(PYMOL_VMD_PLUGINS)
         "${PYMOL_ROOT}/contrib/uiuc/plugins/molfile_plugin/src/*.c"
         "${PYMOL_ROOT}/contrib/uiuc/plugins/molfile_plugin/src/*.cpp"
     )
+    # netcdfplugin needs an external libnetcdf that isn't built for the
+    # Metal/iOS targets; drop it (its init is also guarded out in
+    # PlugIOManagerInit.c). Everything else (DCD/XTC/TRR/CCP4/MRC/DX/…) is
+    # dependency-free or uses the SDK's zlib.
+    list(FILTER VMD_SOURCES EXCLUDE REGEX "netcdfplugin")
 endif()
 
 # Core library sources (everything except the AppKit entry point)
@@ -249,7 +254,9 @@ if(NOT PYMOL_IOS AND GLEW_INCLUDE)
 endif()
 
 if(PYMOL_VMD_PLUGINS)
-    target_compile_definitions(pymol_core PRIVATE _PYMOL_VMD_PLUGINS)
+    # netcdf plugin is excluded from the build (needs external libnetcdf);
+    # guard out its init/register/fini in PlugIOManagerInit.c.
+    target_compile_definitions(pymol_core PRIVATE _PYMOL_VMD_PLUGINS PYMOL_NO_NETCDF_PLUGIN)
     target_include_directories(pymol_core PRIVATE
         ${PYMOL_ROOT}/contrib/uiuc/plugins/include
         ${PYMOL_ROOT}/contrib/uiuc/plugins/molfile_plugin/src

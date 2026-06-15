@@ -1,6 +1,8 @@
 #include"os_predef.h"
 #include"os_gl.h"
 
+#ifndef _PYMOL_NO_OPENGL
+
 #include<stdio.h>
 
 void PyMOLReadPixels(GLint x,
@@ -102,3 +104,5 @@ int PyMOLCheckOpenGLErr(const char *pos)
   }
   return flag;
 }
+
+#endif /* _PYMOL_NO_OPENGL */

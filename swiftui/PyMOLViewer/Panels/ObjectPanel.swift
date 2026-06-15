@@ -175,6 +175,12 @@ enum SceneCatalog {
         SceneParam(setting: "metal_msaa",    label: "MSAA 4×", kind: .toggle, group: "Lighting & Quality"),
         SceneParam(setting: "depth_cue",     label: "Depth cue / fog", kind: .toggle, group: "Lighting & Quality"),
         SceneParam(setting: "all_states",    label: "Overlay all states", kind: .toggle, group: "Lighting & Quality"),
+        // Lighting (made real-time on Metal in Phase 3; tunable here in Phase 2).
+        SceneParam(setting: "ambient",   label: "Ambient",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
+        SceneParam(setting: "direct",    label: "Direct",   kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
+        SceneParam(setting: "reflect",   label: "Reflect",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
+        SceneParam(setting: "specular",  label: "Specular", kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
+        SceneParam(setting: "shininess", label: "Shininess", kind: .slider, min: 0, max: 100, step: 1, decimals: 0, group: "Lighting & Quality"),
         SceneParam(setting: "field_of_view", label: "Field of view", kind: .slider, min: 10, max: 60, step: 1, decimals: 0, group: "Camera"),
         SceneParam(setting: "surface_quality", label: "Surface quality", kind: .segmented,
                    options: [("0", 0), ("1", 1), ("2", 2)], group: "Camera"),
@@ -1457,6 +1463,7 @@ private struct RepPropertyGrid: View {
 
 private struct SceneCard: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @State private var showSettings = false
     // Collapsed by default and part of the accordion: at most one detail view
     // (SCENE or an object card) is open at a time. This is the single home for
     // display settings now (the redundant toolbar "View" menu was removed).
@@ -1506,11 +1513,25 @@ private struct SceneCard: View {
                         .disabled(rtUnavailable)
                         .opacity(rtUnavailable ? 0.45 : 1)
                     }
+                    Button { showSettings = true } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "slider.horizontal.3")
+                            Text("All settings…")
+                            Spacer()
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(PanelTheme.selectionTextColor)
+                        .padding(.top, 4).padding(.bottom, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Divider().background(PanelTheme.disabledColor.opacity(0.3))
                 }
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(PanelTheme.rowAltBackground.opacity(0.6))
             }
         }
+        .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
 
     @ViewBuilder
@@ -1796,6 +1817,102 @@ struct SelectionBuilderSheet: View {
     private func picker(_ sel: Binding<String>, _ opts: [String]) -> some View {
         Picker("", selection: sel) { ForEach(opts, id: \.self) { Text($0).tag($0) } }
             .labelsHidden()
+    }
+}
+
+// MARK: - Searchable Settings panel (all ~825 PyMOL settings)
+
+struct SettingsSheet: View {
+    @EnvironmentObject var engine: PyMOLEngine
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+
+    private var filtered: [SettingItem] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        if q.isEmpty { return engine.settingsCatalog }
+        return engine.settingsCatalog.filter { $0.name.contains(q) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Settings").font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+            }.padding(16)
+
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search \(engine.settingsCatalog.count) settings…", text: $search)
+                    .textFieldStyle(.plain)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                if !search.isEmpty {
+                    Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+            }
+            .padding(8).background(Color.gray.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 16)
+
+            if engine.settingsCatalog.isEmpty {
+                Spacer(); ProgressView("Loading settings…"); Spacer()
+            } else {
+                List(filtered) { item in
+                    SettingRow(item: item)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .onAppear { if engine.settingsCatalog.isEmpty { engine.loadSettingsCatalog() } }
+        #if os(iOS)
+        .presentationDetents([.large])
+        #else
+        .frame(width: 460, height: 560)
+        #endif
+    }
+}
+
+private struct SettingRow: View {
+    let item: SettingItem
+    @EnvironmentObject var engine: PyMOLEngine
+    @State private var text = ""
+
+    private var isBool: Bool { item.type == 1 }
+    private var boolOn: Bool {
+        if let d = Double(item.val) { return d != 0 }
+        return ["on", "true", "yes"].contains(item.val.lowercased())
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(item.name)
+                .font(.system(size: 12, design: .monospaced))
+                .lineLimit(1).minimumScaleFactor(0.7)
+            Spacer(minLength: 8)
+            if isBool {
+                Toggle("", isOn: Binding(
+                    get: { boolOn },
+                    set: { engine.setSetting(item.name, $0 ? "1" : "0") }))
+                    .labelsHidden().tint(TimelineTheme.accent)
+            } else {
+                TextField("", text: $text)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 110)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .onSubmit { engine.setSetting(item.name, text) }
+                    .onAppear { text = item.val }
+                    .onChange(of: item.val) { text = $0 }
+            }
+        }
+        .font(.system(size: 12))
     }
 }
 

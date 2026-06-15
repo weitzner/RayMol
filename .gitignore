@@ -6,3 +6,20 @@ build_appkit
 build_macos_swiftui
 deps_macos
 .vscode
+
+# iOS / Xcode build + dependency artifacts
+build_ios
+build_ios_device
+build_xcode
+build_xcode_device
+build_xcode_ios
+build_xcode_mac
+deps_ios
+*.egg-info
+
+# per-user Xcode UI state (should never be tracked)
+xcuserdata
+
+# scratch test structures / session transcripts at repo root
+/*.cif
+/context*.txt
