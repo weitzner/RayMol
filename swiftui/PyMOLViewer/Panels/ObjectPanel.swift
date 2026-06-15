@@ -44,6 +44,12 @@ struct SceneState: Equatable {
     var bg: [Double] = [0, 0, 0]         // background r,g,b in 0…1
 }
 
+/// Per-object state metadata for the inspector STATE row (multi-state objects).
+struct ObjStateMeta: Equatable {
+    var state: Int = 1        // effective current state (resolves the frame)
+    var overlayAll: Bool = false   // all_states overlay for this object
+}
+
 // MARK: - Representation inspector: control metadata
 
 enum RepControlKind { case slider, segmented, toggle }
@@ -168,6 +174,7 @@ enum SceneCatalog {
         SceneParam(setting: "metal_outline", label: "Outline", kind: .toggle, group: "Lighting & Quality"),
         SceneParam(setting: "metal_msaa",    label: "MSAA 4×", kind: .toggle, group: "Lighting & Quality"),
         SceneParam(setting: "depth_cue",     label: "Depth cue / fog", kind: .toggle, group: "Lighting & Quality"),
+        SceneParam(setting: "all_states",    label: "Overlay all states", kind: .toggle, group: "Lighting & Quality"),
         SceneParam(setting: "field_of_view", label: "Field of view", kind: .slider, min: 10, max: 60, step: 1, decimals: 0, group: "Camera"),
         SceneParam(setting: "surface_quality", label: "Surface quality", kind: .segmented,
                    options: [("0", 0), ("1", 1), ("2", 2)], group: "Camera"),
@@ -183,6 +190,9 @@ struct ObjectEntry: Identifiable, Equatable {
     var isEnabled: Bool
     var isSelection: Bool
     var atomCount: Int?
+    // Number of coordinate states (NMR models / trajectory frames). >1 surfaces
+    // the per-object STATE controls in the inspector. Defaults to 1.
+    var stateCount: Int = 1
 
     var displayName: String {
         if isSelection, let count = atomCount {
@@ -1123,6 +1133,13 @@ private struct ObjectCard: View {
 
             if expanded {
                 VStack(spacing: 3) {
+                    // Multi-state objects (NMR models / trajectory frames) get a
+                    // STATE row: pin this object to a state independent of the
+                    // global timeline, overlay all states, or fit/split them.
+                    if entry.stateCount > 1 {
+                        stateRow()
+                        Divider().background(PanelTheme.disabledColor.opacity(0.3))
+                    }
                     // Object/layer-level coloring (by element/chain/ss/spectrum/
                     // named) is the structure row's "C" button — not duplicated
                     // here. The per-rep grid below controls per-rep color overrides.
@@ -1160,6 +1177,68 @@ private struct ObjectCard: View {
     private func toggleExpand() {
         // Accordion: opening this card closes whatever else was open.
         engine.expandedDetail = expanded ? nil : entry.name
+    }
+
+    // Per-object STATE controls for multi-state objects (NMR / trajectory).
+    // The slider/steppers PIN this object to a state via `set state, N, obj`
+    // (so it stops following the global timeline); "Sync" un-pins it. Distinct
+    // from the global "Overlay all states" in the SCENE card.
+    @ViewBuilder
+    private func stateRow() -> some View {
+        let total = max(entry.stateCount, 1)
+        let meta = engine.objectMeta[entry.name]
+        let cur = min(max(meta?.state ?? engine.currentFrame, 1), total)
+        VStack(spacing: 3) {
+            HStack(spacing: 6) {
+                Text("State")
+                    .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+                    .frame(width: 78, alignment: .leading)
+                Button { setState(max(cur - 1, 1)) } label: {
+                    Image(systemName: "minus.circle").font(.system(size: 14))
+                }
+                .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)
+                Slider(value: Binding(get: { Double(cur) },
+                                      set: { setState(Int($0.rounded())) }),
+                       in: 1...Double(max(total, 2)), step: 1)
+                    .tint(TimelineTheme.accent)
+                Button { setState(min(cur + 1, total)) } label: {
+                    Image(systemName: "plus.circle").font(.system(size: 14))
+                }
+                .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)
+                Text("\(cur)/\(total)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(PanelTheme.textColor)
+                    .frame(width: 42, alignment: .trailing)
+            }
+            HStack(spacing: 6) {
+                Text("Overlay all")
+                    .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+                    .frame(width: 78, alignment: .leading)
+                ToggleSetting(value: (meta?.overlayAll ?? false) ? 1 : 0) { on in
+                    engine.runCommand("set all_states, \(on ? 1 : 0), \(entry.name)")
+                }
+                Spacer(minLength: 0)
+                stateActionButton("Fit") { engine.runCommand("intra_fit \(entry.name)") }
+                stateActionButton("Split") { engine.runCommand("split_states \(entry.name)") }
+                stateActionButton("Sync") { engine.runCommand("unset state, \(entry.name)") }
+            }
+        }
+    }
+
+    private func setState(_ n: Int) {
+        engine.runCommand("set state, \(n), \(entry.name)")
+    }
+
+    private func stateActionButton(_ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(PanelTheme.buttonBackground)
+                .foregroundColor(PanelTheme.buttonText)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     // Visible toggle + delete (X) for the current layer. Shown whether the layer
@@ -1343,6 +1422,8 @@ private struct SceneCard: View {
 
             if expanded {
                 VStack(spacing: 3) {
+                    SceneStrip()
+                    Divider().background(PanelTheme.disabledColor.opacity(0.3))
                     sceneRow("Background") {
                         ColorPicker("", selection: Binding(
                             get: { Color(.sRGB,
@@ -1409,6 +1490,72 @@ private struct SceneCard: View {
     }
 }
 
+// MARK: - Scenes strip (saved camera/representation snapshots)
+
+private struct SceneStrip: View {
+    @EnvironmentObject var engine: PyMOLEngine
+    @State private var showBuilder = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Scenes")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(PanelTheme.textColor)
+                Spacer(minLength: 0)
+                actionIcon("plus") { engine.runCommand("scene new, store") }
+                    .accessibilityLabel("Store new scene")
+                actionIcon("arrow.clockwise") { engine.runCommand("scene auto, update") }
+                    .accessibilityLabel("Update current scene")
+                actionIcon("xmark") { engine.runCommand("scene auto, delete") }
+                    .accessibilityLabel("Delete current scene")
+                actionIcon("film") { showBuilder = true }
+                    .accessibilityLabel("Make scene-loop movie")
+            }
+            if engine.sceneNames.isEmpty {
+                Text("No scenes — tap + to store the current view.")
+                    .font(.system(size: 9))
+                    .foregroundColor(PanelTheme.disabledColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(engine.sceneNames, id: \.self) { name in
+                            let sel = name == engine.currentScene
+                            Button {
+                                engine.runCommand("scene \(name), recall, animate=1")
+                            } label: {
+                                Text(name)
+                                    .font(.system(size: 9, weight: sel ? .bold : .regular))
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(sel ? TimelineTheme.accent : PanelTheme.buttonBackground)
+                                    .foregroundColor(sel ? Color.black : PanelTheme.buttonText)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showBuilder) {
+            MovieBuilderSheet(initialTab: .scenes)
+        }
+    }
+
+    private func actionIcon(_ systemName: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(PanelTheme.buttonText)
+                .frame(width: 24, height: 22)
+                .background(PanelTheme.buttonBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - ObjectEntry extension for MoleculeObject bridging
 
 extension ObjectEntry {
@@ -1438,6 +1585,7 @@ extension PyMOLEngine {
             let selections: [String]
             let enabled: [String]
             let sel_counts: [String: Int]
+            let nstate: [String: Int]?
         }
 
         guard let payload = try? JSONDecoder().decode(PanelPayload.self, from: data) else {
@@ -1453,7 +1601,8 @@ extension PyMOLEngine {
                 name: name,
                 isEnabled: enabledSet.contains(name),
                 isSelection: false,
-                atomCount: nil
+                atomCount: nil,
+                stateCount: max(payload.nstate?[name] ?? 1, 1)
             ))
         }
 

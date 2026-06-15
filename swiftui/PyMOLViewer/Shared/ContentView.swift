@@ -50,10 +50,18 @@ struct ContentView: View {
                         .frame(minHeight: 50, idealHeight: 110, maxHeight: 400)
                 }
 
-                // The viewport takes the remaining (majority of) space.
-                MetalViewport()
-                    .frame(minWidth: 400, minHeight: 360)
-                    .layoutPriority(1)
+                // The viewport takes the remaining (majority of) space, with the
+                // Timeline transport docked beneath it whenever there's more than
+                // one frame to play (states / trajectory / movie).
+                VStack(spacing: 0) {
+                    MetalViewport()
+                        .frame(minWidth: 400, minHeight: 360)
+                        .layoutPriority(1)
+                    if engine.frameCount > 1 {
+                        Divider()
+                        TransportBar()
+                    }
+                }
             }
 
             // Right column: objects + (chat) + mouse legend
@@ -97,6 +105,17 @@ struct ContentView: View {
     @State private var selectedTab = 1
     @State private var showFetch = false
     @State private var fetchID = ""
+    // iPhone: the transport floats as a 1-line peek over the viewport and
+    // expands in place to the full multi-row control. (Ignored on regular-width
+    // iPad, where the bar is always full.)
+    @State private var transportExpanded = false
+    // Test affordance (PYMOL_AUTOSHEET=builder|export): auto-present a movie
+    // sheet so the screenshot harness can capture it (simctl can't tap).
+    @State private var showBuilderSheet = false
+    @State private var showExportSheet = false
+    // Test affordance (PYMOL_AUTOEXPORTMOVIE="mp4|gif,first,last"): run a headless
+    // movie export and copy the result to /tmp so the harness can validate it.
+    @StateObject private var exportTester = MovieExporter()
     // AI Chat is a non-functional placeholder; hide its tab until the backend
     // exists so it doesn't occupy a top-level slot.
     private let kShowChatTab = false
@@ -199,6 +218,8 @@ struct ContentView: View {
                 .padding(24)
                 .presentationDetents([.medium, .large])
             }
+            .sheet(isPresented: $showBuilderSheet) { MovieBuilderSheet() }
+            .sheet(isPresented: $showExportSheet) { MovieExportSheet() }
         }
         .preferredColorScheme(.dark)   // consistent dark chrome (no white nav bar)
         .onAppear {
@@ -219,6 +240,29 @@ struct ContentView: View {
                     engine.sequenceVisible = (p == "open")
                 }
             }
+            if let s = ProcessInfo.processInfo.environment["PYMOL_AUTOSHEET"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                    if s == "builder" { showBuilderSheet = true }
+                    if s == "export" { showExportSheet = true }
+                }
+            }
+            if let e = ProcessInfo.processInfo.environment["PYMOL_AUTOEXPORTMOVIE"] {
+                let parts = e.split(separator: ",").map(String.init)
+                let fmt: MovieExporter.Format = (parts.first == "gif") ? .gif : .mp4
+                let f = parts.count > 1 ? (Int(parts[1]) ?? 1) : 1
+                let l = parts.count > 2 ? (Int(parts[2]) ?? 10) : 10
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) {
+                    exportTester.start(engine: engine, format: fmt, width: 640, height: 360,
+                                       first: f, last: l, fps: 15, rayTraced: false)
+                }
+            }
+        }
+        .onChange(of: exportTester.finishedURL) { url in
+            guard let url = url else { return }
+            let dst = URL(fileURLWithPath: "/tmp/pymol_export_test.\(url.pathExtension)")
+            try? FileManager.default.removeItem(at: dst)
+            try? FileManager.default.copyItem(at: url, to: dst)
+            NSLog("EXPORTTEST_DONE: \(dst.path)")
         }
     }
 
@@ -242,6 +286,12 @@ struct ContentView: View {
         MetalViewport()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay { if engine.objects.isEmpty { emptyStateView } }
+            // Timeline transport: floats over the bottom of the viewport when
+            // there's more than one frame. A collapsing peek on iPhone; a pinned
+            // full-width bar on iPad.
+            .overlay(alignment: .bottom) {
+                if engine.frameCount > 1 { transportOverlay }
+            }
             .overlay(alignment: .bottomTrailing) {
                 Button { showGestureLegend = true } label: {
                     Image(systemName: "questionmark.circle.fill")
@@ -250,6 +300,8 @@ struct ContentView: View {
                         .padding(12)
                 }
                 .accessibilityLabel("Gesture help")
+                // Keep the help button clear of the transport bar.
+                .padding(.bottom, engine.frameCount > 1 ? 56 : 0)
             }
             // Test-only hook (PYMOL_UITEST=1): surface the live selection size
             // so XCUITest can assert tap-to-select / clear behavior. Invisible
@@ -262,6 +314,26 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                 }
             }
+    }
+
+    // The floating transport. iPhone (compact): a rounded peek that expands in
+    // place. iPad (regular): a full-width pinned bar. Floated above the home
+    // indicator so it stays tappable on full-bleed layouts.
+    private var transportOverlay: some View {
+        let compact = hSize == .compact
+        return TransportBar(
+            compactPeek: compact && !transportExpanded,
+            onToggleExpand: compact ? { withAnimation(.easeInOut(duration: 0.2)) { transportExpanded.toggle() } } : nil
+        )
+        .clipShape(RoundedRectangle(cornerRadius: compact ? 16 : 0))
+        .overlay(
+            RoundedRectangle(cornerRadius: compact ? 16 : 0)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(compact ? 0.4 : 0), radius: 8, y: 2)
+        .padding(.horizontal, compact ? 8 : 0)
+        .padding(.bottom, compact ? 28 : 14)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     // Shared control content: Console / Objects / Sequence as exclusive tabs

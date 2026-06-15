@@ -41,7 +41,8 @@ REP_COLOR = {
 }
 
 SCENE_SETTINGS = ['metal_raytrace', 'metal_shadows', 'metal_ssao', 'metal_outline',
-                  'metal_msaa', 'depth_cue', 'fog', 'field_of_view', 'surface_quality']
+                  'metal_msaa', 'depth_cue', 'fog', 'field_of_view', 'surface_quality',
+                  'all_states']
 
 
 def _num(setting, obj):
@@ -121,7 +122,24 @@ def _build(objs):
         detail[o] = reps
     scene = {s: _num(s, '') for s in SCENE_SETTINGS}
     scene['bg'] = _bg_rgb()
-    return {'detail': detail, 'scene': scene}
+    # Per-object state metadata for the inspector STATE row: the effective
+    # current state (the object's 'state' setting, which resolves to the global
+    # frame's state when not pinned) and whether all states are overlaid.
+    objmeta = {}
+    for o in objs:
+        objmeta[o] = {'state': int(round(_num('state', o))),
+                      'all': int(round(_num('all_states', o)))}
+    # Saved scenes (ordered) + the current one, for the Scenes strip.
+    try:
+        scenes = list(cmd.get_scene_list() or [])
+    except Exception:
+        scenes = []
+    try:
+        cur_scene = cmd.get('scene_current_name') or ''
+    except Exception:
+        cur_scene = ''
+    return {'detail': detail, 'scene': scene, 'objmeta': objmeta,
+            'scenes': scenes, 'cur_scene': cur_scene}
 
 
 def poll(objs):

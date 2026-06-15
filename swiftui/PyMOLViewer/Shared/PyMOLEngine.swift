@@ -26,6 +26,12 @@ final class PyMOLEngine: ObservableObject {
     @Published var objectDetails: [String: [RepState]] = [:]
     // Global "Scene" parameters (metal_*, depth_cue, fog, fov, surface_quality, bg).
     @Published var sceneState = SceneState()
+    // Per-object state metadata (effective current state + overlay-all) for the
+    // inspector STATE row; populated alongside objectDetails for expanded cards.
+    @Published var objectMeta: [String: ObjStateMeta] = [:]
+    // Saved scenes (ordered) + the current scene name, for the Scenes strip.
+    @Published var sceneNames: [String] = []
+    @Published var currentScene: String = ""
     // The single detail view that is currently open (accordion: at most one).
     // nil = none, `sceneDetailKey` = the SCENE card, otherwise an object name.
     // Drives which object the detail poll queries (collapsed = cheap).
@@ -40,6 +46,23 @@ final class PyMOLEngine: ObservableObject {
     // actions (hide keeps, show/delete removes) — never by the detail poll — so
     // there's no re-add race with the ~500ms poll.
     @Published var keptHidden: [String: Set<String>] = [:]
+
+    // MARK: Timeline / playback (states · trajectories · movies)
+    // In PyMOL these are ONE concept: a 1-based movie frame index that maps
+    // (via mset) to a coordinate state. The transport bar binds to these; the
+    // CORE drives frame advance (cmd.mplay → SceneIdle, ticked every Metal
+    // frame), so Swift only scrubs (cmd.frame) and mirrors core state here.
+    @Published var currentFrame: Int = 1     // 1-based, == cmd.get_frame()
+    @Published var frameCount: Int = 1       // == cmd.count_frames()
+    @Published var isPlaying: Bool = false   // == cmd.get_movie_playing()
+    @Published var movieFPS: Double = 15     // == movie_fps setting
+    @Published var movieLoop: Bool = true    // == movie_loop setting
+    // While the user drags the scrubber, the poll must NOT overwrite
+    // currentFrame (classic two-way-binding fight). Set on drag start, cleared
+    // shortly after release so the next poll can re-sync.
+    var isScrubbing: Bool = false
+    private var scrubReleaseWork: DispatchWorkItem?
+    private var lastScrubFrame: Int = -1
 
     // The opaque PyMOL instance pointer
     private(set) var instance: PyMOLHandle?
@@ -234,9 +257,20 @@ final class PyMOLEngine: ObservableObject {
 
         // Poll feedback every 100ms
         feedbackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.pollFeedback()
-            self?.pollObjects()
+            guard let self = self else { return }
+            self.pollFeedback()
+            self.pollObjects()
+            // While the core is advancing frames, mirror the frame counter at
+            // the full 100ms tick so the scrubber tracks playback smoothly.
+            // When idle, the cheaper 500ms pollObjects() discovery suffices.
+            if self.isPlaying { self.pollPlayback() }
         }
+    }
+
+    // Ask the core for the current frame / length / play state. Cheap (a few
+    // cmd gets); the PLAYBACK: line is read on the next pollFeedback tick.
+    private func pollPlayback() {
+        runPython("from pymol import appkit_movie as _am\n_am.poll()")
     }
 
     func shutdown() {
@@ -408,6 +442,89 @@ final class PyMOLEngine: ObservableObject {
         PyMOLBridge_RunPython(code)
     }
 
+    // MARK: - Timeline / playback controls
+    //
+    // All routed through runPython (raw PyRun, no log echo) so high-rate scrub
+    // calls don't flood the feedback log. Play/pause uses cmd.mplay/mstop and
+    // lets the core's SceneIdle advance frames (the Metal draw loop ticks idle()
+    // every frame); we never run a Swift frame-advance timer, which would race
+    // the core and double-advance.
+
+    private func movieCmd(_ call: String) {
+        runPython("from pymol import cmd as _m\n_m.\(call)")
+    }
+
+    func play() { movieCmd("mplay()"); isPlaying = true }
+    func pause() { movieCmd("mstop()"); isPlaying = false }
+    func togglePlay() { isPlaying ? pause() : play() }
+
+    func rewindMovie() { movieCmd("rewind()") }
+    func endingMovie() { movieCmd("ending()") }
+    func stepForward() { movieCmd("forward()") }
+    func stepBackward() { movieCmd("backward()") }
+
+    // Live scrub: clamp, set immediately for snappy UI, throttle the core call.
+    func scrub(to frame: Int) {
+        let f = max(1, min(frame, max(frameCount, 1)))
+        isScrubbing = true
+        currentFrame = f
+        scrubReleaseWork?.cancel()
+        guard f != lastScrubFrame else { return }
+        lastScrubFrame = f
+        movieCmd("frame(\(f))")
+    }
+
+    // Drag ended: commit the final frame and release the scrub lock after a
+    // beat so the ~poll can resume mirroring core state without yanking.
+    func endScrub() {
+        let work = DispatchWorkItem { [weak self] in
+            self?.isScrubbing = false
+            self?.lastScrubFrame = -1
+        }
+        scrubReleaseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    func setMovieFPS(_ fps: Double) {
+        let f = max(0.1, fps)
+        movieFPS = f
+        movieCmd("set('movie_fps', \(f))")
+    }
+
+    func setMovieLoop(_ on: Bool) {
+        movieLoop = on
+        movieCmd("set('movie_loop', \(on ? 1 : 0))")
+    }
+
+    func setShowFrameRate(_ on: Bool) {
+        movieCmd("set('show_frame_rate', \(on ? 1 : 0))")
+    }
+
+    // Reset the whole movie timeline (clear mset/mview) and rewind.
+    func clearMovie() {
+        runPython("from pymol import appkit_movie as _am\n_am.reset_movie()")
+    }
+
+    // Author a movie via the high-level builders (appkit_movie.make_movie).
+    // kind: roll | rock | nutate | state_loop | state_sweep | scenes.
+    func buildMovie(kind: String, duration: Double = 12, angle: Double = 30,
+                    loop: Bool = true, factor: Int = 1, pause: Double = 2,
+                    scenes: [String]? = nil) {
+        var args = "kind='\(kind)', duration=\(duration), angle=\(angle), "
+            + "loop=\(loop ? 1 : 0), factor=\(factor), pause=\(pause)"
+        if let s = scenes {
+            let list = s.map { "'\($0.replacingOccurrences(of: "'", with: ""))'" }
+                .joined(separator: ", ")
+            args += ", scenes=[\(list)]"
+        }
+        runPython("from pymol import appkit_movie as _am\n_am.make_movie(\(args))")
+    }
+
+    // Store a camera keyframe at the current frame + interpolate (mview).
+    func captureKeyframe() {
+        runPython("from pymol import appkit_movie as _am\n_am.capture_keyframe()")
+    }
+
     // Fetch per-object residue sequences (one guide atom per residue) and emit
     // a SEQPANEL: feedback line parsed into `sequences`. Run via raw Python so
     // the command isn't echoed to the log.
@@ -564,6 +681,10 @@ final class PyMOLEngine: ObservableObject {
                     parseSequencePanelFeedback(line)
                 } else if line.hasPrefix("SEQSEL:") {
                     parseSequenceSelectionFeedback(line)
+                } else if line.hasPrefix("PLAYBACK:") {
+                    parsePlaybackFeedback(line)
+                } else if line.hasPrefix("PLAYBACK_ERR:") {
+                    // swallow (don't flood the log with poll errors)
                 } else if !line.isEmpty {
                     DispatchQueue.main.async {
                         self.feedbackLog.append(line)
@@ -603,11 +724,15 @@ final class PyMOLEngine: ObservableObject {
             + "_en = set(_cmd.get_names('public_objects', enabled_only=1) or [])\n"
             + "_en |= set(_cmd.get_names('public_selections', enabled_only=1) or [])\n"
             + "_sc = {s: _cmd.count_atoms(s) for s in _sels}\n"
+            + "_ns = {o: _cmd.count_states('?' + o) for o in _objs}\n"
             + "print('OBJPANEL:' + json.dumps({'objects': _objs, 'selections': _sels, "
-            + "'enabled': list(_en), 'sel_counts': _sc}))"
+            + "'enabled': list(_en), 'sel_counts': _sc, 'nstate': _ns}))"
         )
 
         pollDetails()
+        // Discover/refresh the timeline length + frame (cheap). Fast updates
+        // during playback are handled by pollPlayback() on the 100ms tick.
+        pollPlayback()
     }
 
     // Query active reps + per-rep settings + scene globals for the currently
@@ -660,9 +785,50 @@ final class PyMOLEngine: ObservableObject {
             }
         }
 
+        var meta: [String: ObjStateMeta] = [:]
+        if let om = root["objmeta"] as? [String: Any] {
+            for (obj, mAny) in om {
+                guard let m = mAny as? [String: Any] else { continue }
+                meta[obj] = ObjStateMeta(
+                    state: (m["state"] as? NSNumber)?.intValue ?? 1,
+                    overlayAll: ((m["all"] as? NSNumber)?.intValue ?? 0) != 0)
+            }
+        }
+
+        let scenes = (root["scenes"] as? [String]) ?? []
+        let curScene = (root["cur_scene"] as? String) ?? ""
+
         DispatchQueue.main.async {
             self.objectDetails = details
             self.sceneState = scene
+            self.objectMeta = meta
+            self.sceneNames = scenes
+            self.currentScene = curScene
+        }
+    }
+
+    // Parse PLAYBACK:<json> → currentFrame / frameCount / isPlaying / fps / loop.
+    // Mirrors core state; never overrides a user scrub in progress.
+    func parsePlaybackFeedback(_ line: String) {
+        let js = String(line.dropFirst("PLAYBACK:".count))
+        guard let data = js.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+        let frame = (root["frame"] as? NSNumber)?.intValue ?? 1
+        let count = max((root["count"] as? NSNumber)?.intValue ?? 1, 1)
+        let playing = ((root["playing"] as? NSNumber)?.intValue ?? 0) != 0
+        let loop = ((root["loop"] as? NSNumber)?.intValue ?? 1) != 0
+        let fps = (root["fps"] as? NSNumber)?.doubleValue ?? 15
+
+        DispatchQueue.main.async {
+            self.frameCount = count
+            self.isPlaying = playing
+            self.movieLoop = loop
+            if fps > 0 { self.movieFPS = fps }
+            // Don't fight an active drag; otherwise track the core frame.
+            if !self.isScrubbing {
+                self.currentFrame = min(max(frame, 1), count)
+            }
         }
     }
 }
