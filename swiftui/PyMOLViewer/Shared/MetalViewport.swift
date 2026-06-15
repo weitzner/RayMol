@@ -233,6 +233,11 @@ extension MetalViewport {
         // translate/clip by a phantom delta (the structure "jumps" on release). We
         // send the UP at this last dragged point instead, making release a no-op.
         private var lastDragPt: (Int32, Int32)?
+        // Clip drags anchor their X so only the NEAR plane moves (front-only
+        // clip): cButModeClipNF maps horizontal→far, vertical→near, and a
+        // touch/trackpad drag has both components, so feeding X too would move
+        // both planes (a slab) — the "cull from front AND back" the user saw.
+        private var clipAnchorX: Int32?
         #endif
 
         // MARK: - MTKViewDelegate
@@ -456,7 +461,10 @@ extension MetalViewport {
             if panActive && (dx != 0 || dy != 0) {
                 // macOS views are bottom-left origin (matching PyMOL); a finger
                 // moving up has positive scrollingDeltaY, so add directly.
-                panCursorX += dx
+                // For CLIP, hold X fixed so only the near plane (vertical →
+                // front clip) moves — horizontal would move the far plane,
+                // closing the slab from both sides.
+                if !gestureIsClip { panCursorX += dx }
                 panCursorY += dy
                 engine?.drag(x: panCursorX, y: panCursorY, modifiers: gestureMods)
             }
@@ -636,20 +644,23 @@ extension MetalViewport {
             let s = PYMOL_MOD_SHIFT
             switch gesture.state {
             case .began:
+                clipAnchorX = pt.0       // hold X fixed → near-plane (front) clip only
                 lastDragPt = pt
                 engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_DOWN, x: pt.0, y: pt.1, modifiers: s)
             case .changed:
                 // Only feed drags while all three fingers are down (same
                 // uneven-lift centroid-jump guard as the translate handler).
                 guard gesture.numberOfTouches >= 3 else { break }
-                lastDragPt = pt
-                engine?.drag(x: pt.0, y: pt.1, modifiers: s)
+                let x = clipAnchorX ?? pt.0
+                lastDragPt = (x, pt.1)
+                engine?.drag(x: x, y: pt.1, modifiers: s)
             case .ended, .cancelled:
                 // Release at the last dragged point — same uneven-lift jump fix
                 // as the translate handler (see lastDragPt).
                 let up = lastDragPt ?? pt
                 engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_UP, x: up.0, y: up.1, modifiers: s)
                 lastDragPt = nil
+                clipAnchorX = nil
             default:
                 break
             }

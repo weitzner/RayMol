@@ -278,6 +278,7 @@ private:
   id<MTLTexture> _sceneColor = nil;  // resolved (single-sample), post chain reads
   id<MTLTexture> _sceneDepth = nil;  // resolved (single-sample), post chain reads
   id<MTLTexture> _postColor = nil;   // ping-pong target for intermediate passes
+  id<MTLTexture> _rtAO = nil;        // R16Float raw RT AO term (blurred in composite)
   // MSAA: when _sampleCount > 1 the scene renders to these multisampled targets
   // and resolves into _sceneColor/_sceneDepth. Opaque pipelines use
   // _sampleCount; OIT + post pipelines stay single-sample.
@@ -401,7 +402,8 @@ private:
   id<MTLBuffer> _rtProtoVerts = nil;
   id<MTLBuffer> _rtProtoIndices = nil;
   uint32_t _rtProtoIndexCount = 0;
-  id<MTLRenderPipelineState> _rtResolvePipeline = nil;  // fragment RT AO/shadow
+  id<MTLRenderPipelineState> _rtAOPipeline = nil;       // pass A: raw AO -> R16Float
+  id<MTLRenderPipelineState> _rtResolvePipeline = nil;  // pass B: blur AO + shadow/fog composite
   // Label/text rendering (screen-aligned textured glyph quads). Initialized to
   // nil — this is a C++ class under MRC, so id ivars are not zero-initialized.
   id<MTLRenderPipelineState> _labelPipeline = nil;

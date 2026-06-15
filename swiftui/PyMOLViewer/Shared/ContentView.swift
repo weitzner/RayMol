@@ -44,6 +44,15 @@ struct ContentView: View {
         #endif
     }
 
+    // "Calculating…" overlay: shown (after the engine's 2s reveal delay) while a
+    // long op runs, so the app reads as busy rather than frozen. Platform-neutral
+    // so both the macOS and iOS layouts can attach it.
+    @ViewBuilder private var busyOverlay: some View {
+        if engine.isBusy {
+            CalculatingOverlay(label: engine.busyLabel)
+        }
+    }
+
     // MARK: - macOS: HSplitView with sidebar
 
     #if os(macOS)
@@ -100,6 +109,7 @@ struct ContentView: View {
             }
             .frame(width: 300)
         }
+        .overlay { busyOverlay }
         .toolbar {
             exportMenu
             ToolbarItem {
@@ -367,6 +377,7 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay { busyOverlay }
     }
 
     // The floating transport. iPhone (compact): a rounded peek that expands in
@@ -963,5 +974,27 @@ struct ContentView: View {
         guard !engine.isReady else { return }
         let resourcePath = Bundle.main.resourcePath ?? ""
         engine.initialize(resourcePath: resourcePath)
+    }
+}
+
+// Dimmed scrim + centered card shown while a long PyMOL op runs. The scrim
+// captures hits so no conflicting command can be issued mid-operation (which
+// also keeps the selectively-backgrounded heavy ops correctly ordered).
+struct CalculatingOverlay: View {
+    let label: String
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())   // swallow taps/clicks while busy
+            VStack(spacing: 14) {
+                ProgressView().controlSize(.large)
+                Text(label.isEmpty ? "Calculating…" : label)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+            }
+            .padding(28)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
     }
 }

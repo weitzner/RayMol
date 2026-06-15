@@ -774,9 +774,11 @@ void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
   [_sceneColor release];   [_postColor release];   [_sceneDepth release];
   [_sceneColorMS release];  [_sceneDepthMS release];
   [_oitAccum release];      [_oitReveal release];
+  [_rtAO release];
   _sceneColor = _postColor = _sceneDepth = nil;
   _sceneColorMS = _sceneDepthMS = nil;
   _oitAccum = _oitReveal = nil;
+  _rtAO = nil;
 
   MTLTextureDescriptor* cd = [MTLTextureDescriptor
       texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
@@ -785,6 +787,16 @@ void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
   cd.storageMode = MTLStorageModePrivate;
   _sceneColor = [_device newTextureWithDescriptor:cd];
   _postColor = [_device newTextureWithDescriptor:cd];
+
+  // Raw RT ambient-occlusion term (single channel). Kept in its own float
+  // texture so the composite pass can depth-aware-blur it — that blur is what
+  // removes the Monte-Carlo speckle the raw AO estimate would otherwise show.
+  MTLTextureDescriptor* aod = [MTLTextureDescriptor
+      texture2DDescriptorWithPixelFormat:MTLPixelFormatR16Float
+                                   width:w height:h mipmapped:NO];
+  aod.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+  aod.storageMode = MTLStorageModePrivate;
+  _rtAO = [_device newTextureWithDescriptor:aod];
 
   MTLTextureDescriptor* dd = [MTLTextureDescriptor
       texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float_Stencil8
@@ -1005,13 +1017,87 @@ static float rt_hash(float2 p) {
   return fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
 }
 
-fragment float4 rt_resolve(PostVOut in [[stage_in]],
+// Van der Corput radical inverse (base 2) -> Hammersley point set. Stratified
+// (low-discrepancy) AO directions have far lower variance than the old per-pixel
+// white-noise hash at the same sample count, so much less grain; and since they
+// don't depend on the frame counter, the AO is identical every frame (no shimmer).
+static float rt_radinv2(uint bits) {
+  bits = (bits << 16) | (bits >> 16);
+  bits = ((bits & 0x55555555u) << 1) | ((bits & 0xAAAAAAAAu) >> 1);
+  bits = ((bits & 0x33333333u) << 2) | ((bits & 0xCCCCCCCCu) >> 2);
+  bits = ((bits & 0x0F0F0F0Fu) << 4) | ((bits & 0xF0F0F0F0u) >> 4);
+  bits = ((bits & 0x00FF00FFu) << 8) | ((bits & 0xFF00FF00u) >> 8);
+  return float(bits) * 2.3283064365386963e-10;
+}
+static float2 rt_hammersley(uint i, uint n) {
+  return float2(float(i) / float(n), rt_radinv2(i));
+}
+
+// Pass A: trace ambient-occlusion rays, write the raw AO term to an R16Float
+// target. Deterministic Hammersley directions (frame-stable -> no shimmer) with
+// a cheap per-pixel rotation so residual error is a fine pattern the composite
+// pass blurs away.
+fragment float4 rt_ao(PostVOut in [[stage_in]],
+    depth2d<float> depthTex [[texture(1)]],
+    sampler s [[sampler(0)]],
+    instance_acceleration_structure accel [[buffer(0)]],
+    constant RTU& u [[buffer(1)]]) {
+  float d = depthTex.sample(s, in.uv);
+  if (d >= 0.99999 || d <= 0.0015) return float4(1.0, 1.0, 1.0, 1.0);  // no occlusion
+
+  // Eye-space position + normal (matches post_ssao_fog reconstruction).
+  float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);
+  float ndcx = 2.0 * in.uv.x - 1.0;
+  float ndcy = 1.0 - 2.0 * in.uv.y;
+  float3 pEye = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
+  float3 nEye = normalize(cross(dfdx(pEye), dfdy(pEye)));
+  if (nEye.z < 0.0) nEye = -nEye;
+
+  float3 pModel = (u.invModelview * float4(pEye, 1.0)).xyz;
+  float3 nModel = normalize((u.invModelview * float4(nEye, 0.0)).xyz);
+  float3 upv = abs(nModel.z) < 0.9 ? float3(0, 0, 1) : float3(1, 0, 0);
+  float3 tx = normalize(cross(upv, nModel));
+  float3 ty = cross(nModel, tx);
+
+  intersector<instancing> it;
+  it.assume_geometry_type(geometry_type::triangle);
+  it.accept_any_intersection(true);   // occlusion: stop at first hit
+
+  float bias = max(u.aoRadius * 0.03, 0.02);
+  float3 origin = pModel + nModel * bias;
+
+  int N = max(int(u.nSamples), 1);
+  float rot = rt_hash(in.uv * 1024.0);   // per-pixel Cranley-Patterson rotation
+  float occ = 0.0;
+  for (int i = 0; i < N; ++i) {
+    float2 hx = rt_hammersley(uint(i), uint(N));
+    float h1 = hx.x;
+    float phi = 6.2831853 * fract(hx.y + rot);
+    float r = sqrt(h1);                  // cosine-weighted hemisphere
+    float3 dirT = float3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - h1)));
+    float3 dir = normalize(dirT.x * tx + dirT.y * ty + dirT.z * nModel);
+    ray rr;
+    rr.origin = origin;
+    rr.direction = dir;
+    rr.min_distance = bias;
+    rr.max_distance = u.aoRadius;
+    auto res = it.intersect(rr, accel);
+    if (res.type != intersection_type::none) occ += 1.0;
+  }
+  float ao = 1.0 - (occ / float(N)) * u.aoIntensity;
+  return float4(ao, ao, ao, 1.0);
+}
+
+// Pass B: composite. Read scene color, DEPTH-AWARE-BLUR the raw AO term (5x5,
+// silhouette-preserving) to remove the Monte-Carlo speckle, apply it, then the
+// shadow-map PCF and depth-cue fog (identical to the old single-pass resolve).
+fragment float4 rt_composite(PostVOut in [[stage_in]],
     texture2d<float> colorTex [[texture(0)]],
     depth2d<float> depthTex [[texture(1)]],
     depth2d<float> shadowTex [[texture(2)]],
+    texture2d<float> aoTex [[texture(3)]],
     sampler s [[sampler(0)]],
     sampler shadowSamp [[sampler(1)]],
-    instance_acceleration_structure accel [[buffer(0)]],
     constant RTU& u [[buffer(1)]]) {
   float3 col = colorTex.sample(s, in.uv).rgb;
   float d = depthTex.sample(s, in.uv);
@@ -1026,49 +1112,26 @@ fragment float4 rt_resolve(PostVOut in [[stage_in]],
   float3 nEye = normalize(cross(dfdx(pEye), dfdy(pEye)));
   if (nEye.z < 0.0) nEye = -nEye;
 
-  // To model space (AS space).
-  float3 pModel = (u.invModelview * float4(pEye, 1.0)).xyz;
-  float3 nModel = normalize((u.invModelview * float4(nEye, 0.0)).xyz);
-
-  // Tangent basis around the surface normal.
-  float3 upv = abs(nModel.z) < 0.9 ? float3(0, 0, 1) : float3(1, 0, 0);
-  float3 tx = normalize(cross(upv, nModel));
-  float3 ty = cross(nModel, tx);
-
-  intersector<instancing> it;
-  it.assume_geometry_type(geometry_type::triangle);
-  it.accept_any_intersection(true);   // occlusion: stop at first hit
-
-  float bias = max(u.aoRadius * 0.03, 0.02);
-  float3 origin = pModel + nModel * bias;
-
-  // Ambient occlusion: cosine-weighted hemisphere rays within aoRadius.
-  int N = int(u.nSamples);
-  float occ = 0.0;
-  for (int i = 0; i < N; ++i) {
-    float2 seed = in.uv * float(i + 3) + float2(u.frame * 0.013, float(i) * 0.07);
-    float h1 = rt_hash(seed);
-    float h2 = rt_hash(seed + 17.31);
-    float r = sqrt(h1);
-    float phi = 6.2831853 * h2;
-    float3 dirT = float3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - h1)));
-    float3 dir = normalize(dirT.x * tx + dirT.y * ty + dirT.z * nModel);
-    ray rr;
-    rr.origin = origin;
-    rr.direction = dir;
-    rr.min_distance = bias;
-    rr.max_distance = u.aoRadius;
-    auto res = it.intersect(rr, accel);
-    if (res.type != intersection_type::none) occ += 1.0;
-  }
-  float ao = 1.0 - (occ / float(max(N, 1))) * u.aoIntensity;
+  // Depth-aware 5x5 blur of the AO term: weight neighbours by eye-space depth
+  // closeness so AO doesn't bleed across object silhouettes.
+  float2 texel = 1.0 / float2(aoTex.get_width(), aoTex.get_height());
+  float ztol = max(0.5 * u.aoRadius, 0.5);
+  float aoSum = 0.0, wSum = 0.0;
+  for (int j = -2; j <= 2; ++j)
+    for (int i = -2; i <= 2; ++i) {
+      float2 uv = in.uv + float2(i, j) * texel;
+      float dn = depthTex.sample(s, uv);
+      if (dn >= 0.99999) continue;
+      float ezn = -u.projB / ((2.0 * dn - 1.0) + u.projA);
+      float w = exp(-abs(ezn - ez) / ztol);
+      aoSum += aoTex.sample(s, uv).r * w;
+      wSum += w;
+    }
+  float ao = wSum > 0.0 ? (aoSum / wSum) : aoTex.sample(s, in.uv).r;
   col *= ao;
 
-  // Cast shadows: sample the SHADOW MAP (the same light-POV depth pre-pass the
-  // SSAO path uses) rather than a single RT shadow ray — the rasterized depth
-  // captures the full occluder silhouette, giving solid cast bands where a lone
-  // ray on thin cartoon ribbons would mostly miss. PCF + face/separation gates
-  // mirror post_ssao_fog so RT and non-RT shadows look identical.
+  // Cast shadows: sample the SHADOW MAP (PCF + face/separation gates mirror
+  // post_ssao_fog so RT and non-RT shadows look identical).
   if (u.shadowIntensity > 0.0) {
     float3 Ldir = normalize(float3(0.4, 0.4, 1.0));      // key light (eye space)
     float faceGate = smoothstep(0.0, 0.35, dot(nEye, Ldir));
@@ -1081,11 +1144,11 @@ fragment float4 rt_resolve(PostVOut in [[stage_in]],
           fragDepth > 0.0 && fragDepth < 1.0) {
         float2 dd = float2(dfdx(fragDepth), dfdy(fragDepth));
         float sep = min(0.022 + 2.5 * (abs(dd.x) + abs(dd.y)), 0.05);
-        float2 texel = 1.0 / float2(shadowTex.get_width(), shadowTex.get_height());
+        float2 stex = 1.0 / float2(shadowTex.get_width(), shadowTex.get_height());
         float lit = 0.0;
         for (int j = -2; j <= 1; j++)
           for (int i = -2; i <= 1; i++) {
-            float2 off = (float2(i, j) + 0.5) * 1.5 * texel;
+            float2 off = (float2(i, j) + 0.5) * 1.5 * stex;
             lit += shadowTex.sample_compare(shadowSamp, suv + off, fragDepth - sep);
           }
         float shadow = (1.0 - lit / 16.0) * faceGate;
@@ -1368,14 +1431,21 @@ void RendererMetal::ensureRayTracingAS()
     NSError* err = nil;
     id<MTLLibrary> lib = [_device newLibraryWithSource:kRTSrc options:nil error:&err];
     if (lib) {
+      // Pass A: raw AO -> R16Float.
+      MTLRenderPipelineDescriptor* pa = [[MTLRenderPipelineDescriptor alloc] init];
+      pa.vertexFunction = [lib newFunctionWithName:@"rt_vertex"];
+      pa.fragmentFunction = [lib newFunctionWithName:@"rt_ao"];
+      pa.colorAttachments[0].pixelFormat = MTLPixelFormatR16Float;
+      _rtAOPipeline = [_device newRenderPipelineStateWithDescriptor:pa error:&err];
+      // Pass B: blur AO + shadow/fog composite -> BGRA8.
       MTLRenderPipelineDescriptor* pd = [[MTLRenderPipelineDescriptor alloc] init];
       pd.vertexFunction = [lib newFunctionWithName:@"rt_vertex"];
-      pd.fragmentFunction = [lib newFunctionWithName:@"rt_resolve"];
+      pd.fragmentFunction = [lib newFunctionWithName:@"rt_composite"];
       pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
       _rtResolvePipeline = [_device newRenderPipelineStateWithDescriptor:pd error:&err];
     }
-    if (!_rtResolvePipeline)
-      NSLog(@"RendererMetal RT: rt_resolve pipeline failed: %@", err);
+    if (!_rtAOPipeline || !_rtResolvePipeline)
+      NSLog(@"RendererMetal RT: AO/composite pipeline failed: %@", err);
   }
 }
 
@@ -1389,7 +1459,8 @@ void RendererMetal::runPostChain()
   bool doAO = _ssaoPipeline && _aoEnabled && !noAO;
   bool doFog = _ssaoPipeline && _postFogEnabled;
   bool doShadow = _ssaoPipeline && _shadowEnabled && !noShadow;
-  bool doRT = _rtEnabled && _rtReady && _rtResolvePipeline && _rtInstanceAS && _postColor;
+  bool doRT = _rtEnabled && _rtReady && _rtResolvePipeline && _rtAOPipeline &&
+              _rtInstanceAS && _postColor && _rtAO;
   id<MTLTexture> sceneSrc = _sceneColor;
 
   // Pass 1-RT: real ray-traced AO + shadow (+ fog), replacing the SSAO/shadow
@@ -1417,12 +1488,34 @@ void RendererMetal::runPostChain()
     u.fogStart = _fogStart; u.fogEnd = _fogEnd;
     u.aoRadius = 5.0f; u.aoIntensity = 0.72f;
     u.shadowIntensity = doShadow ? 0.45f : 0.0f;
-    u.nSamples = 10.0f;
-    static uint32_t rtFrame = 0;
-    u.frame = (float)(rtFrame++ & 1023);
+    // 16 stratified (Hammersley) samples + the composite-pass blur is clean and
+    // shimmer-free; for the single-shot offscreen PNG (no temporal smoothing)
+    // trace more rays since each export frame stands alone.
+    u.nSamples = _offscreen ? 48.0f : 16.0f;
+    u.frame = 0.0f;            // deterministic: AO identical every frame (no shimmer)
     u._pad = 0.0f;
     std::memcpy(u.lightViewProj, _lightViewProjEye, 16 * sizeof(float));
 
+    // Pass A: trace AO -> _rtAO (R16Float).
+    MTLRenderPassDescriptor* pa = [[MTLRenderPassDescriptor alloc] init];
+    pa.colorAttachments[0].texture = _rtAO;
+    pa.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pa.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> ea =
+        [_cmdBuffer renderCommandEncoderWithDescriptor:pa];
+    [ea setRenderPipelineState:_rtAOPipeline];
+    if (_rtSphereProtoAS)
+      [ea useResource:_rtSphereProtoAS usage:MTLResourceUsageRead stages:MTLRenderStageFragment];
+    if (_rtTriProtoAS)
+      [ea useResource:_rtTriProtoAS usage:MTLResourceUsageRead stages:MTLRenderStageFragment];
+    [ea setFragmentTexture:_sceneDepth atIndex:1];
+    [ea setFragmentSamplerState:_postSampler atIndex:0];
+    [ea setFragmentAccelerationStructure:_rtInstanceAS atBufferIndex:0];
+    [ea setFragmentBytes:&u length:sizeof(u) atIndex:1];
+    [ea drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [ea endEncoding];
+
+    // Pass B: depth-aware-blur the AO + shadow/fog composite -> _postColor.
     MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
     pd.colorAttachments[0].texture = _postColor;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
@@ -1430,16 +1523,12 @@ void RendererMetal::runPostChain()
     id<MTLRenderCommandEncoder> er =
         [_cmdBuffer renderCommandEncoderWithDescriptor:pd];
     [er setRenderPipelineState:_rtResolvePipeline];
-    if (_rtSphereProtoAS)
-      [er useResource:_rtSphereProtoAS usage:MTLResourceUsageRead stages:MTLRenderStageFragment];
-    if (_rtTriProtoAS)
-      [er useResource:_rtTriProtoAS usage:MTLResourceUsageRead stages:MTLRenderStageFragment];
     [er setFragmentTexture:_sceneColor atIndex:0];
     [er setFragmentTexture:_sceneDepth atIndex:1];
     [er setFragmentTexture:_shadowDepth atIndex:2];
+    [er setFragmentTexture:_rtAO atIndex:3];
     [er setFragmentSamplerState:_postSampler atIndex:0];
     [er setFragmentSamplerState:_shadowSampler atIndex:1];
-    [er setFragmentAccelerationStructure:_rtInstanceAS atBufferIndex:0];
     [er setFragmentBytes:&u length:sizeof(u) atIndex:1];
     [er drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [er endEncoding];
@@ -2684,7 +2773,11 @@ vertex CapFillOut cap_fill_vertex(uint vid [[vertex_id]]) {
   return o;
 }
 fragment float4 cap_fill_fragment(constant float4& interiorColor [[buffer(0)]]) {
-  return interiorColor;
+  // The cut cross-section faces the viewer, so light it with a +Z normal
+  // through the shared two-light model (matches desktop's interior_normal
+  // {0,0,1}). Without this the cap is a flat, unlit, dark patch while the
+  // surface around it is lit — "light not reaching the interior".
+  return float4(vbo_shade(interiorColor.rgb, float3(0.0, 0.0, 1.0)), interiorColor.a);
 }
 
 // Weighted-blended OIT output (McGuire/Bavoil). Transparent geometry writes

@@ -37,6 +37,10 @@ final class PyMOLEngine: ObservableObject {
     @Published var sequences: [SequenceObject] = []
     @Published var selectedResidueKeys: Set<String> = []
     @Published var isReady = false
+    // Long-op ("Calculating…") overlay state. isBusy flips on only after a 2s
+    // delay so quick ops never flash it; busyLabel describes the operation.
+    @Published var isBusy = false
+    @Published var busyLabel = ""
     @Published var sequenceVisible = true
 
     // Current MTKView drawable size in backing pixels (updated by the viewport
@@ -106,6 +110,10 @@ final class PyMOLEngine: ObservableObject {
 
     private var feedbackTimer: Timer?
 
+    // # of heavy ops queued-but-not-finished; isBusy stays true until it hits 0
+    // (so back-to-back heavy ops keep the overlay up instead of flickering).
+    private var busyDepth = 0
+
     private init() {}
 
     // MARK: - Lifecycle
@@ -132,7 +140,7 @@ final class PyMOLEngine: ObservableObject {
         // cached/stale install) when verifying gesture-direction fixes. Bump the
         // tag whenever gesture behavior changes; it shows at the top of the log.
         DispatchQueue.main.async { [weak self] in
-            self?.feedbackLog.append(" [build] v29  (Transparent export via CPU ray-tracer — honors ray_opaque_background)")
+            self?.feedbackLog.append(" [build] v30  (Live-RT grain fix + Calculating overlay + immediate inspector poll)")
         }
 
         // `fetch` downloads into fetch_path; the process cwd is read-only on iOS,
@@ -159,6 +167,16 @@ final class PyMOLEngine: ObservableObject {
         if let c = ProcessInfo.processInfo.environment["PYMOL_AUTOCMD"] {
             for one in c.split(separator: ";") {
                 runCommand(one.trimmingCharacters(in: .whitespaces))
+            }
+        }
+
+        // Test affordance: after the app is idle/rendering (3s), simulate a long
+        // heavy op so the "Calculating…" overlay can be screenshotted in a
+        // real-usage-like state (init-time AUTOCMD can't — its asyncAfter hop
+        // elapses before the first render). Just blocks the main thread; no core.
+        if ProcessInfo.processInfo.environment["PYMOL_AUTOHEAVY"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                self?.runHeavy("Calculating surface…") { Thread.sleep(forTimeInterval: 5.0) }
             }
         }
 
@@ -329,9 +347,63 @@ final class PyMOLEngine: ObservableObject {
         // Capture the Metal render ourselves instead. `ray=1` still uses the
         // (working) core CPU ray-trace path.
         if maybeCaptureRenderedPNG(command) { return }
+        // Known long ops (surface build, in-place ray-trace, quality bumps) run
+        // off-main so the "Calculating…" overlay can render + animate. The
+        // overlay's blocking scrim prevents the user from issuing an interleaved
+        // command mid-op, so selectively backgrounding these stays correctly
+        // ordered. Light/interactive commands stay synchronous (snappy).
+        if let label = heavyLabel(for: command) {
+            runHeavy(label) { [weak self] in self?.runCommandCore(command) }
+        } else {
+            runCommandCore(command)
+        }
+    }
+
+    // Synchronous command body. Safe on the main thread (light commands) or on
+    // coreQueue (heavy commands): it calls only direct bridge/runPython helpers,
+    // never runCommand, so it can't re-enter the heavy-dispatch path.
+    private func runCommandCore(_ command: String) {
         PyMOLBridge_RunCommand(command)
         handleSessionViewport(for: command)
         maybeWidenClipForSurface(for: command)
+    }
+
+    // Classify a command as a known long (>~2s) operation that deserves the
+    // "Calculating…" overlay. Only fire-and-forget ops (no synchronous return
+    // value the caller reads) are listed — export/PNG paths drive the busy flag
+    // through their own runHeavy completion. nil = light/interactive.
+    private func heavyLabel(for command: String) -> String? {
+        let l = command.lowercased()
+        if l.hasPrefix("ray ") || l == "ray" { return "Ray tracing…" }
+        if l.contains("show surface") || l.contains("as surface") { return "Calculating surface…" }
+        if l.contains("show mesh") || l.contains("as mesh") { return "Calculating mesh…" }
+        if l.contains("show dots") || l.contains("as dots") { return "Calculating dots…" }
+        if l.contains("set surface_quality") || l.contains("set solvent_radius")
+            || l.contains("set surface_carve") { return "Recomputing surface…" }
+        return nil
+    }
+
+    // MARK: - Busy overlay (heavy-op dispatch)
+
+    // Run a heavy op while showing the "Calculating…" overlay. The embedded
+    // core's GIL model (PAutoBlock) is NOT safe to call off the main thread —
+    // an unregistered background thread corrupts the interpreter state — so the
+    // op stays on the main thread. We paint the overlay first (set isBusy, then
+    // defer the op one runloop hop so SwiftUI commits the overlay before the
+    // op blocks), so the card is visible for the duration of the operation.
+    func runHeavy(_ label: String, _ work: @escaping () -> Void) {
+        busyLabel = label
+        busyDepth += 1
+        isBusy = true
+        // 50ms hop guarantees SwiftUI commits the overlay frame BEFORE the
+        // (main-thread-blocking) op starts — a bare async can run before the
+        // render commit, leaving the overlay unpainted until after the block.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            work()
+            guard let self else { return }
+            self.busyDepth = max(0, self.busyDepth - 1)
+            if self.busyDepth == 0 { self.isBusy = false }
+        }
     }
 
     // Whole-structure view fits (orient/reset, load/fetch auto_zoom) + showing a
