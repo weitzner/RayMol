@@ -291,6 +291,12 @@ struct ContentView: View {
     // stays maximal. `panelFrac` (committed at each drag end) is the panel's share
     // of the short axis; `panelCollapsed` hides it for a full-bleed viewport.
     @Environment(\.horizontalSizeClass) private var hSize
+    // verticalSizeClass distinguishes iPhone orientation: on iPhone, landscape ==
+    // vSize.compact, portrait == vSize.regular (iPad is .regular in both). So
+    // "iPhone portrait" == hSize.compact && vSize.regular — the only case that
+    // keeps the compact bottom-panel layout; everything else (iPad both
+    // orientations, iPhone landscape) uses the mac-style layout.
+    @Environment(\.verticalSizeClass) private var vSize
     @State private var panelFrac: CGFloat = 0.28
     @State private var committedFrac: CGFloat = 0.28
     @State private var panelCollapsed = false
@@ -313,9 +319,12 @@ struct ContentView: View {
     private var iPadOSLayout: some View {
         NavigationStack {
             GeometryReader { geo in
-                let compact = hSize == .compact
+                // iPhone PORTRAIT keeps the compact bottom-panel layout; everything
+                // else (iPad both orientations + iPhone LANDSCAPE) uses the mac-style
+                // layout (terminal+sequence above the viewport, Objects+Raymond panel).
+                let phonePortrait = hSize == .compact && vSize == .regular
                 Group {
-                    if compact {
+                    if phonePortrait {
                         iPhoneLayout(geo: geo)
                     } else {
                         iPadMacStyleLayout(geo: geo)
@@ -499,51 +508,69 @@ struct ContentView: View {
     @ViewBuilder
     private func iPadMacStyleLayout(geo: GeometryProxy) -> some View {
         let landscape = geo.size.width > geo.size.height
-        // Right column width: a comfortable 340pt in landscape; a narrower 300pt
-        // trailing strip in portrait so the stacked left column keeps its room.
-        let rightW: CGFloat = landscape ? 340 : 300
-        // Terminal height clamped to a sane band (a couple lines up to ~1/3 of the
-        // height) so it can't crowd out the viewport.
+        let rightW: CGFloat = 340                          // landscape side column
         let maxTerm = max(140, geo.size.height * 0.33)
         let clampedTermH = min(max(termH, 60), maxTerm)
         let showRight = showObjectPanel || showChatPanel
+        // Portrait bottom-panel height (Objects + Raymond below the viewer),
+        // resizable via the same divider/panelFrac the iPhone layout uses.
+        let bottomH = min(max(geo.size.height * panelFrac, 220), geo.size.height * 0.55)
 
-        HStack(spacing: 0) {
-            // Left column: terminal (top) / sequence (under) / viewport (rest).
+        if landscape {
+            // LANDSCAPE (iPad + iPhone landscape): left stack (terminal/sequence/
+            // viewport) beside a right side column (Objects + Raymond) — the Mac.
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    if showCommandPanel {
+                        CommandPanel().frame(height: clampedTermH)
+                        termResizeDivider(maxTerm: maxTerm)
+                    }
+                    if engine.sequenceVisible {
+                        SequencePanel().frame(height: ipadSequenceHeight)
+                        Divider()
+                    }
+                    viewportView
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showRight {
+                    Divider()
+                    VStack(spacing: 0) {
+                        if showObjectPanel { ObjectPanel().frame(maxHeight: .infinity) }
+                        if showChatPanel {
+                            if showObjectPanel { Divider() }
+                            ChatPanel().frame(maxHeight: .infinity)
+                        }
+                    }
+                    .frame(width: rightW)
+                    .background(Color(white: 0.11))
+                }
+            }
+        } else {
+            // PORTRAIT (iPad): console + sequence ABOVE the viewer; Objects +
+            // Raymond panel BELOW it (side-by-side, resizable).
             VStack(spacing: 0) {
                 if showCommandPanel {
-                    CommandPanel()
-                        .frame(height: clampedTermH)
-                    // Drag the divider beneath the terminal to resize it.
+                    CommandPanel().frame(height: clampedTermH)
                     termResizeDivider(maxTerm: maxTerm)
                 }
                 if engine.sequenceVisible {
-                    SequencePanel()
-                        .frame(height: ipadSequenceHeight)
+                    SequencePanel().frame(height: ipadSequenceHeight)
                     Divider()
                 }
                 viewportView
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Right column: Objects + (Raymond) chat, stacked with a divider —
-            // matching the Mac's 300pt inspector column. Only occupies width when
-            // at least one of its panels is enabled.
-            if showRight {
-                Divider()
-                VStack(spacing: 0) {
-                    if showObjectPanel {
-                        ObjectPanel()
-                            .frame(maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showRight {
+                    resizeDivider(landscape: false, total: geo.size.height)
+                    HStack(spacing: 0) {
+                        if showObjectPanel { ObjectPanel().frame(maxWidth: .infinity) }
+                        if showChatPanel {
+                            if showObjectPanel { Divider() }
+                            ChatPanel().frame(maxWidth: .infinity)
+                        }
                     }
-                    if showChatPanel {
-                        if showObjectPanel { Divider() }
-                        ChatPanel()
-                            .frame(maxHeight: .infinity)
-                    }
+                    .frame(height: bottomH)
+                    .background(Color(white: 0.11))
                 }
-                .frame(width: rightW)
-                .background(Color(white: 0.11))
             }
         }
     }
@@ -595,7 +622,9 @@ struct ContentView: View {
         // iPhone (compact) only: collapse/expand the single bottom control panel.
         // The iPad mac-style layout uses iosPadPanelMenu (per-pane toggles) instead.
         ToolbarItem(placement: .primaryAction) {
-            if hSize == .compact {
+            // iPhone PORTRAIT only (the compact bottom-panel layout). iPhone
+            // landscape + iPad use the mac-style layout with iosPadPanelMenu.
+            if hSize == .compact && vSize == .regular {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { panelCollapsed.toggle() }
                 } label: {
@@ -612,7 +641,10 @@ struct ContentView: View {
     // and show/hide the Objects + Raymond right column — the desktop arrangement.
     private var iosPadPanelMenu: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            if hSize != .compact {
+            // Shown whenever the mac-style layout is active: iPad (both orientations)
+            // and iPhone LANDSCAPE. Hidden only in iPhone portrait (which uses the
+            // compact bottom-panel layout + iosPanelToggle).
+            if !(hSize == .compact && vSize == .regular) {
                 Menu {
                     Toggle(isOn: $showCommandPanel) {
                         Label("Console", systemImage: "terminal")
