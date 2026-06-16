@@ -215,6 +215,13 @@ private:
   MTLPrimitiveType toMTL(PrimitiveType t);
   void buildVBOPipelines();
 
+  // Anti-aliased line rendering: scene VBO line segments are expanded on the
+  // CPU into feathered screen-space quads (PyMOL "trilines") instead of using
+  // 1px MTLPrimitiveTypeLine, so lines/ribbon/mesh-wireframe/dashes are smooth.
+  void drawLinesAA(PrimitiveType mode, int vertexCount, const void* data,
+      size_t stride, int posOffset, int colorOffset, int colorType, bool flat);
+  void buildLinePipeline();
+
   // Vertex attribute description
   struct VertexAttrib {
     int size = 0;        // component count (1-4)
@@ -362,6 +369,17 @@ private:
   // surface's stride-44), mirroring oitPipelineForVD.
   id<MTLRenderPipelineState> shadowPipelineForVD(MTLVertexDescriptor* vd);
   id<MTLRenderPipelineState> _shadowDebugPipeline = nil; // Stage-1 debug blit
+
+  // Anti-aliased screen-space line quads. _vboLinePipeline (lazy, sample-count
+  // aware) renders CPU-expanded feathered quads. _lineExpand is the per-frame
+  // scratch where segments are expanded (9 floats/vert); it's uploaded into
+  // _lineBuffer, grown on demand and tracked by _lineBufferSize.
+  id<MTLRenderPipelineState> _vboLinePipeline = nil;
+  id<MTLFunction> _lineAAVtxFunc = nil;
+  id<MTLFunction> _lineAAFragFunc = nil;
+  id<MTLBuffer> _lineBuffer = nil;
+  size_t _lineBufferSize = 0;
+  std::vector<float> _lineExpand;
 
   // GPU-tessellated Bezier tube ("tube cartoon") pipeline.
   id<MTLRenderPipelineState> _bezierTubePipeline = nil;

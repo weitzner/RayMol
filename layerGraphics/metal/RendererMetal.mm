@@ -292,6 +292,7 @@ void RendererMetal::setSampleCount(NSUInteger n)
   _cylinderPipelineStride = 0;
   _bezierTubePipeline = nil;
   _labelPipeline = nil;
+  _vboLinePipeline = nil;  // lazy; rebuilt at new sample count on next line draw
   buildBatchPipeline();
   buildVBOPipelines();
   // Force scene-target recreation (single-sample vs multisampled) next frame.
@@ -307,6 +308,10 @@ RendererMetal::~RendererMetal()
   _textures.clear();
   _fbColorAttachments.clear();
   _fbDepthAttachments.clear();
+  // MRC: the grow-on-demand line-AA scratch buffer is owned here.
+  [_lineBuffer release];
+  _lineBuffer = nil;
+  _lineBufferSize = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -2807,6 +2812,38 @@ fragment OITFragOut vbo_fragment_oit(VBOVertexOut in [[stage_in]])
 fragment void vbo_fragment_shadow(VBOVertexOut in [[stage_in]])
 {
 }
+
+// --- Anti-aliased screen-space line quads ("trilines"). The CPU expands each
+// line segment into a feathered quad in clip space (see drawLinesAA); these
+// shaders just pass the pre-projected verts through and feather-fade the edges
+// by signed distance from the segment center line. ---
+struct LineAAIn {
+  float4 posClip    [[attribute(0)]];
+  float4 color      [[attribute(1)]];
+  float  centerDist [[attribute(2)]];
+};
+struct LineAAOut {
+  float4 position [[position]];
+  float4 color;
+  float  centerDist;
+};
+struct LineAAU { float halfWidth; float feather; };
+// CPU emits pre-projected clip-space quad verts; pass through with the standard
+// GL->Metal z remap (matches vbo_vertex) so lines occlude consistently.
+vertex LineAAOut line_aa_vertex(LineAAIn in [[stage_in]]) {
+  LineAAOut o;
+  o.position = in.posClip;
+  o.position.z = 0.5 * (o.position.z + o.position.w);
+  o.color = in.color;
+  o.centerDist = in.centerDist;
+  return o;
+}
+fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
+    constant LineAAU& u [[buffer(0)]]) {
+  float cov = 1.0 - clamp((abs(in.centerDist) - u.halfWidth) / max(u.feather, 1e-3), 0.0, 1.0);
+  if (cov <= 0.0) discard_fragment();
+  return float4(in.color.rgb, in.color.a * cov);
+}
 )";
 
   NSError* error = nil;
@@ -2828,6 +2865,8 @@ fragment void vbo_fragment_shadow(VBOVertexOut in [[stage_in]])
   _capMarkFragFunc = [lib newFunctionWithName:@"cap_mark_fragment"];
   _capFillVtxFunc = [lib newFunctionWithName:@"cap_fill_vertex"];
   _capFillFragFunc = [lib newFunctionWithName:@"cap_fill_fragment"];
+  _lineAAVtxFunc = [lib newFunctionWithName:@"line_aa_vertex"];
+  _lineAAFragFunc = [lib newFunctionWithName:@"line_aa_fragment"];
   if (!_vboVertexFunc || !_vboFragmentFunc) {
     NSLog(@"RendererMetal: VBO shader functions not found");
     return;
@@ -3030,6 +3069,183 @@ void RendererMetal::buildShadowPipelines()
   _vboShadowPipelineFloat = shadowPipelineForVD(mkvd(MTLVertexFormatFloat4, 40));
 }
 
+// ---------------------------------------------------------------------------
+#pragma mark - Anti-aliased lines (CPU-expanded screen-space quads)
+// ---------------------------------------------------------------------------
+
+// Lazy, sample-count-aware (mirrors buildShadowPipelines). The CPU-expanded
+// quad layout is: posClip Float4 @0, color Float4 @16, centerDist Float @32,
+// stride 36, per-vertex. Src-alpha blending lets the feather alpha antialias.
+void RendererMetal::buildLinePipeline()
+{
+  if (_vboLinePipeline) return;
+  if (!_lineAAVtxFunc || !_lineAAFragFunc) return;
+
+  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  vd.attributes[0].format = MTLVertexFormatFloat4;
+  vd.attributes[0].offset = 0;  vd.attributes[0].bufferIndex = 0;
+  vd.attributes[1].format = MTLVertexFormatFloat4;
+  vd.attributes[1].offset = 16; vd.attributes[1].bufferIndex = 0;
+  vd.attributes[2].format = MTLVertexFormatFloat;
+  vd.attributes[2].offset = 32; vd.attributes[2].bufferIndex = 0;
+  vd.layouts[0].stride = 36;
+  vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+  MTLRenderPipelineDescriptor* p = [[MTLRenderPipelineDescriptor alloc] init];
+  p.vertexFunction = _lineAAVtxFunc;
+  p.fragmentFunction = _lineAAFragFunc;
+  p.vertexDescriptor = vd;
+  p.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+  p.colorAttachments[0].blendingEnabled = YES;
+  p.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+  p.colorAttachments[0].destinationRGBBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  p.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+  p.colorAttachments[0].destinationAlphaBlendFactor =
+      MTLBlendFactorOneMinusSourceAlpha;
+  p.rasterSampleCount = _sampleCount;
+  p.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+  p.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+  NSError* e = nil;
+  _vboLinePipeline = [_device newRenderPipelineStateWithDescriptor:p error:&e];
+  if (!_vboLinePipeline)
+    NSLog(@"RendererMetal: line AA pipeline failed: %@", e);
+}
+
+void RendererMetal::drawLinesAA(PrimitiveType mode, int vertexCount,
+    const void* data, size_t stride, int posOffset, int colorOffset,
+    int colorType, bool flat)
+{
+  int nSeg = (mode == PrimitiveType::LineStrip) ? (vertexCount - 1)
+                                                : (vertexCount / 2);
+  if (nSeg <= 0) return;
+  buildLinePipeline();
+  if (!_vboLinePipeline) return;
+
+  // mvp = projection * modelview (both column-major GL). Small column-major
+  // mat4*vec4 helper (multiplyMatrices already gives mat4*mat4).
+  const Mat4 mvp = multiplyMatrices(_projectionMatrix, _modelviewMatrix);
+  auto mulMV4 = [&mvp](float x, float y, float z, float out[4]) {
+    for (int r = 0; r < 4; ++r) {
+      out[r] = mvp[0 * 4 + r] * x + mvp[1 * 4 + r] * y +
+               mvp[2 * 4 + r] * z + mvp[3 * 4 + r];
+    }
+  };
+
+  const float lw = std::max(_lineWidth, 1.0f);
+  const float feather = 1.5f;
+  const float halfExtent = lw * 0.5f + feather;
+
+  const float vpW = (float)_viewport.width;
+  const float vpH = (float)_viewport.height;
+  if (vpW <= 0.0f || vpH <= 0.0f) return;
+  const float halfVpX = 0.5f * vpW;
+  const float halfVpY = 0.5f * vpH;
+
+  const auto* base = static_cast<const unsigned char*>(data);
+  auto readPos = [&](int idx, float p[3]) {
+    const float* fp = reinterpret_cast<const float*>(
+        base + (size_t)idx * stride + posOffset);
+    p[0] = fp[0]; p[1] = fp[1]; p[2] = fp[2];
+  };
+  auto readColor = [&](int idx, float c[4]) {
+    if (flat || colorOffset < 0) {
+      c[0] = c[1] = c[2] = c[3] = 1.0f;
+      return;
+    }
+    const unsigned char* cp = base + (size_t)idx * stride + colorOffset;
+    if (colorType == 0) {  // 4x uchar normalized
+      c[0] = cp[0] / 255.0f; c[1] = cp[1] / 255.0f;
+      c[2] = cp[2] / 255.0f; c[3] = cp[3] / 255.0f;
+    } else {               // 4x float
+      const float* fc = reinterpret_cast<const float*>(cp);
+      c[0] = fc[0]; c[1] = fc[1]; c[2] = fc[2]; c[3] = fc[3];
+    }
+  };
+
+  _lineExpand.clear();
+  _lineExpand.reserve((size_t)nSeg * 6 * 9);
+
+  // 2 triangles, 6 verts. corner endpoint index {0,0,1,1,0,1}, side {-1,1,-1,-1,1,1}.
+  static const int kCornerEnd[6]  = {0, 0, 1, 1, 0, 1};
+  static const float kCornerSide[6] = {-1.f, 1.f, -1.f, -1.f, 1.f, 1.f};
+
+  for (int s = 0; s < nSeg; ++s) {
+    int i0, i1;
+    if (mode == PrimitiveType::LineStrip) { i0 = s; i1 = s + 1; }
+    else { i0 = 2 * s; i1 = 2 * s + 1; }
+
+    float p0[3], p1[3], c0[4], c1[4];
+    readPos(i0, p0); readPos(i1, p1);
+    readColor(i0, c0); readColor(i1, c1);
+
+    float clip0[4], clip1[4];
+    mulMV4(p0[0], p0[1], p0[2], clip0);
+    mulMV4(p1[0], p1[1], p1[2], clip1);
+    if (clip0[3] == 0.0f || clip1[3] == 0.0f) continue;
+
+    const float ndc0x = clip0[0] / clip0[3], ndc0y = clip0[1] / clip0[3];
+    const float ndc1x = clip1[0] / clip1[3], ndc1y = clip1[1] / clip1[3];
+    // Screen-space positions (px) for direction; only the direction matters.
+    const float sx0 = ndc0x * halfVpX, sy0 = ndc0y * halfVpY;
+    const float sx1 = ndc1x * halfVpX, sy1 = ndc1y * halfVpY;
+    float dx = sx1 - sx0, dy = sy1 - sy0;
+    float len = std::sqrt(dx * dx + dy * dy);
+    if (len < 1e-4f) { dx = 1.0f; dy = 0.0f; }
+    else { dx /= len; dy /= len; }
+    const float px = -dy, py = dx;  // perpendicular
+
+    for (int v = 0; v < 6; ++v) {
+      const int end = kCornerEnd[v];
+      const float side = kCornerSide[v];
+      const float* clip = end ? clip1 : clip0;
+      const float* col = end ? c1 : c0;
+      const float ndcx = end ? ndc1x : ndc0x;
+      const float ndcy = end ? ndc1y : ndc0y;
+      // perp offset (across) + dir cap extension (along, ± to fill joins)
+      const float capSign = end ? 1.0f : -1.0f;
+      const float soX = px * side * halfExtent + dx * capSign * halfExtent;
+      const float soY = py * side * halfExtent + dy * capSign * halfExtent;
+      const float ndcOX = soX / halfVpX;
+      const float ndcOY = soY / halfVpY;
+      const float w = clip[3];
+      // out clip = ((ndc + ndcOffset) * w, clipz, w)
+      _lineExpand.push_back((ndcx + ndcOX) * w);
+      _lineExpand.push_back((ndcy + ndcOY) * w);
+      _lineExpand.push_back(clip[2]);
+      _lineExpand.push_back(w);
+      _lineExpand.push_back(col[0]);
+      _lineExpand.push_back(col[1]);
+      _lineExpand.push_back(col[2]);
+      _lineExpand.push_back(col[3]);
+      _lineExpand.push_back(side * halfExtent);  // centerDist
+    }
+  }
+
+  const NSUInteger emitVerts = (NSUInteger)(_lineExpand.size() / 9);
+  if (emitVerts == 0) return;
+  const size_t bytes = _lineExpand.size() * sizeof(float);
+  if (!_lineBuffer || _lineBufferSize < bytes) {
+    [_lineBuffer release];
+    _lineBuffer = [_device newBufferWithLength:std::max(bytes, (size_t)65536)
+                                       options:MTLResourceStorageModeShared];
+    _lineBufferSize = _lineBuffer ? _lineBuffer.length : 0;
+  }
+  if (!_lineBuffer) return;
+  std::memcpy(_lineBuffer.contents, _lineExpand.data(), bytes);
+
+  [_encoder setRenderPipelineState:_vboLinePipeline];
+  // Lines depth-test/write like normal scene geometry.
+  applyDepthStencilState();
+  if (_depthStencilState) [_encoder setDepthStencilState:_depthStencilState];
+  [_encoder setVertexBuffer:_lineBuffer offset:0 atIndex:0];
+  struct LineAAU { float halfWidth; float feather; } u = {lw * 0.5f, feather};
+  [_encoder setFragmentBytes:&u length:sizeof(u) atIndex:0];
+  [_encoder drawPrimitives:MTLPrimitiveTypeTriangle
+               vertexStart:0
+               vertexCount:emitVerts];
+}
+
 id<MTLRenderPipelineState> RendererMetal::oitPipelineForVD(
     MTLVertexDescriptor* vd)
 {
@@ -3128,6 +3344,19 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   // position-only flat shader so the pipeline can be created (the normal unlit
   // shader needs attribute 2). Color comes from a uniform (buffer 2) below.
   bool flat = unlit && (colorOffset < 0);
+
+  // Anti-aliased lines: in the normal (non-shadow, non-OIT) pass, expand line
+  // segments on the CPU into feathered screen-space quads instead of drawing
+  // 1px MTLPrimitiveTypeLine. Lines still cast no shadows (the shadow branch
+  // below early-returns for `unlit`) and are skipped in the transparent pass.
+  if ((mode == PrimitiveType::Lines || mode == PrimitiveType::LineStrip) &&
+      !_shadowMode && !_oitActive) {
+    bool flatLine = (colorOffset < 0);
+    drawLinesAA(mode, vertexCount, data, stride, posOffset, colorOffset,
+        colorType, flatLine);
+    return;
+  }
+
   id<MTLRenderPipelineState> pipeline = nil;
 
   // Shadow pre-pass: route lit geometry to the depth-only shadow pipelines
