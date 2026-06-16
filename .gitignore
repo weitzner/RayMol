@@ -22,4 +22,8 @@ xcuserdata
 
 # scratch test structures / session transcripts at repo root
 /*.cif
+/*.pdb
 /context*.txt
+.claude/
+.superpowers/
+*-this-session-is-being-continued-*.txt
