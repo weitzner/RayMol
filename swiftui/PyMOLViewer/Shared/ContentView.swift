@@ -307,6 +307,25 @@ struct ContentView: View {
     @State private var didConfigForCompact = false
     @AppStorage("ipadGestureCoachSeen") private var gestureCoachSeen = false
     @State private var showGestureLegend = false
+    @State private var showPanePopover = false
+
+    // iPhone-LANDSCAPE pane visibility. Separate from the iPad bools (showCommand/
+    // Object/ChatPanel, which default ON) so iPhone landscape starts MINIMAL —
+    // Console + Objects + Raymond OFF, showing just the viewport (+ the sequence
+    // strip if the shared engine.sequenceVisible is on). They persist across
+    // rotations (so a pane the user turned on stays on). iPad keeps the show* bools.
+    @State private var landConsole = false
+    @State private var landObjects = false
+    @State private var landRaymond = false
+
+    // iPhone landscape == compact width + compact height (iPad is regular height in
+    // both orientations; iPhone portrait is compact width + regular height).
+    private var isPhoneLandscape: Bool { hSize == .compact && vSize == .compact }
+    // Effective pane bindings: iPhone landscape uses its own minimal-default state;
+    // everywhere else (iPad) uses the shared show* bools.
+    private var consoleBinding: Binding<Bool> { isPhoneLandscape ? $landConsole : $showCommandPanel }
+    private var objectsBinding: Binding<Bool> { isPhoneLandscape ? $landObjects : $showObjectPanel }
+    private var raymondBinding: Binding<Bool> { isPhoneLandscape ? $landRaymond : $showChatPanel }
 
     // iPad (regular size class) mac-style layout state. The left column stacks the
     // terminal (CommandPanel) on top, the sequence (SequencePanel) under it, then
@@ -511,7 +530,12 @@ struct ContentView: View {
         let rightW: CGFloat = 340                          // landscape side column
         let maxTerm = max(140, geo.size.height * 0.33)
         let clampedTermH = min(max(termH, 60), maxTerm)
-        let showRight = showObjectPanel || showChatPanel
+        // Effective pane visibility: iPhone landscape uses its minimal-default
+        // land* state; iPad uses the show* bools (see consoleBinding etc.).
+        let cTerm = consoleBinding.wrappedValue
+        let cObj  = objectsBinding.wrappedValue
+        let cRay  = raymondBinding.wrappedValue
+        let showRight = cObj || cRay
         // Portrait bottom-panel height (Objects + Raymond below the viewer),
         // resizable via the same divider/panelFrac the iPhone layout uses.
         let bottomH = min(max(geo.size.height * panelFrac, 220), geo.size.height * 0.55)
@@ -521,7 +545,7 @@ struct ContentView: View {
             // viewport) beside a right side column (Objects + Raymond) — the Mac.
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    if showCommandPanel {
+                    if cTerm {
                         CommandPanel().frame(height: clampedTermH)
                         termResizeDivider(maxTerm: maxTerm)
                     }
@@ -535,9 +559,9 @@ struct ContentView: View {
                 if showRight {
                     Divider()
                     VStack(spacing: 0) {
-                        if showObjectPanel { ObjectPanel().frame(maxHeight: .infinity) }
-                        if showChatPanel {
-                            if showObjectPanel { Divider() }
+                        if cObj { ObjectPanel().frame(maxHeight: .infinity) }
+                        if cRay {
+                            if cObj { Divider() }
                             ChatPanel().frame(maxHeight: .infinity)
                         }
                     }
@@ -549,7 +573,7 @@ struct ContentView: View {
             // PORTRAIT (iPad): console + sequence ABOVE the viewer; Objects +
             // Raymond panel BELOW it (side-by-side, resizable).
             VStack(spacing: 0) {
-                if showCommandPanel {
+                if cTerm {
                     CommandPanel().frame(height: clampedTermH)
                     termResizeDivider(maxTerm: maxTerm)
                 }
@@ -562,9 +586,9 @@ struct ContentView: View {
                 if showRight {
                     resizeDivider(landscape: false, total: geo.size.height)
                     HStack(spacing: 0) {
-                        if showObjectPanel { ObjectPanel().frame(maxWidth: .infinity) }
-                        if showChatPanel {
-                            if showObjectPanel { Divider() }
+                        if cObj { ObjectPanel().frame(maxWidth: .infinity) }
+                        if cRay {
+                            if cObj { Divider() }
                             ChatPanel().frame(maxWidth: .infinity)
                         }
                     }
@@ -645,25 +669,60 @@ struct ContentView: View {
             // and iPhone LANDSCAPE. Hidden only in iPhone portrait (which uses the
             // compact bottom-panel layout + iosPanelToggle).
             if !(hSize == .compact && vSize == .regular) {
-                Menu {
-                    Toggle(isOn: $showCommandPanel) {
-                        Label("Console", systemImage: "terminal")
-                    }
-                    Toggle(isOn: $engine.sequenceVisible) {
-                        Label("Sequence", systemImage: "textformat.abc")
-                    }
-                    Toggle(isOn: $showObjectPanel) {
-                        Label("Objects", systemImage: "cube")
-                    }
-                    Toggle(isOn: $showChatPanel) {
-                        Label("Raymond", systemImage: "bubble.left.and.bubble.right")
-                    }
+                Button {
+                    showPanePopover.toggle()
                 } label: {
                     Image(systemName: "sidebar.squares.right")
                 }
                 .accessibilityLabel("Panels")
+                // A popover (not a Menu) so it STAYS OPEN while the user flips
+                // several panes; it closes on tap-away. presentationCompactAdaptation
+                // keeps it a popover on iPhone (instead of expanding to a sheet).
+                .popover(isPresented: $showPanePopover, arrowEdge: .top) {
+                    if #available(iOS 16.4, *) {
+                        panePopoverContent.presentationCompactAdaptation(.popover)
+                    } else {
+                        panePopoverContent
+                    }
+                }
             }
         }
+    }
+
+    // Pane-visibility list for the iOS toolbar popover. Stays open while toggling;
+    // off rows are grayed ("gray out the other options"). Binds to the effective
+    // bindings — iPhone landscape flips its own minimal-default land* state, iPad
+    // flips the show* bools.
+    @ViewBuilder
+    private var panePopoverContent: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            paneRow("Console",  "terminal",                       consoleBinding)
+            paneRow("Sequence", "textformat.abc",                 $engine.sequenceVisible)
+            paneRow("Objects",  "cube",                           objectsBinding)
+            paneRow("Raymond",  "bubble.left.and.bubble.right",   raymondBinding)
+        }
+        .padding(6)
+        .frame(minWidth: 240)
+    }
+
+    private func paneRow(_ title: String, _ icon: String, _ isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()    // popover stays open → multi-toggle
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .opacity(isOn.wrappedValue ? 1 : 0)
+                    .frame(width: 16)
+                Image(systemName: icon).frame(width: 22)
+                Text(title)
+                Spacer(minLength: 12)
+            }
+            .contentShape(Rectangle())
+            .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 7).padding(.horizontal, 8)
     }
 
     // The 3D viewport — primary in every orientation. Carries the empty-state CTA
