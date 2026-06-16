@@ -26,6 +26,20 @@ struct PyMOLApp: App {
     @UIApplicationDelegateAdaptor(OrientationLockDelegate.self) private var appDelegate
     #endif
 
+    init() {
+        #if os(iOS)
+        // The object list (and other panels) live in a vertical ScrollView. iOS
+        // scroll views default to delaysContentTouches = true, which holds a
+        // touch-down for ~150ms to decide whether it's the start of a pan — so a
+        // single tap on a Menu/Button inside the scroll view is often swallowed
+        // (interpreted as a scroll that never moved) and you have to tap again.
+        // This was the cause of the "A" action menu needing multiple taps to
+        // open. Delivering touches immediately fixes first-tap responsiveness for
+        // every control inside a scroll view, app-wide.
+        UIScrollView.appearance().delaysContentTouches = false
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

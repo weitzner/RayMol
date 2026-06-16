@@ -704,12 +704,15 @@ private struct ActionMenuButton: View {
             actionMenuContent(items: actionMenuItems)
         } label: {
             Text("A")
+                .frame(width: kActBtnW, height: kActBtnH)
+                .background(PanelTheme.buttonBackground)
+                .cornerRadius(2)
+                // Make the entire framed/background area hit-testable, not just
+                // the "A" glyph — so a tap anywhere on the button opens the menu.
+                .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .frame(width: kActBtnW, height: kActBtnH)
-        .background(PanelTheme.buttonBackground)
-        .cornerRadius(2)
     }
 
     @ViewBuilder
