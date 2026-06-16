@@ -280,13 +280,25 @@ def _on_user_message(text):
         _ui.show_message('user', text)
         _ui.show_status('Thinking...')
 
-    key = _ai_config['api_keys'].get('anthropic', '')
-    if not key:
+    # Pre-flight credential check for the ACTIVE provider. The worker does a
+    # deeper per-provider validation, but blocking here avoids starting a
+    # doomed background thread and gives an immediate, provider-correct error.
+    provider = _ai_config.get('provider', 'anthropic')
+    if provider == 'vertex':
+        cred = _ai_config['api_keys'].get('vertex', '')
+        error_msg = (
+            "No Vertex access token set. Open AI settings and paste a GCP access "
+            "token (gcloud auth print-access-token) or a Vertex API key. "
+            "(Access tokens expire ~1h.)"
+        )
+    else:
+        cred = _ai_config['api_keys'].get('anthropic', '')
         error_msg = (
             "No API key set. "
             "Paste your Anthropic API key in Settings (stored in the Keychain), "
             "or run: ai_config key=YOUR_ANTHROPIC_API_KEY"
         )
+    if not cred:
         if _has_ui and _ui is not None:
             _ui.show_message('error', error_msg)
             _ui.show_status('')
@@ -325,7 +337,11 @@ def _worker():
     if _has_ui and _ui is not None:
         _ui.set_busy(True)
     try:
-        if _HAS_SDK:
+        # The Claude Agent SDK path only speaks Anthropic (x-api-key); Vertex
+        # must use the urllib fallback (:rawPredict + Bearer). Route by the
+        # active provider, not just SDK availability.
+        provider = _ai_config.get('provider', 'anthropic')
+        if _HAS_SDK and provider == 'anthropic':
             _worker_impl_sdk()
         else:
             _worker_impl_fallback()
