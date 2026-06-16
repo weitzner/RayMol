@@ -526,15 +526,23 @@ def _worker_impl_fallback():
             key = _ai_config['api_keys'].get('anthropic', '')
             model = _ai_config['models'].get('anthropic', '')
 
-        max_tool_rounds = 5
-        for _round in range(max_tool_rounds):
-            api_messages = _build_api_messages()
+        # Working message list for THIS turn. Seeded from the clean cross-turn
+        # history (text only) + the just-added user message, then extended with
+        # raw tool_use/tool_result blocks DURING the loop. Keeping those blocks
+        # intact within the turn is essential: the old code rebuilt the list every
+        # round and stripped them, so the model never saw that a tool had run and
+        # kept re-issuing the same call until the cap, then exited with NOTHING
+        # shown. Only a clean text summary is committed to _messages at the end.
+        turn_messages = _build_api_messages()
 
+        max_tool_rounds = 8
+        cmd_errors = []
+        for _round in range(max_tool_rounds):
             try:
                 if provider == 'vertex':
-                    body = _call_vertex(api_messages, token, model, project, region)
+                    body = _call_vertex(turn_messages, token, model, project, region)
                 else:
-                    body = _call_anthropic(api_messages, key, model)
+                    body = _call_anthropic(turn_messages, key, model)
             except Exception as exc:
                 _ui_msg('error', f"API call failed: {exc}")
                 _ui_status('')
@@ -551,50 +559,76 @@ def _worker_impl_fallback():
                     text_parts.append(block.get('text', ''))
                 elif block.get('type') == 'tool_use':
                     tool_uses.append(block)
-
             full_text = ''.join(text_parts)
 
-            # Store in conversation history
-            _messages.append({'role': 'assistant', 'content': content})
+            # Keep the assistant turn (with its tool_use blocks) in the working
+            # list so the next request carries tool context — Anthropic requires
+            # each tool_use to be immediately followed by its tool_result.
+            turn_messages.append({'role': 'assistant', 'content': content})
 
-            # Handle tool_use
+            # tool_use — run each tool, feed results back, loop again.
             if stop_reason == 'tool_use' and tool_uses:
-                _ui_status('Using tools...')
+                _ui_status('Working...')
                 tool_results = []
                 for tu in tool_uses:
                     try:
                         result = execute_tool(tu['name'], tu['input'], _cmd)
                     except Exception as exc:
                         result = json.dumps({"error": str(exc)})
-
                     result_str = result if isinstance(result, str) else json.dumps(result)
+                    # Surface execute_command failures to the user, not just the model.
+                    if tu.get('name') == 'execute_command':
+                        for ln in result_str.splitlines():
+                            if ln.startswith('Error:'):
+                                cmd_errors.append(ln[len('Error:'):].strip())
                     tool_results.append({
                         'type': 'tool_result',
                         'tool_use_id': tu['id'],
                         'content': result_str,
                     })
-
-                _messages.append({'role': 'user', 'content': tool_results})
-                _ui_status('Thinking...')
+                turn_messages.append({'role': 'user', 'content': tool_results})
                 continue  # next round
 
-            # end_turn — parse and display
+            # Final turn (end_turn / max_tokens / etc.) — parse and display.
             parsed = _parse_structured_response(full_text)
-            response_text = parsed.get('response', full_text)
+            response_text = (parsed.get('response') or '').strip()
             script = parsed.get('script', '')
             questions = parsed.get('questions', [])
 
-            _ui_msg('assistant', response_text)
-
             if script:
                 _ui_status('Executing...')
-                _execute_script(script)
+                cmd_errors.extend(_execute_script(script))
+
+            # Never leave a silent empty bubble: if there's no prose and no
+            # question, acknowledge whatever ran (or that nothing did).
+            if not response_text and not questions:
+                response_text = "Done." if (script or _round > 0) \
+                    else "I didn't have anything to do there — try rephrasing?"
+
+            if response_text:
+                _ui_msg('assistant', response_text)
+
+            if cmd_errors:
+                shown = "\n".join("- " + e for e in cmd_errors[:6])
+                extra = "" if len(cmd_errors) <= 6 else f"\n...and {len(cmd_errors) - 6} more"
+                _ui_msg('error', "Some commands didn't run cleanly:\n" + shown + extra)
 
             if questions and _has_ui and _ui is not None:
                 _ui.show_question_buttons(questions)
 
+            # Commit a clean, text-only summary to the long-term conversation so
+            # the next user turn has context without replaying tool blocks.
+            _messages.append({'role': 'assistant',
+                              'content': response_text or '(performed actions)'})
             _ui_status('')
-            break
+            return
+
+        # Round cap hit while still calling tools — don't exit silently.
+        _ui_msg('assistant',
+                "I worked through several steps but couldn't finish within the "
+                "limit. Want me to keep going?")
+        _messages.append({'role': 'assistant', 'content': '(step limit reached)'})
+        _ui_status('')
 
     except Exception as exc:
         _ui_msg('error', f"Unexpected error: {exc}")
@@ -655,9 +689,12 @@ def _parse_structured_response(text):
     """
     text = text.strip()
 
-    # Try direct JSON parse
+    # Try direct JSON parse. strict=False allows literal control chars (real
+    # newlines/tabs) inside strings — the model often emits a real newline in
+    # the `script` field instead of \n, which would otherwise fail the parse
+    # and silently drop the action (the "replies but does nothing" symptom).
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(text, strict=False)
         if isinstance(parsed, dict) and 'response' in parsed:
             return parsed
     except (json.JSONDecodeError, ValueError):
@@ -668,7 +705,7 @@ def _parse_structured_response(text):
     json_block = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
     if json_block:
         try:
-            parsed = json.loads(json_block.group(1))
+            parsed = json.loads(json_block.group(1), strict=False)
             if isinstance(parsed, dict) and 'response' in parsed:
                 return parsed
         except (json.JSONDecodeError, ValueError):
@@ -685,7 +722,7 @@ def _parse_structured_response(text):
                 depth -= 1
                 if depth == 0:
                     try:
-                        parsed = json.loads(text[brace_start:i + 1])
+                        parsed = json.loads(text[brace_start:i + 1], strict=False)
                         if isinstance(parsed, dict) and 'response' in parsed:
                             return parsed
                     except (json.JSONDecodeError, ValueError):
@@ -699,14 +736,21 @@ def _parse_structured_response(text):
 def _execute_script(script):
     """Execute a multi-line PyMOL script from the worker thread.
 
-    Each non-empty, non-comment line is executed via _cmd.do(line, 0, 1).
-    _cmd.do() is a C extension that acquires the PyMOL API lock internally
-    (via APIEnterNotModal), so it is safe to call from any thread.  The
-    worker thread holds the GIL while calling into _cmd.do(); the API lock
-    serializes access to PyMOL's internal state against the render loop.
+    Each non-empty, non-comment line runs via _cmd.do(line, 0, 1) — a C
+    extension that takes the PyMOL API lock internally, so it is safe from the
+    worker thread (the lock serializes against the render loop). Returns a list
+    of human-readable error strings (empty when everything ran cleanly) so the
+    caller can SURFACE failures to the user instead of silently swallowing them.
     """
+    errors = []
     if not script or not _cmd:
-        return
+        return errors
+
+    # Drain stale feedback so we only attribute errors to THIS script.
+    try:
+        _cmd._get_feedback()
+    except Exception:
+        pass
 
     for line in script.splitlines():
         line = line.strip()
@@ -714,8 +758,25 @@ def _execute_script(script):
             continue
         try:
             _cmd.do(line, 0, 1)
-        except Exception:
-            pass  # silently ignore errors in script execution
+        except Exception as exc:
+            errors.append(f"{line} => {exc}")
+
+    # PyMOL reports most command failures via the feedback buffer rather than
+    # by raising, so scan it for error lines too.
+    try:
+        fb = _cmd._get_feedback()
+        if fb:
+            for item in fb:
+                parts = item if isinstance(item, (list, tuple)) else [item]
+                for s in parts:
+                    if isinstance(s, str) and s.strip():
+                        low = s.strip()
+                        if 'error' in low.lower() or low.lower().startswith('selector'):
+                            errors.append(low)
+    except Exception:
+        pass
+
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -776,8 +837,12 @@ def _call_vertex(messages, token, model, project, region):
         `gcloud auth print-access-token`, or a Vertex API key) — there is no
         x-api-key and no anthropic-version header.
     """
+    # The 'global' endpoint has NO region prefix in the host; regional
+    # locations (us-east5, europe-west1, ...) do.
+    host = ('aiplatform.googleapis.com' if region == 'global'
+            else f'{region}-aiplatform.googleapis.com')
     url = (
-        f'https://{region}-aiplatform.googleapis.com/v1/projects/{project}'
+        f'https://{host}/v1/projects/{project}'
         f'/locations/{region}/publishers/anthropic/models/{model}:rawPredict'
     )
 
