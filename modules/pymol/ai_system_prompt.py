@@ -38,6 +38,19 @@ command language via `cmd.do("fetch 1ubq")` and helpers like `cmd.util.cbc()`.
 - `Bio` — Biopython (may be None if unavailable; guard before using it).
 - `WORKDIR` — a writable temp-directory path (string) you may read/write, e.g. \
 for intermediate files.
+- `cbc('<sel>')`, `cnc('<sel>')`, `apply_default_style('<obj>')` — THEMED \
+helpers that honor the user's active theme (its chain-color cycle, non-carbon \
+element colors, and default representation). PREFER these for "color by chain", \
+"color by element", and applying the default style, so your results match the \
+app's palette. After loading a structure, call \
+`raymol_theme.apply_to('<obj>')` to adopt the theme defaults.
+
+## Theme consistency
+The app has an active visual theme that defines default molecular colors and \
+style. For consistency with the rest of the UI, use the themed helpers above \
+rather than `util.cbc`/`util.cnc`/`spectrum` when the user just asks to color \
+"by chain" or "by element" or to apply the default look. If the user requests a \
+SPECIFIC color or scheme, honor that instead.
 
 ALWAYS print() the values you need to verify your work (atom counts, RMSD, \
 residue counts, lists). You read that output back and use it to confirm success \
@@ -115,7 +128,7 @@ run_python with:
 
     cmd.fetch("1ubq")
     cmd.show_as("cartoon")
-    cmd.util.cbc()          # color by chain (unique colors)
+    cbc("1ubq")             # themed color-by-chain (honors the active palette)
     cmd.orient()
     print("atoms:", cmd.count_atoms("1ubq"), "chains:", cmd.get_chains("1ubq"))
 

@@ -12,6 +12,9 @@ import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject private var themeManager: ThemeManager
+    @State private var showThemeStudio = false   // inline Theme studio (replaces a panel region)
+    @AppStorage("mouseLegendCollapsed") private var mouseLegendCollapsed = false
     @State private var showObjectPanel = true
     @State private var showCommandPanel = true
     // Surface the AI chat in the right column by default (the toolbar toggle can
@@ -110,13 +113,49 @@ struct ContentView: View {
     // MARK: - macOS: HSplitView with sidebar
 
     #if os(macOS)
+    // Minimizable mouse-mode legend: full card with a minimize button, or a
+    // small mouse button when collapsed (state persists via @AppStorage).
+    @ViewBuilder private var mouseLegendCard: some View {
+        if mouseLegendCollapsed {
+            Button { withAnimation(.easeInOut(duration: 0.15)) { mouseLegendCollapsed = false } } label: {
+                Image(systemName: "computermouse")
+                    .font(.system(size: 15))
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Show mouse controls")
+            .padding(8)
+        } else {
+            ZStack(alignment: .topTrailing) {
+                MousePanel()
+                    .frame(width: 220)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
+                Button { withAnimation(.easeInOut(duration: 0.15)) { mouseLegendCollapsed = true } } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .padding(4)
+                }
+                .buttonStyle(.plain)
+                .help("Minimize")
+            }
+            .padding(8)
+        }
+    }
+
     private var macOSLayout: some View {
         // Sequence height cap: 1–5 sequence rows (~26pt each + 8pt padding) so the
         // strip can't grow into the viewport. minHeight is set a few pt below the
         // cap so the VSplitView still hands the user a draggable splitter (a strict
         // min == max would freeze it).
         let seqRows = min(max(engine.sequences.count, 1), 5)
-        let seqH = CGFloat(seqRows) * 26 + 8
+        // ruler(11) + residue(~15) per row + horizontal scrollbar(~15) + padding,
+        // so the sequence isn't clipped behind the scroll indicator.
+        let seqH = CGFloat(seqRows) * 27 + 20
 
         return HSplitView {
             // Left column: terminal on TOP, sequence directly under it, then the
@@ -146,23 +185,15 @@ struct ContentView: View {
                         // Mouse-mode legend as a compact floating card at the
                         // bottom-trailing corner, so it's reachable even when the
                         // right column is collapsed (where MousePanel used to live).
-                        .overlay(alignment: .bottomTrailing) {
-                            MousePanel()
-                                .frame(width: 220)
-                                .background(.ultraThinMaterial,
-                                            in: RoundedRectangle(cornerRadius: 8))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
-                                .padding(8)
-                        }
+                        // Minimizable to a small mouse button to free up the view.
+                        .overlay(alignment: .bottomTrailing) { mouseLegendCard }
                     if engine.hasTimeline {
                         Divider()
                         TransportBar()
                     }
                 }
                 // Empty-state CTA when nothing is loaded (mirrors the iOS overlay).
-                .overlay { if engine.objects.isEmpty { macEmptyState } }
+                .overlay { if engine.objects.isEmpty && !showThemeStudio { macEmptyState } }
             }
 
             // Right column: objects + (chat). Only exists (and only occupies its
@@ -170,7 +201,13 @@ struct ContentView: View {
             // off the HSplitView collapses to just the left column. The mouse
             // legend moved to the floating viewport overlay (above) so it stays
             // reachable regardless.
-            if showObjectPanel || showChatPanel {
+            if showThemeStudio {
+                // Theme studio takes over the right column; viewport stays live.
+                ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
+                    .environmentObject(engine)
+                    .environmentObject(themeManager)
+                    .frame(width: 340)
+            } else if showObjectPanel || showChatPanel {
                 VStack(spacing: 0) {
                     if showObjectPanel {
                         ObjectPanel()
@@ -197,22 +234,24 @@ struct ContentView: View {
             Text("Download a structure from the RCSB PDB.")
         }
         .toolbar {
+            macOpenToolbar
+            macThemeToolbar
             exportMenu
-            ToolbarItem {
-                Button {
-                    engine.setMeasureMode(engine.measureMode == nil ? .distance : nil)
-                } label: {
-                    Label("Measure", systemImage: engine.measureMode == nil ? "ruler" : "ruler.fill")
-                }
-                .help("Measure distance / angle / dihedral by tapping atoms")
-            }
+            macMeasureToolbar
             panelToggles
         }
         .sheet(isPresented: $showCustomSizeSheet) {
             customSizeSheet
         }
+        .preferredColorScheme(themeManager.active.appearance.colorScheme)
+        .tint(themeManager.active.tabTint.color)
+        .onChange(of: engine.isReady) { ready in if ready { applyPersistedTheme() } }
+        .onChange(of: showThemeStudio) { open in
+            if open { engine.beginThemePreview() } else { engine.endThemePreview() }
+        }
         .onAppear {
             initializeEngine()
+            maybePresentFirstBootTheme()
         }
     }
 
@@ -249,14 +288,14 @@ struct ContentView: View {
         let raw = url.deletingPathExtension().lastPathComponent
         var name = String(raw.map { $0.isLetter || $0.isNumber ? $0 : "_" })
         if name.isEmpty { name = "mol" }
-        engine.runCommand("load \(url.path), \(name)")
+        engine.loadStructure(path: url.path, name: name)
     }
 
     private func macFetch() {
         let id = macFetchID.trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: "'", with: "")
         guard !id.isEmpty else { return }
-        engine.runCommand("fetch \(id), async=0, type=pdb")
+        engine.fetchStructure(id: id)
     }
     #endif
 
@@ -406,7 +445,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosThemeToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -433,7 +472,12 @@ struct ContentView: View {
             .sheet(isPresented: $showExportSheet) { MovieExportSheet() }
             .sheet(isPresented: $showSettingsSheet) { SettingsSheet() }
         }
-        .preferredColorScheme(.dark)   // consistent dark chrome (no white nav bar)
+        .preferredColorScheme(themeManager.active.appearance.colorScheme)
+        .tint(themeManager.active.tabTint.color)
+        .onChange(of: engine.isReady) { ready in if ready { applyPersistedTheme() } }
+        .onChange(of: showThemeStudio) { open in
+            if open { engine.beginThemePreview() } else { engine.endThemePreview() }
+        }
         // Cover the ENTIRE screen (viewport + bottom panel/tabs + toolbar) with
         // the "Raymond is driving" glass while the AI runs. Attached here on the
         // outer NavigationStack — not on viewportView — so the panels are covered
@@ -442,6 +486,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: engine.chatBusy)
         .onAppear {
             initializeEngine()
+            maybePresentFirstBootTheme()
             // iPhone (compact): start full-screen with the panel collapsed and
             // the 64pt sequence strip off — the controls are a peek to expand.
             if !didConfigForCompact {
@@ -507,7 +552,15 @@ struct ContentView: View {
         let panelSize = min(max(total * panelFrac, 200), total * 0.92)
         VStack(spacing: 0) {
             viewportView
-            if !panelCollapsed {
+            if showThemeStudio {
+                // Theme studio takes over the bottom region (force-shown even if
+                // the panel was collapsed); viewport stays live above.
+                resizeDivider(landscape: false, total: geo.size.height)
+                ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
+                    .environmentObject(engine)
+                    .environmentObject(themeManager)
+                    .frame(height: panelSize)
+            } else if !panelCollapsed {
                 resizeDivider(landscape: false, total: geo.size.height)
                 panelContent.frame(height: panelSize)
             }
@@ -556,7 +609,14 @@ struct ContentView: View {
                     viewportView
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if showRight {
+                if showThemeStudio {
+                    Divider()
+                    ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
+                        .environmentObject(engine)
+                        .environmentObject(themeManager)
+                        .frame(width: rightW)
+                        .background(themeChromeBg)
+                } else if showRight {
                     Divider()
                     VStack(spacing: 0) {
                         if cObj { ObjectPanel().frame(maxHeight: .infinity) }
@@ -566,7 +626,7 @@ struct ContentView: View {
                         }
                     }
                     .frame(width: rightW)
-                    .background(Color(white: 0.11))
+                    .background(themeChromeBg)
                 }
             }
         } else {
@@ -583,7 +643,14 @@ struct ContentView: View {
                 }
                 viewportView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if showRight {
+                if showThemeStudio {
+                    resizeDivider(landscape: false, total: geo.size.height)
+                    ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
+                        .environmentObject(engine)
+                        .environmentObject(themeManager)
+                        .frame(height: bottomH)
+                        .background(themeChromeBg)
+                } else if showRight {
                     resizeDivider(landscape: false, total: geo.size.height)
                     HStack(spacing: 0) {
                         if cObj { ObjectPanel().frame(maxWidth: .infinity) }
@@ -593,27 +660,36 @@ struct ContentView: View {
                         }
                     }
                     .frame(height: bottomH)
-                    .background(Color(white: 0.11))
+                    .background(themeChromeBg)
                 }
             }
         }
     }
 
-    // Sequence strip height on iPad: 1–5 sequence rows (~26pt each + 8pt padding),
-    // matching the macOS layout's seqH cap so the strip can't grow into the viewport.
+    // Sequence strip height on iPad: 1–5 sequence rows. ruler(11)+residue(~15)
+    // per row + scrollbar/padding allowance so the text isn't clipped, sized to
+    // the minimum that fully shows the ruler + sequence.
     private var ipadSequenceHeight: CGFloat {
         let rows = min(max(engine.sequences.count, 1), 5)
-        return CGFloat(rows) * 26 + 8
+        return CGFloat(rows) * 27 + 18
     }
 
     // Horizontal drag handle under the terminal that resizes its height. Dragging
+    // Themed chrome surfaces (so panels/dividers follow the active theme rather
+    // than a hardcoded dark gray — e.g. on the Paper/light theme).
+    private var themeChromeBg: Color { themeManager.active.panelBackground.color }
+    private var dividerBarColor: Color {
+        themeManager.active.panelBackground.blended(with: themeManager.active.panelText, 0.12).color
+    }
+    private var dividerPillColor: Color { themeManager.active.panelText.color.opacity(0.4) }
+
     // down grows the terminal; committed on release. Clamped to [60, maxTerm].
     @ViewBuilder
     private func termResizeDivider(maxTerm: CGFloat) -> some View {
         ZStack {
-            Color(white: 0.18)
+            dividerBarColor
             RoundedRectangle(cornerRadius: 2)
-                .fill(Color.white.opacity(0.35))
+                .fill(dividerPillColor)
                 .frame(width: 44, height: 4)
         }
         .frame(maxWidth: .infinity)
@@ -730,7 +806,7 @@ struct ContentView: View {
     private var viewportView: some View {
         MetalViewport()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay { if engine.objects.isEmpty { emptyStateView } }
+            .overlay { if engine.objects.isEmpty && !showThemeStudio { emptyStateView } }
             // Timeline transport: floats over the bottom of the viewport when
             // there's more than one frame. A collapsing peek on iPhone; a pinned
             // full-width bar on iPad.
@@ -797,7 +873,7 @@ struct ContentView: View {
                     .tabItem { Label("Raymond", systemImage: "bubble.left.and.bubble.right") }.tag(3)
             }
         }
-        .background(Color(white: 0.11))
+        .background(themeChromeBg)
     }
 
     // Draggable splitter between viewport and panel. Drag toward the viewport
@@ -805,9 +881,9 @@ struct ContentView: View {
     @ViewBuilder
     private func resizeDivider(landscape: Bool, total: CGFloat) -> some View {
         ZStack {
-            Color(white: 0.18)
+            dividerBarColor
             RoundedRectangle(cornerRadius: 2)
-                .fill(Color.white.opacity(0.35))
+                .fill(dividerPillColor)
                 .frame(width: landscape ? 4 : 44, height: landscape ? 44 : 4)
         }
         .frame(width: landscape ? 16 : nil, height: landscape ? nil : 20)
@@ -895,7 +971,7 @@ struct ContentView: View {
         let id = fetchID.trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: "'", with: "")
         guard !id.isEmpty else { return }
-        engine.runCommand("fetch \(id), async=0, type=pdb")
+        engine.fetchStructure(id: id)
     }
 
     // Open a molecule/session from Files. PyMOL load infers the format from the
@@ -922,6 +998,20 @@ struct ContentView: View {
         }
     }
 
+    private var iosThemeToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if !showThemeStudio { panelCollapsed = false }  // ensure bottom region shows
+                    showThemeStudio.toggle()
+                }
+            } label: {
+                Image(systemName: "circle.lefthalf.filled")
+            }
+            .accessibilityLabel("Theme studio")
+        }
+    }
+
     private func iosHandleImport(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
         let scoped = url.startAccessingSecurityScopedResource()
@@ -934,7 +1024,7 @@ struct ContentView: View {
         let raw = url.deletingPathExtension().lastPathComponent
         var name = String(raw.map { $0.isLetter || $0.isNumber ? $0 : "_" })
         if name.isEmpty { name = "mol" }
-        engine.runCommand("load \(safe.path), \(name)")
+        engine.loadStructure(path: safe.path, name: name)
     }
 
     // iPad export/share menu (the macOS Export menu lives in the window toolbar;
@@ -1094,6 +1184,51 @@ struct ContentView: View {
     #endif
 
     // MARK: - Toolbar
+
+    // Always-available Open/Fetch (the empty-state CTA disappears once a
+    // structure is loaded, so this keeps file-open reachable at all times).
+    // macOS-only: references the NSOpenPanel/fetch-alert helpers, which don't
+    // exist on iOS (iOS uses iosOpenToolbar + .fileImporter).
+    #if os(macOS)
+    private var macOpenToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Menu {
+                Button {
+                    macOpenFile()
+                } label: { Label("Open File…", systemImage: "folder") }
+                .keyboardShortcut("o", modifiers: .command)
+                Button {
+                    macFetchID = ""; showMacFetch = true
+                } label: { Label("Fetch from PDB…", systemImage: "arrow.down.circle") }
+            } label: {
+                Label("Open", systemImage: "folder")
+            }
+            .help("Open a structure file or fetch from the PDB")
+        }
+    }
+    #endif
+
+    private var macThemeToolbar: some ToolbarContent {
+        ToolbarItem {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio.toggle() }
+            } label: {
+                Label("Theme", systemImage: "circle.lefthalf.filled")
+            }
+            .help("Theme studio")
+        }
+    }
+
+    private var macMeasureToolbar: some ToolbarContent {
+        ToolbarItem {
+            Button {
+                engine.setMeasureMode(engine.measureMode == nil ? .distance : nil)
+            } label: {
+                Label("Measure", systemImage: engine.measureMode == nil ? "ruler" : "ruler.fill")
+            }
+            .help("Measure distance / angle / dihedral by tapping atoms")
+        }
+    }
 
     private var panelToggles: some ToolbarContent {
         ToolbarItemGroup {
@@ -1356,6 +1491,29 @@ struct ContentView: View {
         guard !engine.isReady else { return }
         let resourcePath = Bundle.main.resourcePath ?? ""
         engine.initialize(resourcePath: resourcePath)
+    }
+
+    // Auto-present the Theme studio on the very first launch (first-run theming).
+    // Deferred so the engine/window is up before the panel animates in. On
+    // iPhone portrait the bottom region is collapsed by default, so un-collapse
+    // it too or the inline studio won't be visible.
+    private func maybePresentFirstBootTheme() {
+        guard themeManager.firstBoot else { return }
+        themeManager.markFirstBootDone()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                #if os(iOS)
+                panelCollapsed = false   // iPhone-portrait bottom region is collapsed by default
+                #endif
+                showThemeStudio = true
+            }
+        }
+    }
+
+    // Push the persisted theme's molecular/viewport defaults into PyMOL once the
+    // engine is ready (chrome already reflects it via @Published `active`).
+    private func applyPersistedTheme() {
+        themeManager.apply(engine: engine)
     }
 }
 

@@ -574,6 +574,116 @@ final class PyMOLEngine: ObservableObject {
         PyMOLBridge_RunPython(code)
     }
 
+    // MARK: - Theme
+
+    /// Push a theme's molecular/viewport defaults into PyMOL. Chrome is handled
+    /// in SwiftUI; this covers bg_color + render toggles + the default palette
+    /// that NEW objects pick up via raymol_theme.apply_to. Does NOT restyle or
+    /// recolor existing objects.
+    func applyTheme(_ theme: Theme) {
+        guard isReady else { return }
+        let chains = theme.chainCycle.map { "(\($0.pymolTriplet))" }.joined(separator: ", ")
+        let elems = theme.elementColors
+            .map { "'\($0.key)': (\($0.value.pymolTriplet))" }
+            .joined(separator: ", ")
+        let bgHex = String(format: "0x%02x%02x%02x",
+                           Int(theme.viewportBackground.r * 255),
+                           Int(theme.viewportBackground.g * 255),
+                           Int(theme.viewportBackground.b * 255))
+        // Prefer the rich raymol_theme palette; fall back to the immediate
+        // scene-wide bits so chrome (bg/outline) still themes if the module is
+        // somehow unavailable.
+        var py = "try:\n"
+        py += "    from pymol import raymol_theme as _rt\n"
+        py += "    _rt.set_palette(bg=(\(theme.viewportBackground.pymolTriplet)),"
+        py += " outline=\(theme.outline ? "True" : "False"),"
+        py += " flat_sheets=\(theme.flatSheets ? "True" : "False"),"
+        py += " fancy_helices=\(theme.fancyHelices ? "True" : "False"),"
+        py += " ray_trace=\(theme.rayTrace ? "True" : "False"),"
+        py += " shadows=\(theme.shadows ? "True" : "False"),"
+        py += " default_style='\(theme.defaultStyle.rawValue)',"
+        py += " chain_cycle=[\(chains)], element_colors={\(elems)})\n"
+        py += "except Exception as _e:\n"
+        py += "    from pymol import cmd as _c\n"
+        py += "    _c.bg_color('\(bgHex)'); _c.set('metal_outline', \(theme.outline ? 1 : 0))\n"
+        py += "    _c.set('metal_raytrace', \(theme.rayTrace ? 1 : 0)); _c.set('metal_shadows', \(theme.shadows ? 1 : 0))\n"
+        runPython(py)
+    }
+
+    /// Load a structure then theme it (default style + chain/element colors) for
+    /// the NEW object only. Routes all UI/agent/open-with load paths.
+    func loadStructure(path: String, name: String) {
+        guard isReady else { return }
+        runCommand("load \(path), \(name)")
+        runPython("from pymol import raymol_theme as _rt; _rt.apply_to('\(name)')")
+    }
+
+    /// Fetch a PDB id then theme the NEW object.
+    func fetchStructure(id: String) {
+        guard isReady else { return }
+        let clean = id.replacingOccurrences(of: "'", with: "")
+        runCommand("fetch \(clean), async=0, type=pdb")
+        runPython("from pymol import raymol_theme as _rt; _rt.apply_to('\(clean)')")
+    }
+
+    // MARK: - Theme studio live preview
+    //
+    // While the Theme studio is open we snapshot the full session in memory and
+    // momentarily replace the scene with a small bundled example (cartoon +
+    // sidechain sticks) so the user sees the theme's impact on a real molecule.
+    // Closing the studio restores the exact prior scene + camera. Driven by
+    // ContentView's `.onChange(of: showThemeStudio)` so rotation doesn't trigger
+    // a spurious restore/re-snapshot.
+
+    /// Snapshot current session, then show only the themed example molecule.
+    func beginThemePreview() {
+        guard isReady else { return }
+        // data/demo/pept.pdb is bundled on both platforms (project.yml ditto data/).
+        let path = Bundle.main.path(forResource: "pept", ofType: "pdb", inDirectory: "data/demo")
+            ?? Bundle.main.path(forResource: "pept", ofType: "pdb") ?? ""
+        runPython("from pymol import appkit_theme_preview as _tp\n_tp.begin(r'''\(path)''')")
+    }
+
+    /// Re-apply the themed cartoon+sticks rep to the example after a live edit.
+    func refreshThemePreview() {
+        guard isReady else { return }
+        runPython("from pymol import appkit_theme_preview as _tp\n_tp.style()")
+    }
+
+    /// Delete the example and restore the captured session, then refresh panels.
+    /// The snapshot captured the pre-studio bg_color/metal_outline; if the user
+    /// changed the theme while previewing, re-assert the now-active theme's
+    /// global scene settings after the restore so they don't revert. (Object
+    /// reps/colors restored by set_session are intentionally left as-is — theme
+    /// changes never restyle existing objects.)
+    func endThemePreview() {
+        guard isReady else { return }
+        runPython("from pymol import appkit_theme_preview as _tp\n_tp.restore()")
+        applyTheme(ThemeManager.shared.active)
+        refreshAfterRestore()
+    }
+
+    /// One-shot, non-throttled object/detail/sequence refresh (pollObjects is
+    /// throttled ~500ms and equality-guards, so force an immediate republish so
+    /// the panels reflect the restored scene without lag).
+    func refreshAfterRestore() {
+        guard isReady else { return }
+        runPython(
+            "import json\n"
+            + "from pymol import cmd as _cmd\n"
+            + "_objs = list(_cmd.get_names('public_objects') or [])\n"
+            + "_sels = list(_cmd.get_names('public_selections') or [])\n"
+            + "_en = set(_cmd.get_names('public_objects', enabled_only=1) or [])\n"
+            + "_en |= set(_cmd.get_names('public_selections', enabled_only=1) or [])\n"
+            + "_sc = {s: _cmd.count_atoms(s) for s in _sels}\n"
+            + "_ns = {o: _cmd.count_states('?' + o) for o in _objs}\n"
+            + "print('OBJPANEL:' + json.dumps({'objects': _objs, 'selections': _sels, "
+            + "'enabled': list(_en), 'sel_counts': _sc, 'nstate': _ns}))"
+        )
+        refreshExpandedDetail()
+        if sequenceVisible { fetchSequences() }
+    }
+
     // MARK: - Timeline / playback controls
     //
     // All routed through runPython (raw PyRun, no log echo) so high-rate scrub

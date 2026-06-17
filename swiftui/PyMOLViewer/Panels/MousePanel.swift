@@ -172,6 +172,7 @@ private let selectionModeNames = [
 
 struct MousePanel: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
 
     // Persisted across launches. macOS defaults to "Trackpad" (the last display-
     // ring index); iOS defaults to the first real mode. selectionMode persists too.
@@ -182,11 +183,13 @@ struct MousePanel: View {
     #endif
     @State private var selectionModeIndex: Int = 1  // Residues default
 
-    private let bgColor = Color(red: 0.149, green: 0.149, blue: 0.161)  // #262629
-    private let headerColor = Color(red: 0.9, green: 0.9, blue: 0.9)
+    // Surface/text follow the theme; action(green)/modifier(red) stay semantic
+    // (they label mouse-button roles in the ring diagram, not chrome accents).
+    private var bgColor: Color { ThemeManager.shared.active.panelBackground.color }
+    private var headerColor: Color { ThemeManager.shared.active.panelText.color }
     private let actionColor = Color(red: 0.2, green: 1.0, blue: 0.2)
     private let modifierColor = Color(red: 1.0, green: 0.3, blue: 0.3)
-    private let labelColor = Color(red: 0.6, green: 0.6, blue: 0.6)
+    private var labelColor: Color { ThemeManager.shared.active.panelText.color.opacity(0.6) }
 
     // The keys shown in the mode picker. macOS appends the synthetic "Trackpad"
     // entry; iOS shows the real PyMOL modes only.
@@ -431,7 +434,7 @@ struct MousePanel: View {
             Text(selectionModeNames.indices.contains(selectionModeIndex)
                  ? selectionModeNames[selectionModeIndex] : "Atoms")
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(Color(red: 0.3, green: 1.0, blue: 1.0))
+                .foregroundColor(ThemeManager.shared.active.selectionName.color)
                 .onTapGesture {
                     selectionModeIndex = (selectionModeIndex + 1) % selectionModeNames.count
                 }

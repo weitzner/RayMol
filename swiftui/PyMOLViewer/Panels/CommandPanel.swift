@@ -8,20 +8,24 @@ import UIKit
 
 struct CommandPanel: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject private var themeManager: ThemeManager
 
     @State private var commandText = ""
     @State private var commandHistory: [String] = []
     @State private var historyIndex = -1
 
-    private let bgColor = Color(red: 0.118, green: 0.118, blue: 0.118) // #1E1E1E
-    private let logTextColor = Color(red: 0, green: 1, blue: 0) // #00FF00
-    private let inputTextColor = Color.white
-    private let promptColor = Color(red: 0, green: 1, blue: 0)
+    // Terminal look comes from the active theme.
+    private var theme: Theme { themeManager.active }
+    private var bgColor: Color { theme.panelBackground.color }
+    private var logTextColor: Color { theme.terminalText.color }
+    private var promptColor: Color { theme.terminalText.color }
+    private var termFont: Font { theme.terminalFont.font }
 
     var body: some View {
         VStack(spacing: 0) {
             // Scrolling log area
-            LogView(entries: engine.feedbackLog, textColor: logTextColor)
+            LogView(entries: engine.feedbackLog, textColor: logTextColor,
+                    font: termFont, bg: bgColor)
 
             Divider()
                 .background(Color.gray.opacity(0.4))
@@ -29,11 +33,14 @@ struct CommandPanel: View {
             // Command input bar
             HStack(spacing: 4) {
                 Text("RayMol>")
-                    .font(.system(.body, design: .monospaced))
+                    .font(termFont)
                     .foregroundColor(promptColor)
 
                 CommandTextField(
                     text: $commandText,
+                    textColor: logTextColor,
+                    bgColor: bgColor,
+                    fontSize: CGFloat(theme.terminalFont.size),
                     onSubmit: submitCommand,
                     onUpArrow: historyBack,
                     onDownArrow: historyForward,
@@ -85,8 +92,10 @@ struct CommandPanel: View {
 private struct LogView: View {
     let entries: [String]
     let textColor: Color
+    let font: Font
+    let bg: Color
 
-    private let bgColor = Color(red: 0.118, green: 0.118, blue: 0.118)
+    private var bgColor: Color { bg }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -94,7 +103,7 @@ private struct LogView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.offset) { index, line in
                         Text(line)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(font)
                             .foregroundColor(textColor)
                             .textSelection(.enabled)
                             .id(index)
@@ -136,6 +145,9 @@ private struct LogView: View {
 
 struct CommandTextField: NSViewRepresentable {
     @Binding var text: String
+    var textColor: Color
+    var bgColor: Color
+    var fontSize: CGFloat
     var onSubmit: () -> Void
     var onUpArrow: () -> Void
     var onDownArrow: () -> Void
@@ -144,9 +156,9 @@ struct CommandTextField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSTextField {
         let field = CommandNSTextField()
         field.delegate = context.coordinator
-        field.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        field.textColor = .white
-        field.backgroundColor = NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+        field.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        field.textColor = NSColor(textColor)
+        field.backgroundColor = NSColor(bgColor)
         field.isBordered = false
         field.focusRingType = .none
         field.placeholderString = "Enter command..."
@@ -160,6 +172,10 @@ struct CommandTextField: NSViewRepresentable {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
+        // Re-apply theme colors/font (so a live theme switch updates the field).
+        nsView.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        nsView.textColor = NSColor(textColor)
+        nsView.backgroundColor = NSColor(bgColor)
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onUpArrow = onUpArrow
         context.coordinator.onDownArrow = onDownArrow
@@ -251,6 +267,9 @@ private class CommandNSTextField: NSTextField {
 // offered via a "⇥" button.
 struct CommandTextField: View {
     @Binding var text: String
+    var textColor: Color
+    var bgColor: Color
+    var fontSize: CGFloat
     var onSubmit: () -> Void
     var onUpArrow: () -> Void
     var onDownArrow: () -> Void
@@ -269,8 +288,8 @@ struct CommandTextField: View {
                     onSubmit()
                     focused = true   // keep focus so multiple commands can be entered
                 }
-                .font(.system(.body, design: .monospaced))
-                .foregroundColor(.white)
+                .font(.system(size: fontSize, design: .monospaced))
+                .foregroundColor(textColor)
 
             Button {
                 if let c = onComplete(text), c != text { text = c }

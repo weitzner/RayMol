@@ -145,13 +145,16 @@ enum AIProvider: String, CaseIterable, Identifiable {
 
 struct ChatPanel: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject private var themeManager: ThemeManager
     @State private var inputText = ""
     @State private var showKeySheet = false
     @FocusState private var isInputFocused: Bool
 
-    private let bgColor = Color(red: 0.149, green: 0.149, blue: 0.161)           // #262629
-    private let inputBgColor = Color(red: 0.2, green: 0.2, blue: 0.2)            // #333333
-    private let accentBlue = Color(red: 0.29, green: 0.565, blue: 0.851)         // #4A90D9
+    private var theme: Theme { themeManager.active }
+    private var bgColor: Color { theme.panelBackground.color }
+    private var inputBgColor: Color { theme.panelBackground.blended(with: theme.panelText, 0.12).color }
+    private var accentBlue: Color { theme.accent.color }
+    private var bubbleColor: Color { theme.bubble.color }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -220,7 +223,7 @@ struct ChatPanel: View {
                         emptyStateView
                     }
                     ForEach(engine.chatMessages) { message in
-                        MessageBubbleView(message: message)
+                        MessageBubbleView(message: message, bubbleColor: bubbleColor)
                             .id(message.id)
                     }
                 }
@@ -285,7 +288,7 @@ struct ChatPanel: View {
                     Text(q.text)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Color(red: 0.9, green: 0.9, blue: 0.9))
-                    FlowOptions(options: q.options) { opt in
+                    FlowOptions(options: q.options, accent: accentBlue) { opt in
                         engine.answerChatQuestion(opt)
                     }
                 }
@@ -558,6 +561,7 @@ enum AISettings {
 /// iOS 16 Layout protocol; chunks options into rows).
 private struct FlowOptions: View {
     let options: [String]
+    var accent: Color = Color(red: 0.29, green: 0.565, blue: 0.851)
     let onTap: (String) -> Void
 
     var body: some View {
@@ -572,7 +576,7 @@ private struct FlowOptions: View {
                                 .padding(.vertical, 5)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color(red: 0.29, green: 0.565, blue: 0.851).opacity(0.25))
+                                        .fill(accent.opacity(0.25))
                                 )
                                 .foregroundColor(.white)
                         }
@@ -596,8 +600,9 @@ private struct FlowOptions: View {
 
 private struct MessageBubbleView: View {
     let message: ChatMessage
+    let bubbleColor: Color
 
-    private let userBubbleColor = Color(red: 0.29, green: 0.565, blue: 0.851)  // #4A90D9
+    private var userBubbleColor: Color { bubbleColor }
     private let assistantTextColor = Color(red: 0.898, green: 0.898, blue: 0.898) // #E5E5E5
     private let errorTextColor = Color(red: 0.878, green: 0.318, blue: 0.318)    // #E05252
 

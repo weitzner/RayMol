@@ -51,9 +51,11 @@ private let aa3to1: [String: String] = [
 
 // MARK: - Theme
 
-private let headerColor = Color(red: 0.55, green: 0.75, blue: 1.0)
-private let rulerColor = Color(red: 0.55, green: 0.55, blue: 0.58)
-private let panelBackground = Color(red: 0.165, green: 0.165, blue: 0.172)
+// Theme-driven (reads ThemeManager.shared.active). The SequencePanel view
+// observes ThemeManager so these re-resolve on a theme switch.
+private var headerColor: Color { ThemeManager.shared.active.accent.color }
+private var rulerColor: Color { ThemeManager.shared.active.panelText.color.opacity(0.6) }
+private var panelBackground: Color { ThemeManager.shared.active.panelBackground.color }
 private let cellWidth: CGFloat = 10
 private let rulerSpacing = 10  // draw a residue number every N residues
 
@@ -72,6 +74,7 @@ private struct SeqResidueFrames: PreferenceKey {
 
 struct SequencePanel: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
     @State private var residueFrames: [String: CGRect] = [:]
     @State private var lastRange: ClosedRange<Int>? = nil
     @State private var anchorIndex: Int? = nil  // for Shift-click range
@@ -93,7 +96,7 @@ struct SequencePanel: View {
         ScrollView([.horizontal, .vertical], showsIndicators: true) {
             content
                 .padding(.horizontal, 4)
-                .padding(.vertical, 2)
+                .padding(.vertical, 1)   // minimal padding — shrink to fit the text
                 .coordinateSpace(name: "seq")
                 .onPreferenceChange(SeqResidueFrames.self) { residueFrames = $0 }
                 #if os(macOS)

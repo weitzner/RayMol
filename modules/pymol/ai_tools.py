@@ -77,8 +77,11 @@ TOOL_DEFINITIONS = [
             "calls in this conversation) preloaded with: `cmd` (the PyMOL API — "
             "cmd.fetch, cmd.show, cmd.color, cmd.align, cmd.alter, cmd.get_model, "
             "cmd.do(\"...\") for command-language, etc.), `np` (numpy), `Bio` "
-            "(Biopython, if available), and `WORKDIR` (a writable temp directory "
-            "string you may read/write). The code RUNS FOR REAL and the scene "
+            "(Biopython, if available), `WORKDIR` (a writable temp directory "
+            "string you may read/write), and the THEMED helpers `cbc('<sel>')` "
+            "(color by chain), `cnc('<sel>')` (color non-carbon by element), and "
+            "`apply_default_style('<obj>')` — use these instead of util.cbc / "
+            "spectrum so results match the user's active theme. The code RUNS FOR REAL and the scene "
             "updates. Use print(...) to surface values you need (atom counts, "
             "RMSD, residue lists) so you can verify and self-correct. Drive every "
             "action this way: load/fetch, show/hide, color/spectrum, select, "
@@ -269,6 +272,18 @@ def _get_py_namespace(cmd):
         ns['Bio'] = _Bio
     except Exception:
         ns['Bio'] = None
+
+    # Themed helpers — the agent should use these so its output matches the
+    # user's active palette (chain cycle + non-carbon element colors + default
+    # style). See ai_system_prompt for the instruction.
+    try:
+        from pymol import raymol_theme as _rt
+        ns['raymol_theme'] = _rt
+        ns['cbc'] = _rt.cbc
+        ns['cnc'] = _rt.cnc
+        ns['apply_default_style'] = _rt.apply_default_style
+    except Exception:
+        ns['raymol_theme'] = None
 
     _py_namespace = ns
     return _py_namespace

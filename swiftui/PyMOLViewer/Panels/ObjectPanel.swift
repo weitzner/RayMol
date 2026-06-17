@@ -483,22 +483,28 @@ private func runActionCommand(_ key: String, name: String, engine: PyMOLEngine) 
 
 // MARK: - Theme
 
+// Computed from the active theme (ThemeManager.shared). Neutrals are derived by
+// blending panelBackground -> panelText so they stay solid (alpha 1), which keeps
+// the existing `.opacity(1.3)` call sites a no-op as before. Views that read these
+// must observe ThemeManager (@EnvironmentObject) so they re-render on theme switch.
 private enum PanelTheme {
-    static let background = Color(red: 0.15, green: 0.15, blue: 0.17)
-    static let rowBackground = Color(red: 0.18, green: 0.18, blue: 0.20)
-    static let rowAltBackground = Color(red: 0.16, green: 0.16, blue: 0.18)
-    static let textColor = Color(red: 0.85, green: 0.85, blue: 0.85)
-    static let selectionTextColor = Color(red: 0.5, green: 0.75, blue: 1.0)
-    static let buttonBackground = Color(red: 0.25, green: 0.25, blue: 0.28)
-    static let buttonText = Color(red: 0.85, green: 0.85, blue: 0.85)
-    static let headerColor = Color(red: 0.6, green: 0.6, blue: 0.6)
-    static let disabledColor = Color(red: 0.45, green: 0.45, blue: 0.45)
+    private static var t: Theme { ThemeManager.shared.active }
+    static var background: Color { t.panelBackground.color }
+    static var rowBackground: Color { t.panelBackground.blended(with: t.panelText, 0.06).color }
+    static var rowAltBackground: Color { t.panelBackground.blended(with: t.panelText, 0.03).color }
+    static var textColor: Color { t.panelText.color }
+    static var selectionTextColor: Color { t.selectionName.color }
+    static var buttonBackground: Color { t.panelBackground.blended(with: t.panelText, 0.16).color }
+    static var buttonText: Color { t.panelText.color }
+    static var headerColor: Color { t.panelBackground.blended(with: t.panelText, 0.6).color }
+    static var disabledColor: Color { t.panelBackground.blended(with: t.panelText, 0.4).color }
 }
 
 // MARK: - ObjectPanel View
 
 struct ObjectPanel: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
     @State private var showSelectionBuilder = false
 
     var body: some View {
@@ -1839,6 +1845,7 @@ struct SelectionBuilderSheet: View {
 
 struct SettingsSheet: View {
     @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
 

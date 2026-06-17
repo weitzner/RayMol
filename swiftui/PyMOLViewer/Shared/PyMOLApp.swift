@@ -45,6 +45,7 @@ struct PyMOLApp: App {
             ContentView()
                 .environmentObject(engine)
                 .environmentObject(engine.playback)
+                .environmentObject(ThemeManager.shared)
             #if os(macOS)
                 // Bring the app/window to the front on launch (a GUI app should
                 // foreground itself; also lets it be launched from a terminal).
@@ -120,5 +121,5 @@ private func loadOpenedFile(_ url: URL, into engine: PyMOLEngine, attempt: Int =
     let raw = url.deletingPathExtension().lastPathComponent
     var name = String(raw.map { $0.isLetter || $0.isNumber ? $0 : "_" })
     if name.isEmpty { name = "mol" }
-    engine.runCommand("load \(path), \(name)")
+    engine.loadStructure(path: path, name: name)
 }
