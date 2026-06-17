@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RayMol — Theme / Palette mock</title>
+<style>
+  :root{
+    --accent:#5ac8fa; --bubble:#0a84ff; --selname:#5ac8fa; --tabtint:#0a84ff;
+    --bg:#0a0a0f; --termtext:#33ff88; --termfont:'SF Mono',ui-monospace,Menlo,monospace;
+    --panel:#1b1b22; --panel2:#23232c; --chrometext:#e7e7ee; --chromesub:#9aa0aa;
+    --appbg:#101016;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+       background:#0c0c12;color:#e7e7ee;padding:18px}
+  h1{font-size:18px;margin:0 0 2px} .sub{color:#8a90a0;font-size:12px;margin:0 0 16px}
+  .wrap{display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;max-width:1280px}
+  .card{background:#15151c;border:1px solid #26262f;border-radius:14px;padding:16px}
+  .card h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a90a0;margin:0 0 10px}
+
+  .seg{display:flex;background:#23232c;border-radius:9px;padding:3px;margin-bottom:16px}
+  .seg button{flex:1;border:0;background:transparent;color:#cfd3db;padding:7px;border-radius:7px;font-size:13px;cursor:pointer}
+  .seg button.on{background:#3a3a47;color:#fff;font-weight:600}
+  .presets{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
+  .preset{border:2px solid transparent;border-radius:11px;overflow:hidden;cursor:pointer;background:#1d1d25;text-align:left}
+  .preset.on{border-color:var(--accent)}
+  .preset .swatches{display:flex;height:34px}.preset .swatches i{flex:1}
+  .preset .nm{padding:7px 9px;font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
+  .preset .nm small{color:#8a90a0;font-weight:400}
+  .addrow{display:flex;gap:8px;margin:6px 0 4px}
+  .btn{background:var(--accent);color:#06121c;border:0;border-radius:9px;padding:9px 13px;font-weight:600;cursor:pointer;font-size:13px}
+  .btn.ghost{background:#2a2a34;color:#cfd3db}
+  details{margin-top:14px;border-top:1px solid #26262f;padding-top:12px}
+  summary{cursor:pointer;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a90a0;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  .wells{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-top:12px}
+  .well{display:flex;align-items:center;gap:8px;font-size:12px;color:#cfd3db}
+  .well input[type=color]{width:30px;height:24px;border:1px solid #3a3a47;border-radius:6px;background:none;padding:0;cursor:pointer}
+  .well .lbl{flex:1}
+  .row{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:#cfd3db}
+  .row select{flex:1;background:#23232c;color:#e7e7ee;border:1px solid #3a3a47;border-radius:7px;padding:6px}
+  .toggles{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px}
+  .tog{display:flex;align-items:center;gap:7px;font-size:12px;color:#cfd3db;cursor:pointer;user-select:none}
+  .tog .sw{width:34px;height:20px;border-radius:11px;background:#3a3a47;position:relative;transition:.15s;flex:none}
+  .tog .sw::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#cfd3db;transition:.15s}
+  .tog.on .sw{background:var(--accent)} .tog.on .sw::after{left:16px;background:#fff}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chips i{width:22px;height:22px;border-radius:6px;border:1px solid #0006;cursor:pointer;position:relative;overflow:hidden}
+  .chips i input{position:absolute;inset:0;opacity:0;cursor:pointer}
+  .note{color:#8a90a0;font-size:11px;margin-top:10px}
+
+  .preview{background:var(--appbg);border:1px solid #26262f;border-radius:14px;overflow:hidden;box-shadow:0 12px 40px #0008}
+  .titlebar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--panel);border-bottom:1px solid #0004}
+  .lights{display:flex;gap:6px}.lights i{width:11px;height:11px;border-radius:50%}
+  .lights .r{background:#ff5f57}.lights .y{background:#febc2e}.lights .g{background:#28c840}
+  .titlebar .name{color:var(--chrometext);font-weight:600}
+  .titlebar .tools{margin-left:auto;display:flex;gap:8px}
+  .tbtn{width:30px;height:26px;border-radius:7px;background:var(--panel2);display:flex;align-items:center;justify-content:center;color:var(--tabtint);font-size:13px}
+  .tbtn.palette{background:var(--accent);color:#06121c}
+  .body{display:grid;grid-template-columns:1fr 300px;height:460px}
+  .left{position:relative;display:flex;flex-direction:column;border-right:1px solid #0004}
+  .terminal{background:#000000cc;color:var(--termtext);font-family:var(--termfont);font-size:11px;padding:8px 10px;height:92px;overflow:hidden;white-space:pre-wrap;border-bottom:1px solid #0006}
+  .viewport{flex:1;background:var(--bg);position:relative}.viewport svg{width:100%;height:100%}
+  .right{background:var(--panel);display:flex;flex-direction:column}
+  .rhead{padding:8px 12px;color:var(--chromesub);font-size:11px;letter-spacing:.05em;text-transform:uppercase;border-bottom:1px solid #0004}
+  .objs{padding:6px 8px;border-bottom:1px solid #0004}
+  .obj{display:flex;align-items:center;gap:8px;padding:5px 6px;font-size:12px;color:var(--chrometext)}
+  .obj .chk{width:13px;height:13px;border-radius:3px;border:1px solid var(--chromesub);background:var(--accent)}
+  .obj.sel .nm{color:var(--selname);font-weight:600}
+  .obj .acts{margin-left:auto;display:flex;gap:3px}
+  .obj .acts b{font-size:8px;font-weight:700;background:var(--panel2);color:var(--chrometext);width:16px;height:14px;border-radius:3px;display:flex;align-items:center;justify-content:center}
+  .chat{flex:1;display:flex;flex-direction:column;padding:8px;gap:8px;overflow:hidden}
+  .chat .who{font-size:11px;color:var(--chromesub)}
+  .bubble{align-self:flex-end;background:var(--bubble);color:#fff;padding:7px 11px;border-radius:13px;font-size:12px;max-width:80%}
+  .asst{align-self:flex-start;color:var(--chrometext);font-size:12px;max-width:88%}
+  .tabbar{display:flex;gap:6px;padding:8px;border-top:1px solid #0004;background:var(--panel)}
+  .tab{flex:1;text-align:center;font-size:10px;color:var(--chromesub);padding:5px;border-radius:8px}
+  .tab.on{color:var(--tabtint);background:var(--panel2)}
+  .light-mode{--chrometext:#1a1a22;--chromesub:#5a6068}
+  .light-mode .terminal{background:#f4f4f0;border-bottom-color:#0002}
+</style>
+</head>
+<body>
+  <h1>RayMol — Theme / Palette</h1>
+  <p class="sub">Pick a preset or edit colors / render toggles → the RayMol preview re-skins live. Mock for refining UX, not the real app.</p>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>Appearance</h2>
+      <div class="seg" id="seg">
+        <button data-ap="dark">Dark</button><button data-ap="light">Light</button><button data-ap="system">System</button>
+      </div>
+      <h2>Presets</h2>
+      <div class="presets" id="presets"></div>
+
+      <details open>
+        <summary>Customize &amp; save</summary>
+        <div class="wells" id="wells"></div>
+        <div class="row"><span class="lbl" style="flex:1">Terminal font</span>
+          <select id="font">
+            <option value="'SF Mono',ui-monospace,Menlo,monospace">SF Mono</option>
+            <option value="Menlo,monospace">Menlo</option>
+            <option value="'Courier New',monospace">Courier</option>
+            <option value="ui-sans-serif,system-ui">System Sans</option>
+          </select></div>
+        <div class="row"><span class="lbl" style="flex:1">Default style (new objects)</span>
+          <select id="style"><option>Cartoon</option><option>Ball &amp; Stick</option><option>Surface</option><option>Sticks</option><option>Pretty</option></select></div>
+
+        <div class="toggles" id="toggles"></div>
+
+        <div class="row" style="display:block;margin-top:14px"><span>Chain color cycle</span><div class="chips" id="chains"></div></div>
+        <div class="row" style="display:block"><span>Element colors (carbon untouched)</span><div class="chips" id="elems"></div></div>
+        <div class="addrow"><button class="btn" id="save">Save as preset</button><button class="btn ghost" id="reset">Reset</button></div>
+        <p class="note">Outline / flat sheets / fancy helices are render defaults (map to PyMOL: outline pass, <code>cartoon_flat_sheets</code>, <code>cartoon_fancy_helices</code>). Style + chain/element colors apply to <b>new</b> objects; background &amp; chrome update immediately.</p>
+      </details>
+    </div>
+
+    <div class="preview" id="preview">
+      <div class="titlebar">
+        <div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+        <span class="name">RayMol</span>
+        <div class="tools"><div class="tbtn">⌨</div><div class="tbtn palette" title="Theme">🎨</div><div class="tbtn">⤴</div></div>
+      </div>
+      <div class="body">
+        <div class="left">
+          <div class="terminal" id="term"></div>
+          <div class="viewport"><svg viewBox="0 0 400 300" id="mol" preserveAspectRatio="xMidYMid meet"></svg></div>
+        </div>
+        <div class="right">
+          <div class="rhead">Objects</div>
+          <div class="objs">
+            <div class="obj"><span class="chk"></span><span class="nm">1m47</span><span class="acts"><b>A</b><b>S</b><b>H</b><b>L</b><b>C</b></span></div>
+            <div class="obj"><span class="chk"></span><span class="nm">2b5i</span><span class="acts"><b>A</b><b>S</b><b>H</b><b>L</b><b>C</b></span></div>
+            <div class="obj sel"><span class="chk"></span><span class="nm">beta_chain</span><span class="acts"><b>A</b><b>S</b><b>H</b><b>L</b><b>C</b></span></div>
+          </div>
+          <div class="chat">
+            <div class="who">Raymond</div>
+            <div class="asst">Loaded human IL-2 (1M47) and superimposed the receptors.</div>
+            <div class="bubble">color the conserved core</div>
+          </div>
+          <div class="tabbar"><div class="tab">Console</div><div class="tab">Objects</div><div class="tab">Sequence</div><div class="tab on">Raymond</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const PRESETS = {
+  Midnight:{ desc:'dark', appearance:'dark', accent:'#5ac8fa', bubble:'#0a84ff', selname:'#5ac8fa',
+    tabtint:'#0a84ff', bg:'#0a0a0f', appbg:'#101016', panel:'#1b1b22', panel2:'#23232c',
+    termtext:'#33ff88', font:"'SF Mono',ui-monospace,Menlo,monospace", style:'Cartoon',
+    outline:false, flatSheets:false, fancyHelices:true,
+    chains:['#6ad1ff','#ff8a5b','#c792ea','#ffd866','#5af2a0','#ff6b9d'],
+    elems:{N:'#3b6fff',O:'#ff4d4d',S:'#ffd000',P:'#ff8000',H:'#ffffff'} },
+  Paper:{ desc:'light', appearance:'light', accent:'#2b6cb0', bubble:'#3182ce', selname:'#2b6cb0',
+    tabtint:'#2b6cb0', bg:'#ffffff', appbg:'#eef0f3', panel:'#f7f8fa', panel2:'#e7eaef',
+    termtext:'#1a7f37', font:"Menlo,monospace", style:'Pretty',
+    outline:true, flatSheets:true, fancyHelices:true,
+    chains:['#4e79a7','#f28e2b','#59a14f','#e15759','#b07aa1','#76b7b2'],
+    elems:{N:'#2b6cb0',O:'#c0392b',S:'#b7950b',P:'#d35400',H:'#7f8c8d'} },
+  Terminal:{ desc:'phosphor', appearance:'dark', accent:'#00ff66', bubble:'#00cc52', selname:'#00ff66',
+    tabtint:'#00ff66', bg:'#000000', appbg:'#020402', panel:'#0a120a', panel2:'#0f1c0f',
+    termtext:'#00ff66', font:"'Courier New',monospace", style:'Sticks',
+    outline:true, flatSheets:false, fancyHelices:false,
+    chains:['#00ff66','#ffb000','#00e5ff','#ff5e5e','#c77dff','#fefefe'],
+    elems:{N:'#00e5ff',O:'#ff5e5e',S:'#ffb000',P:'#ff8000',H:'#ffffff'} },
+};
+const WELLS=[['accent','Button / accent'],['bubble','Chat bubble'],['selname','Selection name'],
+  ['tabtint','Tab buttons'],['bg','Viewport background'],['termtext','Terminal text']];
+const TOGS=[['outline','Outline'],['flatSheets','Flat sheets'],['fancyHelices','Fancy helices']];
+let custom={}; let T=structuredClone(PRESETS.Midnight); let activeName='Midnight';
+
+function applyVars(){
+  const r=document.documentElement.style;
+  for(const k of ['accent','bubble','selname','tabtint','bg','appbg','panel','panel2','termtext']) r.setProperty('--'+k,T[k]);
+  r.setProperty('--termfont',T.font);
+  document.getElementById('preview').classList.toggle('light-mode',T.appearance==='light');
+  document.getElementById('term').textContent='RayMol> fetch 1m47\nExecutive: Loaded 1066 atoms.\nRayMol> super 2b5i, 1m47\nExecutive: RMSD = 0.39 (676 atoms)\nRayMol> as cartoon';
+  drawMol();
+  document.querySelectorAll('#seg button').forEach(b=>b.classList.toggle('on',b.dataset.ap===T.appearance));
+}
+function drawMol(){
+  const c=T.chains, e=T.elems;
+  const ribbons=[
+    {d:'M40,250 C90,180 70,120 120,90 S210,70 250,110', col:c[0], kind:'helix'},
+    {d:'M360,250 C300,200 330,140 280,110 S210,90 175,130', col:c[1], kind:'sheet', tip:[175,130,-1]},
+    {d:'M120,260 C150,210 140,170 190,160 S250,170 270,210', col:c[2], kind:'sheet', tip:[270,210, 1]},
+    {d:'M200,40 C170,90 200,120 180,160 S150,210 175,250', col:c[3], kind:'helix'},
+  ];
+  const st=(d,col,w,cap,op)=>`<path d="${d}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="${cap}" opacity="${op}"/>`;
+  let s='';
+  ribbons.forEach(r=>{
+    const flat=(r.kind==='sheet'&&T.flatSheets), cap=flat?'butt':'round';
+    if(T.outline) s+=st(r.d,'#000',13,cap,.9);            // dark outline under-stroke
+    s+=st(r.d,r.col,9,cap,.97);
+    if(r.kind==='helix'&&T.fancyHelices) s+=st(r.d,'#ffffff',2.2,cap,.4); // fancy = edge highlight
+    if(flat){                                              // arrowhead at sheet end
+      const [x,y,dir]=r.tip;
+      const pts=`${x},${y-12} ${x},${y+12} ${x+18*dir},${y}`;
+      if(T.outline) s+=`<polygon points="${x},${y-15} ${x},${y+15} ${x+23*dir},${y}" fill="#000" opacity=".9"/>`;
+      s+=`<polygon points="${pts}" fill="${r.col}"/>`;
+    }
+  });
+  const atom=(x,y,col)=>(T.outline?`<circle cx="${x}" cy="${y}" r="11" fill="#000" opacity=".85"/>`:'')+`<circle cx="${x}" cy="${y}" r="9" fill="${col}" stroke="#0007"/>`;
+  s+=atom(205,150,'#9a9a9a')+atom(225,138,e.N)+atom(190,135,e.O)+atom(218,168,e.S);
+  document.getElementById('mol').innerHTML=s;
+}
+function renderPresets(){
+  const all={...PRESETS,...custom}, box=document.getElementById('presets'); box.innerHTML='';
+  Object.entries(all).forEach(([name,p])=>{
+    const el=document.createElement('div'); el.className='preset'+(name===activeName?' on':'');
+    const sw=p.chains.slice(0,4).map(c=>`<i style="background:${c}"></i>`).join('')+`<i style="background:${p.bg}"></i>`;
+    el.innerHTML=`<div class="swatches">${sw}</div><div class="nm">${name}<small>${p.desc||'custom'}</small></div>`;
+    el.onclick=()=>{T=structuredClone(p);activeName=name;syncControls();applyVars();renderPresets();};
+    box.appendChild(el);
+  });
+}
+function renderWells(){const w=document.getElementById('wells');w.innerHTML='';WELLS.forEach(([k,lbl])=>{
+  const d=document.createElement('label');d.className='well';
+  d.innerHTML=`<input type="color" value="${T[k]}"><span class="lbl">${lbl}</span>`;
+  d.querySelector('input').oninput=ev=>{T[k]=ev.target.value;applyVars();markCustom();};w.appendChild(d);});}
+function renderToggles(){const box=document.getElementById('toggles');box.innerHTML='';TOGS.forEach(([k,lbl])=>{
+  const el=document.createElement('div');el.className='tog'+(T[k]?' on':'');el.innerHTML=`<span class="sw"></span>${lbl}`;
+  el.onclick=()=>{T[k]=!T[k];el.classList.toggle('on',T[k]);drawMol();markCustom();};box.appendChild(el);});}
+function renderChips(id,arr,onchange){const box=document.getElementById(id);box.innerHTML='';arr.forEach((c,i)=>{
+  const el=document.createElement('i');el.style.background=c;el.innerHTML=`<input type="color" value="${c}">`;
+  el.querySelector('input').oninput=ev=>{arr[i]=ev.target.value;el.style.background=ev.target.value;onchange();markCustom();};box.appendChild(el);});}
+function renderElems(){const box=document.getElementById('elems');box.innerHTML='';Object.keys(T.elems).forEach(k=>{
+  const el=document.createElement('i');el.title=k;el.style.background=T.elems[k];el.innerHTML=`<input type="color" value="${T.elems[k]}">`;
+  el.querySelector('input').oninput=ev=>{T.elems[k]=ev.target.value;el.style.background=ev.target.value;drawMol();markCustom();};box.appendChild(el);});}
+function syncControls(){renderWells();renderToggles();renderChips('chains',T.chains,drawMol);renderElems();
+  document.getElementById('font').value=T.font;document.getElementById('style').value=T.style;}
+function markCustom(){activeName='Custom';document.querySelectorAll('.preset').forEach(p=>p.classList.remove('on'));}
+
+document.getElementById('seg').onclick=e=>{if(e.target.dataset.ap){T.appearance=e.target.dataset.ap;applyVars();}};
+document.getElementById('font').onchange=e=>{T.font=e.target.value;applyVars();markCustom();};
+document.getElementById('style').onchange=()=>markCustom();
+document.getElementById('reset').onclick=()=>{T=structuredClone(PRESETS.Midnight);activeName='Midnight';syncControls();applyVars();renderPresets();};
+document.getElementById('save').onclick=()=>{const name=prompt('Preset name','My theme');if(!name)return;custom[name]=structuredClone(T);custom[name].desc='custom';activeName=name;renderPresets();};
+
+renderPresets();syncControls();applyVars();
+</script>
+</body>
+</html>
