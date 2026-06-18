@@ -18,10 +18,10 @@ vertex VolumeVertexOut volume_vertex(
     constant SceneUniforms& scene [[buffer(0)]])
 {
   VolumeVertexOut out;
-  float4 vertex = scene.g_ModelViewMatrix * in.a_Vertex;
+  float4 vpos = scene.g_ModelViewMatrix * in.a_Vertex;
   out.texCoord = in.a_TexCoord.xyz;
   out.position = scene.g_ProjectionMatrix * scene.g_ModelViewMatrix * in.a_Vertex;
-  out.fog = (scene.g_Fog_end + vertex.z) * scene.g_Fog_scale;
+  out.fog = (scene.g_Fog_end + vpos.z) * scene.g_Fog_scale;
   out.bgTextureLookup = (out.position.xy / out.position.w) / 2.0 + 0.5;
   return out;
 }

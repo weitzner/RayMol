@@ -53,8 +53,8 @@ def compile_metal_to_air(src: Path, air: Path, sdk: str, include_dir: Path) -> N
         "-c", str(src),
         "-o", str(air),
         "-I", str(include_dir),
-        "-std=metal2.0",
-        "-mmacosx-version-min=10.15",
+        "-std=metal3.0",
+        "-mmacosx-version-min=13.0",
         "-Wall",
     ]
     subprocess.run(cmd, check=True)

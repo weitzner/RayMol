@@ -25,8 +25,8 @@ vertex RampVertexOut ramp_vertex(
   RampVertexOut out;
   out.color = in.a_Color;
   out.normal = in.a_Normal;
-  float4 vertex = in.a_Vertex + float4(rampU.offsetPt, 0.0);
-  out.position = scene.g_ProjectionMatrix * vertex;
+  float4 vpos = in.a_Vertex + float4(rampU.offsetPt, 0.0);
+  out.position = scene.g_ProjectionMatrix * vpos;
   return out;
 }
 

@@ -79,20 +79,20 @@ vertex CylinderVertexOut cylinder_vertex(
   float4 end4 = scene.g_ModelViewMatrix * float4(in.attr_vertex2, 1.0);
   out.end_cyl = end4.xyz;
 
-  float4 vertex = float4(in.attr_vertex1, 1.0);
+  float4 vpos = float4(in.attr_vertex1, 1.0);
   float packed_flags = in.attr_flags;
   float out_v = get_bit_and_shift_f(packed_flags);
   float up_v = get_bit_and_shift_f(packed_flags);
   float right_v = get_bit_and_shift_f(packed_flags);
-  vertex.xyz += up_v * attr_axis;
-  vertex.xyz += (2.0 * right_v - 1.0) * radius * u;
-  vertex.xyz += (2.0 * out_v - 1.0) * radius * v;
-  vertex.xyz += (2.0 * up_v - 1.0) * radius * h;
+  vpos.xyz += up_v * attr_axis;
+  vpos.xyz += (2.0 * right_v - 1.0) * radius * u;
+  vpos.xyz += (2.0 * out_v - 1.0) * radius * v;
+  vpos.xyz += (2.0 * up_v - 1.0) * radius * h;
 
-  float4 tvertex = scene.g_ModelViewMatrix * vertex;
+  float4 tvertex = scene.g_ModelViewMatrix * vpos;
   out.surface_point = tvertex.xyz;
 
-  out.position = scene.g_ProjectionMatrix * scene.g_ModelViewMatrix * vertex;
+  out.position = scene.g_ProjectionMatrix * scene.g_ModelViewMatrix * vpos;
 
   radius /= uniformglscale;
   out.radius = radius;
@@ -100,7 +100,7 @@ vertex CylinderVertexOut cylinder_vertex(
   // Clamp z on front clipping plane if impostor box would be clipped
   if (out.position.z / out.position.w < -1.0) {
     float diff = abs(base4.z - end4.z) + radius * 3.5;
-    float4 inset = scene.g_ModelViewMatrix * vertex;
+    float4 inset = scene.g_ModelViewMatrix * vpos;
     inset.z -= diff;
     inset = scene.g_ProjectionMatrix * inset;
     if (inset.z / inset.w > -1.0) {
