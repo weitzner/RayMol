@@ -298,6 +298,10 @@ extension MetalViewport {
             let size = view.drawableSize
             engine.renderMetalFrame(drawable: drawable, passDescriptor: passDesc,
                                     width: Int(size.width), height: Int(size.height))
+            // This frame built any deferred rep geometry (e.g. a surface mesh);
+            // let the engine clear the "Calculating…" overlay once the build
+            // frame(s) have completed.
+            engine.heavyRenderTick()
         }
 
         // MARK: - Coordinate conversion

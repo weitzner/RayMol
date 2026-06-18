@@ -69,11 +69,17 @@ struct ThemeStudioPanel: View {
             }
 
             Divider()
-            Button { saveName = ""; showSavePrompt = true } label: {
-                Label("Save as Preset…", systemImage: "square.and.arrow.down")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 10) {
+                Button { onClose() } label: {
+                    Label("Close", systemImage: "xmark")
+                }
+                .buttonStyle(.bordered)
+                Button { saveName = ""; showSavePrompt = true } label: {
+                    Label("Save as Preset…", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

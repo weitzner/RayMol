@@ -146,6 +146,11 @@ final class PyMOLEngine: ObservableObject {
     // # of heavy ops queued-but-not-finished; isBusy stays true until it hits 0
     // (so back-to-back heavy ops keep the overlay up instead of flickering).
     private var busyDepth = 0
+    // After a heavy rep op flags a deferred build, hold the overlay this many
+    // completed render frames (the build happens during them), then clear.
+    private var pendingHeavyClearFrames = 0
+    // Backstop that clears a stuck overlay if the render loop ever stalls.
+    private var busyBackstop: DispatchWorkItem?
 
     private init() {}
 
@@ -210,6 +215,14 @@ final class PyMOLEngine: ObservableObject {
         if ProcessInfo.processInfo.environment["PYMOL_AUTOHEAVY"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 self?.runHeavy("Calculating surface…") { Thread.sleep(forTimeInterval: 5.0) }
+            }
+        }
+        // Test affordance: after the app is interactive (3s), issue a REAL
+        // `show surface, <arg>` through the normal heavy path so the deferred
+        // build + overlay can be verified end-to-end. PYMOL_AUTOSURF=<selection>.
+        if let sel = ProcessInfo.processInfo.environment["PYMOL_AUTOSURF"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                self?.runCommand("show surface, \(sel)")
             }
         }
 
@@ -435,7 +448,36 @@ final class PyMOLEngine: ObservableObject {
             work()
             guard let self else { return }
             self.busyDepth = max(0, self.busyDepth - 1)
-            if self.busyDepth == 0 { self.isBusy = false }
+            if self.busyDepth == 0 {
+                // `show surface`/`mesh`/`dots` (and surface-quality changes) only
+                // FLAG the rep here — PyMOL builds the actual mesh lazily on the
+                // next Metal frame, which is the slow part. So don't clear the
+                // overlay now (it would only flash); hold it until the build
+                // frame(s) complete (heavyRenderTick, called after each render).
+                // Synchronous ops (ray/export) already finished inside work(), so
+                // the 2 frames just clear promptly. Backstop guards a stuck overlay
+                // if the render loop ever stalls.
+                self.pendingHeavyClearFrames = 2
+                self.busyBackstop?.cancel()
+                let bs = DispatchWorkItem { [weak self] in
+                    self?.pendingHeavyClearFrames = 0
+                    self?.isBusy = false
+                }
+                self.busyBackstop = bs
+                DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: bs)
+            }
+        }
+    }
+
+    // Called once per completed Metal frame (from MetalViewport.draw, main thread).
+    // Clears the "Calculating…" overlay after the render frame that actually built
+    // the deferred rep geometry, so the overlay spans the real build work.
+    func heavyRenderTick() {
+        guard pendingHeavyClearFrames > 0 else { return }
+        pendingHeavyClearFrames -= 1
+        if pendingHeavyClearFrames == 0 {
+            busyBackstop?.cancel(); busyBackstop = nil
+            isBusy = false
         }
     }
 
