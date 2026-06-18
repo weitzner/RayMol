@@ -34,6 +34,12 @@ cat > "$OPTS" <<PLIST
 <key>teamID</key><string>VT99UQUQ89</string>
 <key>signingStyle</key><string>automatic</string>
 <key>destination</key><string>export</string>
+<!-- Skip symbol upload: the embedded third-party binaries (python-standalone,
+     numpy, tcl, biopython) ship stripped with no DWARF, so dSYMs can't be
+     produced for them and the upload "fails" 40x harmlessly. Our own code's
+     symbols are irrelevant to App Store acceptance. (GUI Organizer: uncheck
+     "Upload your app's symbols".) -->
+<key>uploadSymbols</key><false/>
 </dict></plist>
 PLIST
 
