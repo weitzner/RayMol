@@ -232,6 +232,14 @@ void PyMOLBridge_SetLetterboxAspect(PyMOLHandle h, float aspect)
     if (r) r->setLetterboxAspect(aspect);
 }
 
+void PyMOLBridge_SetSelectionColor(PyMOLHandle h, float r, float g, float b)
+{
+    if (!h) return;
+    PyMOLGlobals* G = PyMOL_GetGlobals(INST(h));
+    if (!G || !G->Renderer) return;
+    G->Renderer->setSelectionColor(r, g, b);
+}
+
 void PyMOLBridge_CapturePNG(PyMOLHandle h, const char* path)
 {
     if (!h || !path) return;

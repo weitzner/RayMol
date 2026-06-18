@@ -94,6 +94,15 @@ final class PyMOLEngine: ObservableObject {
     @Published var currentScene: String = ""
     // Live atom-count preview for the selection builder (nil = not previewing).
     @Published var selectionPreviewCount: Int? = nil
+    // Set by the action menu's "Rename" to request a rename modal for this object
+    // name (PyMOL's `wizard renaming` has no UI on the Metal/SwiftUI app). The
+    // ObjectPanel observes this and presents a name-entry alert.
+    @Published var pendingRename: String? = nil
+    // Pick-debug instrumentation (active when PYMOL_PICKDEBUG is set): the last
+    // click point in viewport (top-down, SwiftUI) points, drawn as a crosshair so
+    // a screenshot shows click-vs-selection alignment. Set by MetalViewport.
+    static let debugPickEnabled = ProcessInfo.processInfo.environment["PYMOL_PICKDEBUG"] != nil
+    @Published var debugClickPoint: CGPoint? = nil
     // Interactive measurement: nil = off; otherwise taps pick atoms for a
     // distance/angle/dihedral. measureStatus is the prompt/result shown in the UI.
     @Published var measureMode: MeasureKind? = nil
@@ -181,12 +190,13 @@ final class PyMOLEngine: ObservableObject {
             self?.feedbackLog.append(" [build] v30  (Live-RT grain fix + Calculating overlay + immediate inspector poll)")
         }
 
-        // `fetch` downloads into fetch_path; the process cwd is read-only on iOS,
-        // so point it at the writable Documents directory.
-        if let docs = FileManager.default.urls(for: .documentDirectory,
-                                               in: .userDomainMask).first {
-            runPython("from pymol import cmd as _c; _c.set('fetch_path', '\(docs.path)')")
-        }
+        // `fetch` downloads into fetch_path. Use the temp directory: it's always
+        // writable, is the app's own (container) tmp under the sandbox, and is NOT
+        // TCC-protected — so fetching never triggers the macOS "access your
+        // Documents folder" prompt. Fetched structures are transient cache, not
+        // user documents, so a temp location is the right home for them.
+        let tmp = NSTemporaryDirectory()
+        runPython("from pymol import cmd as _c; _c.set('fetch_path', '\(tmp)')")
 
         // Test affordance (no-op unless env var set): auto-load a bundled
         // structure so a screenshot has content without UI typing.
@@ -205,6 +215,15 @@ final class PyMOLEngine: ObservableObject {
         if let c = ProcessInfo.processInfo.environment["PYMOL_AUTOCMD"] {
             for one in c.split(separator: ";") {
                 runCommand(one.trimmingCharacters(in: .whitespaces))
+            }
+        }
+
+        // Test affordance: open the sequence viewer panel at launch so its layout
+        // (incl. alignment gap columns) can be screenshotted. PYMOL_AUTOSEQ=1.
+        if ProcessInfo.processInfo.environment["PYMOL_AUTOSEQ"] != nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.sequenceVisible = true
+                self?.fetchSequences()
             }
         }
 
@@ -634,6 +653,11 @@ final class PyMOLEngine: ObservableObject {
     /// recolor existing objects.
     func applyTheme(_ theme: Theme) {
         guard isReady else { return }
+        // 3D selection-indicator color follows the theme's selection color.
+        if let inst = instance {
+            let s = theme.selectionName
+            PyMOLBridge_SetSelectionColor(inst, Float(s.r), Float(s.g), Float(s.b))
+        }
         let chains = theme.chainCycle.map { "(\($0.pymolTriplet))" }.joined(separator: ", ")
         let elems = theme.elementColors
             .map { "'\($0.key)': (\($0.value.pymolTriplet))" }
@@ -947,32 +971,12 @@ final class PyMOLEngine: ObservableObject {
         // index -> RGB so the panel can reflect the real molecular coloring.
         // While the theme studio preview is active, read the reserved example
         // object (excluded from public_objects) so the strip matches the viewport.
-        let names = themePreviewActive
-            ? "['__theme_preview']"
-            : "list(_sc.get_names('public_objects') or [])"
+        // The query (incl. BIMO-style alignment gap layout) lives in the bundled
+        // pymol.appkit_sequence module so it stays readable and testable.
+        let preview = themePreviewActive ? "True" : "False"
         runPython(
-            "import json, os, tempfile\n"
-            + "from pymol import cmd as _sc\n"
-            + "_out = []\n"
-            + "_cols = {}\n"
-            + "for _o in \(names):\n"
-            + "    _r = []\n"
-            + "    try:\n"
-            + "        _sc.iterate('(%s) and guide' % _o, '_r.append((chain, resi, resn, str(color)))', space={'_r': _r})\n"
-            + "    except Exception:\n"
-            + "        pass\n"
-            + "    if _r:\n"
-            + "        _name = 'example' if _o == '__theme_preview' else _o\n"
-            + "        _out.append({'name': _name, 'residues': _r})\n"
-            + "        for _t in _r:\n"
-            + "            _cols[_t[3]] = None\n"
-            + "for _ci in list(_cols.keys()):\n"
-            + "    try:\n"
-            + "        _cols[_ci] = _sc.get_color_tuple(int(_ci))\n"
-            + "    except Exception:\n"
-            + "        _cols[_ci] = (0.8, 0.8, 0.8)\n"
-            + "_data = {'objects': _out, 'colors': _cols}\n"
-            + "open(os.path.join(tempfile.gettempdir(), 'pymol_seq.json'), 'w').write(json.dumps(_data))\n"
+            "from pymol import appkit_sequence as _sq\n"
+            + "_sq.poll(preview=\(preview))\n"
             + "print('SEQPANEL:ready')"
         )
     }
@@ -1213,10 +1217,13 @@ final class PyMOLEngine: ObservableObject {
         runPython("from pymol import appkit_inspector as _ai\n_ai.poll([\(pyList)])")
     }
 
-    // Parse OBJDETAIL:<json> → objectDetails + sceneState.
+    // Parse the inspector JSON (written by appkit_inspector.poll to a temp file;
+    // the feedback line is just the "OBJDETAIL:ready" trigger) → objectDetails +
+    // sceneState. File-based to avoid the ~1KB feedback-line cap splitting the
+    // payload and leaking continuation lines into the terminal log.
     func parseObjectDetailFeedback(_ line: String) {
-        let js = String(line.dropFirst("OBJDETAIL:".count))
-        guard let data = js.data(using: .utf8),
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("pymol_objdetail.json")
+        guard let data = FileManager.default.contents(atPath: path),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 

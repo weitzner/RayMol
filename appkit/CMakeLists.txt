@@ -249,6 +249,25 @@ set(PYMOL_COMPILE_FLAGS
 )
 target_compile_options(pymol_core PRIVATE ${PYMOL_COMPILE_FLAGS})
 
+# OpenMP — parallel solvent-dot surface sampling (layer2/RepSurface.cpp). On by
+# default for the desktop Metal build (NOT iOS). Apple clang needs libomp
+# (Homebrew, keg-only) + -Xpreprocessor -fopenmp for omp.h/pragmas. pymol_core is
+# a STATIC archive, so the OpenMP runtime symbols stay unresolved here and are
+# pulled in by the final app link (libomp.a, linked statically in project.yml).
+option(PYMOL_OPENMP "Parallelize surface sampling with OpenMP" ON)
+if(PYMOL_OPENMP AND NOT PYMOL_IOS)
+    find_path(LIBOMP_INCLUDE omp.h
+        HINTS /opt/homebrew/opt/libomp/include /usr/local/opt/libomp/include)
+    if(LIBOMP_INCLUDE)
+        target_compile_definitions(pymol_core PRIVATE PYMOL_OPENMP)
+        target_compile_options(pymol_core PRIVATE -Xpreprocessor -fopenmp)
+        target_include_directories(pymol_core PRIVATE ${LIBOMP_INCLUDE})
+        message(STATUS "PyMOL OpenMP enabled (libomp headers: ${LIBOMP_INCLUDE})")
+    else()
+        message(WARNING "PYMOL_OPENMP requested but omp.h not found — building serial surface path")
+    endif()
+endif()
+
 if(NOT PYMOL_IOS AND GLEW_INCLUDE)
     target_include_directories(pymol_core PRIVATE ${GLEW_INCLUDE})
 endif()

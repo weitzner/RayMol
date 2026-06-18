@@ -199,7 +199,11 @@ class options:
     testing = False
     appkit = False
     openvr = False
-    use_openmp = "no" if MAC else "yes"
+    # Bool (not the legacy "yes"/"no" string) so it matches argparse's
+    # str2bool override — otherwise `--use-openmp=yes` (=> True) never equals
+    # the string "yes" and is silently ignored. Off on macOS by default
+    # (Apple clang needs Homebrew libomp), on elsewhere.
+    use_openmp = not MAC
     use_vtkm = "no"
     vmd_plugins = True
 
@@ -608,13 +612,19 @@ ext_objects = []
 data_files = []
 ext_modules = []
 
-if options.use_openmp == "yes":
+if options.use_openmp:
     def_macros += [("PYMOL_OPENMP", None)]
     if WIN and not is_mingw:  # MSVC
         ext_comp_args.append("/openmp")
-    elif MAC:  # macOS Clang
+    elif MAC:  # macOS Clang — libomp is keg-only under Homebrew, so add its
+        # include/lib paths explicitly (clang won't find them otherwise).
         ext_comp_args.extend(["-Xpreprocessor", "-fopenmp"])
         libs.append("omp")
+        for _omp_prefix in ("/opt/homebrew/opt/libomp", "/usr/local/opt/libomp"):
+            if os.path.isdir(_omp_prefix):
+                inc_dirs.append(os.path.join(_omp_prefix, "include"))
+                lib_dirs.append(os.path.join(_omp_prefix, "lib"))
+                break
     else:  # GCC/Clang on Linux, and MinGW on Windows
         ext_comp_args.append("-fopenmp")
         ext_link_args.append("-fopenmp")
@@ -815,13 +825,24 @@ def get_pymol_version():
     return re.findall(r'_PyMOL_VERSION "(.*)"', open("layer0/Version.h").read())[0]
 
 
+# Native-app entry points (SwiftUI/Metal desktop app + iOS): built only by the
+# Xcode/CMake app project, never by this desktop `pip` extension. They include
+# Metal-only headers (e.g. RendererMetal.h) that aren't on the desktop build's
+# include path, so a clean source build would fail on them.
+_NATIVE_APP_ENTRY_SOURCES = {"main_appkit.mm", "main_ios.cpp"}
+
+
 def get_sources(subdirs, suffixes=(".c", ".cpp", ".mm")):
     # Objective-C++ (.mm) sources are Apple-only (Metal / AppKit); never
     # feed them to a non-Apple toolchain.
     if not MAC:
         suffixes = tuple(s for s in suffixes if s != ".mm")
     return sorted(
-        [f for d in subdirs for s in suffixes for f in glob.glob(d + "/*" + s)]
+        f
+        for d in subdirs
+        for s in suffixes
+        for f in glob.glob(d + "/*" + s)
+        if os.path.basename(f) not in _NATIVE_APP_ENTRY_SOURCES
     )
 
 

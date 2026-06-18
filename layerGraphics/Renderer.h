@@ -190,6 +190,13 @@ public:
   // darkened for spheres/sticks, gray for surface). Default: no-op.
   virtual void setInteriorCapColor(float r, float g, float b, bool overrideColor) {}
 
+  // RGB of the 3D selection indicator squares (SceneRenderMetalSelections).
+  // Driven by the active RayMol theme's selection color; defaults to pink.
+  float selColor[3] = {1.0f, 0.2f, 0.6f};
+  void setSelectionColor(float r, float g, float b) {
+    selColor[0] = r; selColor[1] = g; selColor[2] = b;
+  }
+
   // VBO buffer cache — returns a cached buffer ID for the given key,
   // creating it from data if not already cached.
   virtual void invalidateVBOCache(uint64_t key) {}

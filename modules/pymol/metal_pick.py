@@ -88,11 +88,16 @@ def _pick_atom(ndc_x, ndc_y, aspect):
             fov_deg = abs(v[24])
         else:
             # Legacy 18-float layout (what our embedded build returns):
-            #   v[0:9]=3x3 ROW-MAJOR rotation, v[9:12]=pos, v[12:15]=origin,
+            #   v[0:9]=3x3 rotation, v[9:12]=pos, v[12:15]=origin,
             #   v[15]=front, v[16]=back, v[17]=fov flag.
-            r00, r01, r02 = v[0], v[1], v[2]
-            r10, r11, r12 = v[3], v[4], v[5]
-            r20, r21, r22 = v[6], v[7], v[8]
+            # The rotation is COLUMN-MAJOR (same as the 25-float / GL convention
+            # and the Metal renderer's modelview). Parsing it row-major TRANSPOSES
+            # it — harmless for axis-aligned views but, under a real `orient`
+            # rotation, it projects atoms to the wrong screen positions, so the
+            # click selects an atom that renders far from the cursor.
+            r00, r01, r02 = v[0], v[3], v[6]
+            r10, r11, r12 = v[1], v[4], v[7]
+            r20, r21, r22 = v[2], v[5], v[8]
             tx, ty, tz = v[9], v[10], v[11]
             ox, oy, oz = v[12], v[13], v[14]
             fov_deg = abs(v[17])
@@ -117,6 +122,15 @@ def _pick_atom(ndc_x, ndc_y, aspect):
 
         for obj in (cmd.get_names('objects', enabled_only=1) or []):
             if obj.startswith('_'):
+                continue
+            # Skip non-molecule objects (distance/angle measurements, maps, CGOs,
+            # groups). Passing their name to the atom-selection parser (below)
+            # raises a C++ "Invalid selection name" Selector-Error that prints to
+            # the feedback log on every click even though Python catches it.
+            try:
+                if cmd.get_type(obj) != 'object:molecule':
+                    continue
+            except Exception:
                 continue
             try:
                 # Only consider atoms that are actually DRAWN, so a click can't
@@ -183,6 +197,16 @@ def _pick_atom(ndc_x, ndc_y, aspect):
                                  len(v), fov_deg, tan_half, aspect,
                                  tx, ty, tz, ox, oy, oz,
                                  _ext[0], _ext[1], _ext[2], _ext[3]))
+                    _f.write('  rawview=%s\n' % ','.join('%.5f' % x for x in v))
+                    if best is not None:
+                        _be = best[1]; _bc = best[2]; _br = best[3]; _bn = best[6]
+                        _xyz = []
+                        cmd.iterate_state(1, '%s and resi %s and name %s%s' % (
+                            _be, _br, _bn,
+                            (' and chain %s' % _bc) if _bc else ''),
+                            '_xyz.extend([x,y,z])', space={'_xyz': _xyz})
+                        if len(_xyz) >= 3:
+                            _f.write('  pickedxyz=(%.3f,%.3f,%.3f)\n' % (_xyz[0], _xyz[1], _xyz[2]))
             except Exception:
                 pass
 

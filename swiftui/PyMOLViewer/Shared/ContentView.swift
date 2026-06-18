@@ -184,10 +184,13 @@ struct ContentView: View {
         // strip can't grow into the viewport. minHeight is set a few pt below the
         // cap so the VSplitView still hands the user a draggable splitter (a strict
         // min == max would freeze it).
+        // Default height fits up to 5 sequence rows; beyond that the panel
+        // scrolls (or the user drags the splitter to open it further).
         let seqRows = min(max(engine.sequences.count, 1), 5)
-        // ruler(11) + residue(~15) per row + horizontal scrollbar(~15) + padding,
-        // so the sequence isn't clipped behind the scroll indicator.
-        let seqH = CGFloat(seqRows) * 27 + 20
+        // Each object block is a ruler(11) + residue(~17) row = ~28pt; +30pt for
+        // the always-visible horizontal scrollbar and inter-block/edge padding so
+        // the top row isn't clipped when several sequences are shown.
+        let seqH = CGFloat(seqRows) * 30 + 30
 
         return HSplitView {
             // Left column: terminal on TOP, sequence directly under it, then the
@@ -201,7 +204,14 @@ struct ContentView: View {
 
                 if engine.sequenceVisible {
                     SequencePanel()
-                        .frame(minHeight: 24, idealHeight: seqH, maxHeight: seqH)
+                        // idealHeight grows with the sequence count (up to 5 rows);
+                        // maxHeight stays large so the user can drag the splitter
+                        // open further. .id(seqRows) forces the VSplitView to
+                        // re-adopt idealHeight when the row count changes (otherwise
+                        // a pinned divider keeps the panel at its first-seen height,
+                        // hiding sequences loaded later).
+                        .frame(minHeight: 24, idealHeight: seqH, maxHeight: 400)
+                        .id(seqRows)
                 }
 
                 // The viewport takes the remaining (majority of) space, with the
@@ -214,6 +224,9 @@ struct ContentView: View {
                         .overlay(alignment: .top) {
                             if engine.measureMode != nil { measureOverlay }
                         }
+                        // Pick-debug crosshair: marks exactly where the last click
+                        // landed, so a screenshot shows click-vs-selection offset.
+                        .overlay { debugClickMarker }
                         // Mouse-mode legend as a compact floating card at the
                         // bottom-trailing corner, so it's reachable even when the
                         // right column is collapsed (where MousePanel used to live).
@@ -719,7 +732,7 @@ struct ContentView: View {
     // the minimum that fully shows the ruler + sequence.
     private var ipadSequenceHeight: CGFloat {
         let rows = min(max(engine.sequences.count, 1), 5)
-        return CGFloat(rows) * 27 + 18
+        return CGFloat(rows) * 30 + 28
     }
 
     // Horizontal drag handle under the terminal that resizes its height. Dragging
@@ -1515,6 +1528,23 @@ struct ContentView: View {
 
     // A thin bar over the top of the viewport while measure mode is active:
     // pick the measurement type, see the live prompt/result, clear, or exit.
+    // Pick-debug: a cyan crosshair + ring at the exact pixel of the last click,
+    // overlaid on the viewport (same top-down coordinate space as the MTKView).
+    // Lets a screenshot directly compare where the user clicked vs where the pink
+    // selection square rendered. Only present when PYMOL_PICKDEBUG is set.
+    @ViewBuilder
+    private var debugClickMarker: some View {
+        if PyMOLEngine.debugPickEnabled, let p = engine.debugClickPoint {
+            ZStack {
+                Circle().stroke(Color.cyan, lineWidth: 1.5).frame(width: 22, height: 22)
+                Rectangle().fill(Color.cyan).frame(width: 1.5, height: 14)
+                Rectangle().fill(Color.cyan).frame(width: 14, height: 1.5)
+            }
+            .position(p)
+            .allowsHitTesting(false)
+        }
+    }
+
     private var measureOverlay: some View {
         HStack(spacing: 10) {
             Picker("", selection: Binding(
@@ -1528,19 +1558,20 @@ struct ContentView: View {
             .frame(maxWidth: 240)
             Text(engine.measureStatus)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(TimelineTheme.text)
+                .foregroundColor(themeManager.active.panelText.color)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Spacer(minLength: 0)
             Button { engine.clearMeasurements() } label: {
-                Image(systemName: "trash").foregroundColor(TimelineTheme.text)
+                Image(systemName: "trash").foregroundColor(themeManager.active.panelText.color)
             }.buttonStyle(.plain).help("Delete all measurements")
             Button { engine.setMeasureMode(nil) } label: {
-                Image(systemName: "xmark.circle.fill").foregroundColor(TimelineTheme.dim)
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(themeManager.active.panelText.color.opacity(0.6))
             }.buttonStyle(.plain).accessibilityLabel("Exit measure mode")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(TimelineTheme.bar)
-        .tint(TimelineTheme.accent)
+        .background(themeManager.active.panelBackground.color)
+        .tint(themeManager.active.accent.color)
     }
 
     // MARK: - Initialization

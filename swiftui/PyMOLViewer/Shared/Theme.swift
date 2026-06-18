@@ -177,8 +177,9 @@ extension Theme {
         "I": RGBA(0.58, 0.00, 0.58)
     ]
 
-    /// Classic PyMOL: black viewport, neutral dark chrome, standard PyMOL
-    /// element/chain colors, no real-time shadows — the canonical look.
+    /// Classic PyMOL: black viewport, neutral dark chrome, the canonical look.
+    /// EMPTY chainCycle/elementColors → raymol_theme falls back to native
+    /// util.cbc / util.cnc, so chain + element coloring matches vanilla PyMOL.
     static let classic = Theme(
         id: classicID, name: "Classic", builtIn: true, appearance: .dark,
         accent: RGBA(0.30, 0.60, 0.95), bubble: RGBA(0.30, 0.60, 0.95),
@@ -186,7 +187,7 @@ extension Theme {
         viewportBackground: RGBA(0.0, 0.0, 0.0),
         terminalFont: FontSpec(family: .monospaced, size: 11), terminalText: RGBA(0.85, 0.85, 0.85),
         panelBackground: RGBA(0.13, 0.13, 0.15), panelText: RGBA(0.88, 0.88, 0.90),
-        chainCycle: defaultChainCycle, elementColors: defaultElementColors,
+        chainCycle: [], elementColors: [:],
         defaultStyle: .cartoon, outline: false, flatSheets: false, fancyHelices: false,
         rayTrace: false, shadows: false)
 

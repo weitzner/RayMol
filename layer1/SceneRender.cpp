@@ -2077,12 +2077,14 @@ void SceneRenderMetalSelections(PyMOLGlobals* G)
 
   int nPoints = (int)(coords.size() / 3);
 
-  // Render selection indicators as pink squares (overlay, no depth test).
+  // Render selection indicators as squares (overlay, no depth test). Color is
+  // the active theme's selection color (Renderer::selColor; defaults to pink).
   G->Renderer->disable(pymol::Capability::DepthTest);
   G->Renderer->pointSize(12.0f);  // Retina: need ~2x for visible size
 
   G->Renderer->beginBatch(pymol::PrimitiveType::Points);
-  G->Renderer->batchColor4f(1.0f, 0.2f, 0.6f, 1.0f);
+  G->Renderer->batchColor4f(G->Renderer->selColor[0], G->Renderer->selColor[1],
+                            G->Renderer->selColor[2], 1.0f);
   for (int i = 0; i < nPoints; i++)
     G->Renderer->batchVertex3f(coords[i*3], coords[i*3+1], coords[i*3+2]);
   G->Renderer->endBatch();

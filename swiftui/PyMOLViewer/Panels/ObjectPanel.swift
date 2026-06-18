@@ -65,6 +65,10 @@ struct RepProperty: Identifiable {
     var step: Double = 0.01
     var decimals: Int = 2
     var options: [(label: String, value: Double)] = []   // for .segmented
+    // Apply only on release (not on every live drag tick). For settings whose
+    // change forces an expensive rebuild (e.g. solvent_radius re-tessellates the
+    // whole surface), live updates would recompute on every drag step.
+    var commitOnly: Bool = false
 }
 
 /// Static description of a representation: display name, color-override setting
@@ -95,7 +99,7 @@ enum RepCatalog {
                 RepProperty(setting: "transparency",   label: "Transparency", kind: .slider),
                 RepProperty(setting: "surface_quality", label: "Quality", kind: .segmented,
                             options: [("0", 0), ("1", 1), ("2", 2)]),
-                RepProperty(setting: "solvent_radius", label: "Solvent radius", kind: .slider, min: 0.5, max: 3, step: 0.1, decimals: 1),
+                RepProperty(setting: "solvent_radius", label: "Solvent radius", kind: .slider, min: 0.5, max: 3, step: 0.1, decimals: 1, commitOnly: true),
                 RepProperty(setting: "metal_interior_cap", label: "Solid interior", kind: .toggle),
             ]),
         "sticks": RepSpec(rep: "sticks", display: "Sticks",
@@ -261,7 +265,6 @@ private let colorOptions: [ColorOption] = [
     ColorOption(label: "by ss",       command: "util.cbss",  swatch: nil),
     ColorOption(label: "spectrum",    command: "spectrum",    swatch: nil),
     ColorOption(label: "by b-factor", command: "spectrum_b",  swatch: nil),
-    ColorOption(label: "auto",        command: "util.cba",   swatch: nil),
     ColorOption(label: "---",         command: nil,           swatch: nil),
     ColorOption(label: "red",         command: "red",         swatch: Color(.sRGB, red: 1.0, green: 0.0, blue: 0.0)),
     ColorOption(label: "green",       command: "green",       swatch: Color(.sRGB, red: 0.0, green: 1.0, blue: 0.0)),
@@ -478,7 +481,11 @@ private func runActionCommand(_ key: String, name: String, engine: PyMOLEngine) 
     case "compute_mass_explicit":   cmd = "python\ncmd.util.compute_mass('\(n)', implicit=False, quiet=0, _self=cmd)\npython end"
     case "compute_mass_implicit":   cmd = "python\ncmd.util.compute_mass('\(n)', implicit=True, quiet=0, _self=cmd)\npython end"
     // Object management
-    case "rename":             cmd = "wizard renaming, \(n)"
+    case "rename":
+        // PyMOL's `wizard renaming` has no UI here — request a name-entry modal
+        // (presented by ObjectPanel) instead.
+        engine.pendingRename = n
+        return
     case "copy":               cmd = "copy \(n)_copy, \(n)"
     case "delete":             cmd = "delete \(n)"
     default:                   return
@@ -511,8 +518,30 @@ struct ObjectPanel: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
     @State private var showSelectionBuilder = false
+    @State private var renameText = ""
 
     var body: some View {
+        panelBody
+            // Name-entry modal for the action-menu "Rename" (engine.pendingRename).
+            .alert("Rename “\(engine.pendingRename ?? "")”",
+                   isPresented: Binding(get: { engine.pendingRename != nil },
+                                        set: { if !$0 { engine.pendingRename = nil } })) {
+                TextField("New name", text: $renameText)
+                Button("Rename") {
+                    if let old = engine.pendingRename {
+                        let new = renameText.trimmingCharacters(in: .whitespaces)
+                        if !new.isEmpty && new != old { engine.renameObject(old, to: new) }
+                    }
+                    engine.pendingRename = nil
+                }
+                Button("Cancel", role: .cancel) { engine.pendingRename = nil }
+            } message: { Text("Enter a new name for this object.") }
+            .onChange(of: engine.pendingRename) { newValue in
+                if let n = newValue { renameText = n }   // prefill with current name
+            }
+    }
+
+    private var panelBody: some View {
         VStack(spacing: 0) {
             // Header bar
             HStack {
@@ -868,6 +897,8 @@ private struct LabelMenuButton: View {
 private struct ColorMenuButton: View {
     let name: String
     @EnvironmentObject var engine: PyMOLEngine
+    @State private var customColor: Color = .white
+    @State private var showCustom = false
 
     var body: some View {
         Menu {
@@ -889,6 +920,10 @@ private struct ColorMenuButton: View {
                     }
                 }
             }
+            Divider()
+            // A ColorPicker can't live inside a Menu (it renders disabled), so
+            // "Custom…" opens a popover that hosts a working ColorPicker.
+            Button("Custom…") { showCustom = true }
         } label: {
             Text("C")
                 .frame(width: kActBtnW, height: kActBtnH)
@@ -898,6 +933,16 @@ private struct ColorMenuButton: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .popover(isPresented: $showCustom, arrowEdge: .bottom) {
+            VStack(spacing: 8) {
+                Text("Custom color").font(.system(size: 11, weight: .semibold))
+                ColorPicker("", selection: Binding(
+                    get: { customColor },
+                    set: { customColor = $0; applyCustomColor($0) }))
+                    .labelsHidden()
+            }
+            .padding(12)
+        }
     }
 
     private func applyColor(command: String) {
@@ -913,6 +958,10 @@ private struct ColorMenuButton: View {
         } else {
             engine.runCommand("color \(command), \(name)")
         }
+    }
+
+    private func applyCustomColor(_ color: Color) {
+        engine.runCommand("set_color raymol_custom, \(rgb01List(color))\ncolor raymol_custom, \(name)")
     }
 }
 
@@ -1066,6 +1115,14 @@ private struct RepColorControl: View {
             Menu {
                 Button("Inherit") { setOverride("\(defaultColor)") }
                 Divider()
+                // Coloring schemes — atom-level (the standard PyMOL behavior); this
+                // rep is reset to inherit so the scheme shows through on it.
+                Button("by element")  { applyScheme("util.cnc") }
+                Button("by chain")    { applyScheme("util.cbc") }
+                Button("by ss")       { applyScheme("util.cbss") }
+                Button("spectrum")    { applyScheme("spectrum") }
+                Button("by b-factor") { applyScheme("spectrum_b") }
+                Divider()
                 ForEach(Array(inspectorNamedColors.enumerated()), id: \.offset) { _, c in
                     Button(action: { setOverride(c.name) }) {
                         Label(c.name, systemImage: "circle.fill")
@@ -1100,6 +1157,19 @@ private struct RepColorControl: View {
 
     private func setOverride(_ c: String) {
         engine.runCommand("set \(colorSetting), \(c), \(objName)")
+    }
+    // Apply an atom-level coloring scheme, resetting this rep to inherit so the
+    // scheme is visible on it (PyMOL has no true per-rep scheme coloring).
+    private func applyScheme(_ s: String) {
+        setOverride("\(defaultColor)")
+        switch s {
+        case "spectrum":
+            engine.runCommand("spectrum count, selection=\(objName)")
+        case "spectrum_b":
+            engine.runCommand("spectrum b, blue_white_red, \(objName)")
+        default:   // util.cnc / util.cbc / util.cbss
+            engine.runCommand("python\ncmd.\(s)('\(objName)')\npython end")
+        }
     }
     private func applyCustom(_ color: Color) {
         let nm = "tmp_\(sanitizeName(objName))_\(rep)"
@@ -1461,8 +1531,10 @@ private struct RepPropertyGrid: View {
         let v = state.values[p.setting] ?? 0
         switch p.kind {
         case .slider:
+            // commitOnly props skip live updates — they apply once on release
+            // (avoids re-running an expensive rebuild on every drag tick).
             LabeledSlider(prop: p, value: v,
-                          onLive: { set(p.setting, $0) },
+                          onLive: { if !p.commitOnly { set(p.setting, $0) } },
                           onCommit: { set(p.setting, $0) })
         case .segmented:
             SegmentedSetting(prop: p, value: v) { set(p.setting, $0) }

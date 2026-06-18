@@ -25,6 +25,13 @@ struct SequenceResidue: Identifiable, Equatable {
     let resi: String        // residue index (e.g. "42")
     let resn: String        // three-letter code (e.g. "ALA")
     let color: Color        // real guide-atom color
+    var isGap: Bool = false // alignment gap placeholder (not a real residue)
+    var isBreak: Bool = false // chain-boundary separator bar (not a real residue)
+    var isChainLabel: Bool = false // chain-ID indicator at a chain run's start
+    var chainLabel: String = ""    // the chain ID shown when isChainLabel
+
+    /// Real, selectable residue (excludes gap / break / chain-label placeholders).
+    var isSelectable: Bool { !isGap && !isBreak && !isChainLabel }
 
     /// Identity used to match against the active selection set (obj/chain/resi).
     var selKey: String { "\(objectName)/\(chain)/\(resi)" }
@@ -54,6 +61,14 @@ private let aa3to1: [String: String] = [
 // Theme-driven (reads ThemeManager.shared.active). The SequencePanel view
 // observes ThemeManager so these re-resolve on a theme switch.
 private var headerColor: Color { ThemeManager.shared.active.accent.color }
+// Selected-residue highlight uses the theme's selection color (matching the 3D
+// selection indicator); text flips to black/white for contrast on that color.
+private var selectionBG: Color { ThemeManager.shared.active.selectionName.color }
+private var selectionFG: Color {
+    let s = ThemeManager.shared.active.selectionName
+    let lum: Double = 0.299 * s.r + 0.587 * s.g + 0.114 * s.b
+    return lum > 0.6 ? Color.black : Color.white
+}
 private var rulerColor: Color { ThemeManager.shared.active.panelText.color.opacity(0.6) }
 private var panelBackground: Color { ThemeManager.shared.active.panelBackground.color }
 private let cellWidth: CGFloat = 10
@@ -81,6 +96,15 @@ struct SequencePanel: View {
 
     /// Flattened residue list (object order) for range/index mapping.
     private var flat: [SequenceResidue] { engine.sequences.flatMap { $0.residues } }
+
+    /// Fixed gutter width for object-name labels, so every object's residues
+    /// start at the same x — required for alignment columns (and aligned rulers)
+    /// to line up across the stacked object rows.
+    private var labelWidth: CGFloat {
+        let longest = engine.sequences.map { $0.name.count }.max() ?? 0
+        // ~6.5 pt per bold size-10 char + trailing space; clamp to a sane range.
+        return min(max(CGFloat(longest) * 6.5 + 8, 48), 180)
+    }
 
     /// Map residue id -> flat index (for click handling).
     private var idToIndex: [String: Int] {
@@ -130,12 +154,16 @@ struct SequencePanel: View {
     @ViewBuilder
     private func objectBlock(_ obj: SequenceObject) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Residue-number ruler
+            // Ruler row (offset by the label gutter): residue numbers, plus the
+            // chain-ID indicator sitting above the first residue of each chain run.
             HStack(spacing: 0) {
-                ForEach(Array(rulerChars(obj.residues).enumerated()), id: \.offset) { _, ch in
-                    Text(String(ch))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(rulerColor)
+                Color.clear.frame(width: labelWidth, height: 1)
+                ForEach(Array(rulerCells(obj.residues).enumerated()), id: \.offset) { _, cell in
+                    Text(cell.text)
+                        .font(.system(size: 9,
+                                      weight: cell.isChain ? .bold : .regular,
+                                      design: .monospaced))
+                        .foregroundColor(cell.isChain ? headerColor : rulerColor)
                         .frame(width: cellWidth, alignment: .leading)
                 }
             }
@@ -143,9 +171,11 @@ struct SequencePanel: View {
 
             // Residues
             HStack(spacing: 0) {
-                Text(obj.name + " ")
+                Text(obj.name)
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(headerColor)
+                    .lineLimit(1)
+                    .frame(width: labelWidth, alignment: .leading)
                     .onTapGesture {
                         // Click object name → add the whole object to 'sele'.
                         anchorIndex = nil
@@ -158,14 +188,37 @@ struct SequencePanel: View {
         }
     }
 
+    @ViewBuilder
     private func residueCell(_ r: SequenceResidue) -> some View {
-        let selected = engine.selectedResidueKeys.contains(r.selKey)
+        if r.isBreak {
+            // Chain-boundary separator: a thin vertical rule in a normal-width slot
+            // so the ruler stays aligned with the residues below it.
+            Rectangle()
+                .fill(rulerColor.opacity(0.5))
+                .frame(width: 1, height: 13)
+                .frame(width: cellWidth, alignment: .center)
+                .padding(.vertical, 1)
+        } else if r.isChainLabel {
+            // Holds the column under the chain-ID shown in the ruler row above;
+            // the residue row itself stays blank here.
+            Color.clear
+                .frame(width: cellWidth, height: 13)
+                .padding(.vertical, 1)
+        } else {
+            realResidueCell(r)
+        }
+    }
+
+    private func realResidueCell(_ r: SequenceResidue) -> some View {
+        let selected = r.isSelectable && engine.selectedResidueKeys.contains(r.selKey)
         return Text(r.oneLetter)
             .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(selected ? .black : r.color)
-            .frame(width: cellWidth, alignment: .center)
+            .foregroundColor(selected ? selectionFG : r.color)
+            // Left-align every cell so residues (and gap dashes) form a tight,
+            // continuous run rather than floating centered in each slot.
+            .frame(width: cellWidth, alignment: .leading)
             .padding(.vertical, 1)
-            .background(selected ? Color.white : Color.clear)
+            .background(selected ? selectionBG : Color.clear)
             .contentShape(Rectangle())
             .background(
                 GeometryReader { geo in
@@ -174,8 +227,8 @@ struct SequencePanel: View {
                         value: [r.id: geo.frame(in: .named("seq"))])
                 }
             )
-            .onTapGesture { handleClick(on: r) }
-            .help(tooltip(r))
+            .onTapGesture { if r.isSelectable { handleClick(on: r) } }
+            .help(r.isSelectable ? tooltip(r) : "")
     }
 
     /// Click selection (PyMOL-style, additive/toggle):
@@ -204,18 +257,24 @@ struct SequencePanel: View {
 
     // MARK: - Residue-number ruler
 
-    /// One character per residue slot; numbers (every `rulerSpacing`) are written
-    /// left-aligned starting at the labeled residue, overflowing into following
-    /// slots. Aligns with residue cells because both use `cellWidth` slots.
-    private func rulerChars(_ residues: [SequenceResidue]) -> [Character] {
-        var chars = Array(repeating: Character(" "), count: residues.count)
-        for (i, r) in residues.enumerated() {
+    /// One cell per residue slot, aligned with the residue row below (both use
+    /// `cellWidth` slots). Cells carry either a residue-number digit (every
+    /// `rulerSpacing`, overflowing into following slots) or — at the start of a
+    /// chain run — the chain-ID indicator (`isChain`), which takes priority.
+    private func rulerCells(_ residues: [SequenceResidue]) -> [(text: String, isChain: Bool)] {
+        var cells = Array(repeating: (text: " ", isChain: false), count: residues.count)
+        // Residue numbers (real residues only; numbering restarts per chain).
+        for (i, r) in residues.enumerated() where r.isSelectable {
             guard let n = Int(r.resi), n % rulerSpacing == 0 else { continue }
-            for (j, c) in Array(r.resi).enumerated() where i + j < chars.count {
-                chars[i + j] = c
+            for (j, c) in Array(r.resi).enumerated() where i + j < cells.count {
+                cells[i + j] = (text: String(c), isChain: false)
             }
         }
-        return chars
+        // Chain IDs sit above each chain run's first residue and win their cell.
+        for (i, r) in residues.enumerated() where r.isChainLabel {
+            cells[i] = (text: r.chainLabel, isChain: true)
+        }
+        return cells
     }
 
     private func tooltip(_ r: SequenceResidue) -> String {
@@ -264,6 +323,9 @@ struct SequencePanel: View {
     /// otherwise `(sele) and not (expr)` (remove). Never replaces — clicks
     /// accumulate, and clicking a selected residue removes just that residue.
     private func applyToggle(residues: [SequenceResidue], add: Bool, center: Bool = false) {
+        // Gap/break placeholders carry no real residue — drop them before building
+        // a selection expression (an empty resi would produce malformed PyMOL).
+        let residues = residues.filter { $0.isSelectable }
         guard !residues.isEmpty else { return }
         let expr = selectionExpression(residues)
         if add {
@@ -327,8 +389,41 @@ extension PyMOLEngine {
         var objs: [SequenceObject] = []
         for o in p.objects {
             var residues: [SequenceResidue] = []
+            var prevChain: String? = nil   // last real residue's chain (for breaks)
             for (i, t) in o.residues.enumerated() where t.count >= 4 {
                 let chain = t[0], resi = t[1], resn = t[2], cidx = t[3]
+                // Alignment gap placeholder (emitted by appkit_sequence): a dim,
+                // non-selectable dash that keeps aligned residues column-aligned.
+                if resn == "-" {
+                    residues.append(SequenceResidue(
+                        id: "\(o.name)/gap/\(i)",
+                        objectName: o.name,
+                        chain: "", oneLetter: "-", resi: "", resn: "-",
+                        color: Color.gray.opacity(0.35),
+                        isGap: true))
+                    continue
+                }
+                // Chain boundary / first chain: insert a separator bar (between
+                // chains only) and a chain-ID label at the start of each chain run
+                // (skipped for blank/unnamed chains). Both are non-selectable.
+                let chainChanged = (prevChain != chain)
+                if chainChanged {
+                    if prevChain != nil {
+                        residues.append(SequenceResidue(
+                            id: "\(o.name)/brk/\(i)",
+                            objectName: o.name,
+                            chain: "", oneLetter: "", resi: "", resn: "",
+                            color: rulerColor, isBreak: true))
+                    }
+                    if !chain.isEmpty {
+                        residues.append(SequenceResidue(
+                            id: "\(o.name)/chid/\(i)",
+                            objectName: o.name,
+                            chain: chain, oneLetter: "", resi: "", resn: "",
+                            color: headerColor, isChainLabel: true, chainLabel: chain))
+                    }
+                }
+                prevChain = chain
                 let rgb = p.colors[cidx] ?? [0.8, 0.8, 0.8]
                 let color = Color(.sRGB,
                     red: rgb.count > 0 ? rgb[0] : 0.8,

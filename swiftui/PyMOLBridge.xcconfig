@@ -64,8 +64,11 @@ PYMOL_PYTHON_DYLIB[sdk=iphonesimulator*] = $(SRCROOT)/../deps_ios/Python.xcframe
 // Core library (always linked)
 PYMOL_CORE_LDFLAGS = -lpymol_core -framework Metal -framework MetalKit -framework CoreVideo
 
-// macOS: full dependency set
-PYMOL_PLATFORM_LDFLAGS[sdk=macosx*] = -lfreetype -lpng16 -lz -lpython3.13
+// macOS: full dependency set. libomp.a is linked STATICALLY (by absolute path,
+// so the linker uses the archive, not the .dylib) to resolve the OpenMP symbols
+// from pymol_core's parallel surface sampling — no dylib to bundle/sign, so the
+// App Store build stays self-contained.
+PYMOL_PLATFORM_LDFLAGS[sdk=macosx*] = -lfreetype -lpng16 -lz -lpython3.13 /opt/homebrew/opt/libomp/lib/libomp.a
 // iOS: cross-compiled dependencies + Python dylib linked by path
 PYMOL_PLATFORM_LDFLAGS[sdk=iphoneos*] = -lfreetype -lpng16 -lz $(PYMOL_PYTHON_DYLIB)
 PYMOL_PLATFORM_LDFLAGS[sdk=iphonesimulator*] = -lfreetype -lpng16 -lz $(PYMOL_PYTHON_DYLIB)

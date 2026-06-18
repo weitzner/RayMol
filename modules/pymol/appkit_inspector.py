@@ -145,10 +145,20 @@ def _build(objs):
 
 
 def poll(objs):
-    """Emit the OBJDETAIL feedback line for the given object names."""
-    import json
+    """Write the inspector JSON to a temp file and print a short marker.
+
+    The payload (per-rep detail + scene params + objmeta + scene list) can exceed
+    PyMOL's ~1KB feedback-line cap; printing it inline made the overflow split
+    across feedback lines, and the continuation lines (no OBJDETAIL: prefix)
+    leaked into the terminal log. So write the full JSON to a temp file (same
+    TMPDIR the Swift app reads) and emit only `OBJDETAIL:ready` — same pattern as
+    the sequence panel."""
+    import json, os, tempfile
     try:
-        print('OBJDETAIL:' + json.dumps(_build(objs)))
+        p = os.path.join(tempfile.gettempdir(), 'pymol_objdetail.json')
+        with open(p, 'w') as _f:
+            _f.write(json.dumps(_build(objs)))
+        print('OBJDETAIL:ready')
     except Exception as e:
         print('OBJDETAIL_ERR:' + str(e))
 

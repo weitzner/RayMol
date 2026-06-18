@@ -361,6 +361,11 @@ extension MetalViewport {
                 if w > 0, h > 0 {
                     let ndcX = Float(loc.x / w) * 2 - 1
                     let ndcY = Float(loc.y / h) * 2 - 1
+                    // Pick-debug: record the click in top-down (SwiftUI) points so
+                    // the overlay crosshair lands exactly where the user clicked.
+                    if PyMOLEngine.debugPickEnabled {
+                        engine?.debugClickPoint = CGPoint(x: loc.x, y: h - loc.y)
+                    }
                     Self.pickDbg(String(format:
                         "mouseUp loc=(%.1f,%.1f) bounds=(%.1f,%.1f) backing=%.2f -> ndc=(%.4f,%.4f) aspect=%.4f",
                         loc.x, loc.y, w, h, view.window?.backingScaleFactor ?? 0,

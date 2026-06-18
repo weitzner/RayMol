@@ -4651,15 +4651,20 @@ static int SolventDotMainLoop(PyMOLGlobals* G, SolventDot* I, MapType* map,
     std::vector<SurfaceJobAtomInfo>& atom_info, float* coord, int n_coord,
     int* present, SphereRec* sp, float probe_radius, int* dotCnt, int stopDot)
 {
-  int mode = 0; /* 0 = serial (default), 1 = parallel, 2 = verify */
+  int mode = 0; /* 0 = serial, 1 = parallel, 2 = verify */
 #ifdef PYMOL_OPENMP
+  /* Parallel by default when OpenMP is compiled in. PYMOL_SURFACE_PARALLEL
+   * overrides: "0"/"off" forces serial, "verify" runs both and compares. */
+  mode = 1;
   int nthreads = omp_get_max_threads();
   {
     const char* e = getenv("PYMOL_SURFACE_PARALLEL");
     if (e && *e) {
       if (!strcmp(e, "verify"))
         mode = 2;
-      else if (strcmp(e, "0") && strcmp(e, "off"))
+      else if (!strcmp(e, "0") || !strcmp(e, "off"))
+        mode = 0;
+      else
         mode = 1;
     }
     const char* tn = getenv("PYMOL_SURFACE_THREADS");
