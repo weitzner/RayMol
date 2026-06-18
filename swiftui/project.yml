@@ -1,6 +1,6 @@
 name: PyMOLViewer
 options:
-  bundleIdPrefix: org.pymol
+  bundleIdPrefix: io.raymol
   deploymentTarget:
     macOS: "13.0"
     iOS: "16.0"
@@ -35,7 +35,15 @@ targets:
           - "**/*.md"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.pymol.viewer
+        # Apple-silicon only: the embedded standalone Python 3.13, libpymol_core.a,
+        # and Homebrew deps are all arm64-only, so Release/Archive (which would
+        # otherwise build "Any Mac" incl. x86_64) must be pinned to arm64 or the
+        # link fails with undefined symbols. iOS device/sim on Apple Silicon are
+        # arm64 too. (Debug worked only because it builds the active arch.)
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: "NO"
+        PRODUCT_NAME: RayMol
+        PRODUCT_BUNDLE_IDENTIFIER: io.raymol.RayMol
         INFOPLIST_GENERATION_MODE: GeneratedFile
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -44,14 +52,14 @@ targets:
         # resolution. Without it the app is letterboxed at a legacy size on
         # physical devices (the Simulator is more lenient).
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        # User-facing app brand. CFBundleDisplayName = Springboard/home-screen
-        # name (iOS) — a supported INFOPLIST_KEY_*. CFBundleName (macOS title
-        # bar + app menu) is NOT a supported INFOPLIST_KEY_* and the generated
-        # plist always overwrites it with PRODUCT_NAME (= PyMOLViewer), so it's
-        # forced to RayMol in a post-build step below. Bundle id + PRODUCT_NAME
-        # + on-disk PyMOLViewer.app are unchanged.
+        # User-facing app brand. PRODUCT_NAME = RayMol → the bundle is RayMol.app
+        # and CFBundleName derives from it. CFBundleDisplayName (iOS home-screen
+        # name) is set here; the post-build step below still force-sets
+        # CFBundleName = RayMol since the generated plist can lag PRODUCT_NAME.
         INFOPLIST_KEY_CFBundleDisplayName: RayMol
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.education
+        # Export compliance: only standard HTTPS/TLS → exempt, no extra paperwork.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         # iOS orientations: portrait + both landscapes, no upside-down (a
         # molecular viewer flipped 180° is disorienting and serves no purpose).
         # Applied to iPhone and iPad; ignored on the macOS slice of this target.
@@ -63,15 +71,27 @@ targets:
           DEBUG_INFORMATION_FORMAT: dwarf
         Release:
           SWIFT_OPTIMIZATION_LEVEL: -O
+          # App Store distribution: automatic Distribution signing + App Sandbox
+          # + Hardened Runtime + entitlements (created in Task 2). Both platforms.
+          DEVELOPMENT_TEAM: VT99UQUQ89
+          CODE_SIGN_STYLE: Automatic
+          ENABLE_HARDENED_RUNTIME: YES
+          ENABLE_APP_SANDBOX: YES
+          CODE_SIGN_ENTITLEMENTS: PyMOLViewer/RayMol.entitlements
+          # iOS App Store guideline-2.5.2 fallback: if the iOS app is rejected
+          # for the command line / Raymond, uncomment the next line to compile
+          # them out of the iOS build (no effect on macOS — the flag is gated to
+          # os(iOS) in RayMolBuild), then re-archive + resubmit GUI-only.
+          # SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) RAYMOL_IOS_APPSTORE_RESTRICTED
     # iOS runtime packaging (BeeWare CPython 3.13). Guarded to iOS via
     # PLATFORM_NAME so the macOS target is unaffected. The xcframework has no
     # macOS slice, so a native embed dependency can't be used on a shared target.
     postBuildScripts:
-      # User-facing app brand: force CFBundleName = RayMol. The generated
-      # Info.plist derives CFBundleName from PRODUCT_NAME (= PyMOLViewer) and
-      # there is no INFOPLIST_KEY_* for it, so set it directly on the built
-      # plist. Runs on BOTH platforms (macOS title bar / app menu + iOS).
-      # PRODUCT_NAME, bundle id, and the on-disk PyMOLViewer.app are unchanged.
+      # User-facing app brand: force CFBundleName = RayMol. PRODUCT_NAME is now
+      # RayMol so the bundle is RayMol.app, but the generated Info.plist can lag
+      # PRODUCT_NAME for CFBundleName (no INFOPLIST_KEY_* for it), so set it
+      # directly on the built plist. Runs on BOTH platforms (macOS title bar /
+      # app menu + iOS).
       - name: "Brand: set CFBundleName = RayMol"
         basedOnDependencyAnalysis: false
         script: |
@@ -206,6 +226,28 @@ targets:
           # token minting; bridge adds <res>/pyvendor to sys.path (same dir name
           # as the iOS build, so the bridge path logic is platform-agnostic).
           ditto "$SRCROOT/vendor_py" "$RES/pyvendor"
+          # Mac App Store code-signing of the embedded Python. python-standalone
+          # ships its own signatures (foreign team, no app-sandbox), and Xcode's
+          # final signing doesn't re-sign files under Resources/. So re-sign every
+          # embedded Mach-O with OUR identity + hardened runtime here (before the
+          # bundle is sealed): nested EXECUTABLES (bin/) get the app-sandbox +
+          # inherit entitlement (Apple requires every nested executable to carry
+          # app-sandbox — error 90296); libraries (.dylib/.so) get our signature
+          # without entitlements. Runs only when signing (skipped for unsigned CLI).
+          if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+            ENT="$SRCROOT/PyMOLViewer/RayMolPython.entitlements"
+            # Executables under the embedded python's bin/.
+            find "$RES/python/bin" -type f 2>/dev/null | while read -r f; do
+              /usr/bin/file "$f" | /usr/bin/grep -q "Mach-O.*executable" && \
+                /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
+                  -o runtime --timestamp=none --entitlements "$ENT" "$f" || true
+            done
+            # All embedded libraries / extension modules.
+            find "$RES/python" \( -name "*.dylib" -o -name "*.so" \) -type f | while read -r f; do
+              /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
+                -o runtime --timestamp=none "$f" || true
+            done
+          fi
       - name: "macOS: Build + bundle pymol.metallib"
         basedOnDependencyAnalysis: false
         script: |
@@ -233,7 +275,7 @@ targets:
         link: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.pymol.viewer.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: io.raymol.RayMol.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: PyMOLViewer_iOS
         TARGETED_DEVICE_FAMILY: "1,2"

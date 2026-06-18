@@ -22,6 +22,7 @@
 		4BE37F7CA13DEB10F2AE62D6 /* RayMol.svg in Resources */ = {isa = PBXBuildFile; fileRef = F16058D96E2773BE9A24C323 /* RayMol.svg */; };
 		5313FFF152E5D3F23159919B /* MousePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 221117550FAD97CF81924E05 /* MousePanel.swift */; };
 		56CC6A9A8A95D5B1B8D92688 /* PyMOLEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D6A753E4525628B96C259C /* PyMOLEngine.swift */; };
+		575E4E4792DE4C46A70ECE01 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 10CCAA289EA2934B267C337A /* PrivacyInfo.xcprivacy */; };
 		5992346BC7D06026A673BA71 /* ObjectPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A73267D4D7B506E647B7A995 /* ObjectPanel.swift */; };
 		5A20A6D21AA3CFAE2394BAB4 /* dylib-Info-template.plist in Resources */ = {isa = PBXBuildFile; fileRef = 57E9E81F5C4757D03AAF7ABD /* dylib-Info-template.plist */; };
 		5C923361D76329D2A466FFA9 /* PyMOLApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D965CB609C447033E5DB0046 /* PyMOLApp.swift */; };
@@ -35,6 +36,7 @@
 		8852A9FA93BDAAB188D4103C /* PyMOLEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D6A753E4525628B96C259C /* PyMOLEngine.swift */; };
 		8CDF44341FE9E9CB053BFC76 /* TransportBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C562306A5AD1EEDDBA931B98 /* TransportBar.swift */; };
 		8E33AC50510ECB1DA4277904 /* RayMol.svg in Resources */ = {isa = PBXBuildFile; fileRef = F16058D96E2773BE9A24C323 /* RayMol.svg */; };
+		946A8CF4D62A7AFFFA6E39A9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 10CCAA289EA2934B267C337A /* PrivacyInfo.xcprivacy */; };
 		979AB10150CC62EE5E7962F9 /* MetalViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9F8D36908E3216D1C8F893 /* MetalViewport.swift */; };
 		ACBE8F70B980BCCE6730141A /* MovieBuilderSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED5BFF3FEE9D6621BB40AE5 /* MovieBuilderSheet.swift */; };
 		B84285B5FAD1A429B1FCEDBF /* 1ubq.cif in Resources */ = {isa = PBXBuildFile; fileRef = 1A55383922D69D691CA1BAB1 /* 1ubq.cif */; };
@@ -63,6 +65,7 @@
 /* Begin PBXFileReference section */
 		05C388F2E8B5A99F3CBFFC7E /* PyMOLViewer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PyMOLViewer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0ED5BFF3FEE9D6621BB40AE5 /* MovieBuilderSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieBuilderSheet.swift; sourceTree = "<group>"; };
+		10CCAA289EA2934B267C337A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		1A55383922D69D691CA1BAB1 /* 1ubq.cif */ = {isa = PBXFileReference; path = 1ubq.cif; sourceTree = "<group>"; };
 		221117550FAD97CF81924E05 /* MousePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MousePanel.swift; sourceTree = "<group>"; };
 		33D6A753E4525628B96C259C /* PyMOLEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PyMOLEngine.swift; sourceTree = "<group>"; };
@@ -78,6 +81,7 @@
 		85B718B8A3C2C5CCB98BA1C5 /* ChatPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPanel.swift; sourceTree = "<group>"; };
 		8FE79EC8844C681A41A1E54A /* MovieExportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MovieExportSheet.swift; sourceTree = "<group>"; };
 		99E8403E056CB6DA5DD9A3CA /* PyMOLViewerUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PyMOLViewerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A63406B360384F3C62E511E1 /* RayMolPython.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RayMolPython.entitlements; sourceTree = "<group>"; };
 		A73267D4D7B506E647B7A995 /* ObjectPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectPanel.swift; sourceTree = "<group>"; };
 		B50D264C420888CBF7FDE633 /* CommandPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPanel.swift; sourceTree = "<group>"; };
 		C562306A5AD1EEDDBA931B98 /* TransportBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBar.swift; sourceTree = "<group>"; };
@@ -86,7 +90,8 @@
 		E8EE6573045A81CF52A9CDF5 /* PyMOLGestureUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PyMOLGestureUITests.swift; sourceTree = "<group>"; };
 		EDC5E722722DEF7FBB1D649F /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		F16058D96E2773BE9A24C323 /* RayMol.svg */ = {isa = PBXFileReference; path = RayMol.svg; sourceTree = "<group>"; };
-		"TEMP_75E4AA80-56FC-47D9-92CE-3ABAD3D35ACE" /* PyMOLBridge.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = PyMOLBridge.xcconfig; sourceTree = "<group>"; };
+		F2078076B68D28457409F7A5 /* RayMol.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RayMol.entitlements; sourceTree = "<group>"; };
+		"TEMP_83615732-CAED-4B91-BD05-55D79A93458A" /* PyMOLBridge.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = PyMOLBridge.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -137,6 +142,9 @@
 		52FC8256B867D42D45933E18 /* PyMOLViewer */ = {
 			isa = PBXGroup;
 			children = (
+				10CCAA289EA2934B267C337A /* PrivacyInfo.xcprivacy */,
+				F2078076B68D28457409F7A5 /* RayMol.entitlements */,
+				A63406B360384F3C62E511E1 /* RayMolPython.entitlements */,
 				F5456D006DB0002CB809CACF /* Bridge */,
 				1A65998EE1F4B509B9B62F00 /* Panels */,
 				213C644D6AEEA6FB9B7C3B5E /* Resources */,
@@ -177,10 +185,10 @@
 			path = Bridge;
 			sourceTree = "<group>";
 		};
-		"TEMP_9F3C6543-0AA1-499B-AEF2-094493CB9007" /* swiftui */ = {
+		"TEMP_353842E4-5A65-4DE9-82E5-95964ECB558F" /* swiftui */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_75E4AA80-56FC-47D9-92CE-3ABAD3D35ACE" /* PyMOLBridge.xcconfig */,
+				"TEMP_83615732-CAED-4B91-BD05-55D79A93458A" /* PyMOLBridge.xcconfig */,
 			);
 			path = swiftui;
 			sourceTree = "<group>";
@@ -300,6 +308,7 @@
 			files = (
 				F5F9A2124F71FDC7541A6BF8 /* 1ubq.cif in Resources */,
 				3D6FE0218915810960306973 /* Assets.xcassets in Resources */,
+				946A8CF4D62A7AFFFA6E39A9 /* PrivacyInfo.xcprivacy in Resources */,
 				4BE37F7CA13DEB10F2AE62D6 /* RayMol.svg in Resources */,
 				E08AF23E9A696D29B94CA999 /* dylib-Info-template.plist in Resources */,
 			);
@@ -311,6 +320,7 @@
 			files = (
 				B84285B5FAD1A429B1FCEDBF /* 1ubq.cif in Resources */,
 				7B6E4F8683D469C6984163AA /* Assets.xcassets in Resources */,
+				575E4E4792DE4C46A70ECE01 /* PrivacyInfo.xcprivacy in Resources */,
 				8E33AC50510ECB1DA4277904 /* RayMol.svg in Resources */,
 				5A20A6D21AA3CFAE2394BAB4 /* dylib-Info-template.plist in Resources */,
 			);
@@ -545,7 +555,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "case \"$PLATFORM_NAME\" in macosx*) ;; *) exit 0 ;; esac\nset -e\nRES=\"$CODESIGNING_FOLDER_PATH/Contents/Resources\"\nmkdir -p \"$RES\"\nrsync -au --delete \"$SRCROOT/../deps_macos/python-standalone/python/\" \"$RES/python/\"\nditto \"$SRCROOT/../modules\" \"$RES/modules\"\nditto \"$SRCROOT/../data\" \"$RES/data\"\n# Vendored pure-Python packages (rsa + pyasn1) for on-device Vertex\n# token minting; bridge adds <res>/pyvendor to sys.path (same dir name\n# as the iOS build, so the bridge path logic is platform-agnostic).\nditto \"$SRCROOT/vendor_py\" \"$RES/pyvendor\"\n";
+			shellScript = "case \"$PLATFORM_NAME\" in macosx*) ;; *) exit 0 ;; esac\nset -e\nRES=\"$CODESIGNING_FOLDER_PATH/Contents/Resources\"\nmkdir -p \"$RES\"\nrsync -au --delete \"$SRCROOT/../deps_macos/python-standalone/python/\" \"$RES/python/\"\nditto \"$SRCROOT/../modules\" \"$RES/modules\"\nditto \"$SRCROOT/../data\" \"$RES/data\"\n# Vendored pure-Python packages (rsa + pyasn1) for on-device Vertex\n# token minting; bridge adds <res>/pyvendor to sys.path (same dir name\n# as the iOS build, so the bridge path logic is platform-agnostic).\nditto \"$SRCROOT/vendor_py\" \"$RES/pyvendor\"\n# Mac App Store code-signing of the embedded Python. python-standalone\n# ships its own signatures (foreign team, no app-sandbox), and Xcode's\n# final signing doesn't re-sign files under Resources/. So re-sign every\n# embedded Mach-O with OUR identity + hardened runtime here (before the\n# bundle is sealed): nested EXECUTABLES (bin/) get the app-sandbox +\n# inherit entitlement (Apple requires every nested executable to carry\n# app-sandbox — error 90296); libraries (.dylib/.so) get our signature\n# without entitlements. Runs only when signing (skipped for unsigned CLI).\nif [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n  ENT=\"$SRCROOT/PyMOLViewer/RayMolPython.entitlements\"\n  # Executables under the embedded python's bin/.\n  find \"$RES/python/bin\" -type f 2>/dev/null | while read -r f; do\n    /usr/bin/file \"$f\" | /usr/bin/grep -q \"Mach-O.*executable\" && \\\n      /usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \\\n        -o runtime --timestamp=none --entitlements \"$ENT\" \"$f\" || true\n  done\n  # All embedded libraries / extension modules.\n  find \"$RES/python\" \\( -name \"*.dylib\" -o -name \"*.so\" \\) -type f | while read -r f; do\n    /usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \\\n      -o runtime --timestamp=none \"$f\" || true\n  done\nfi\n";
 		};
 		D05A0E7275F836613C62A558 /* iOS: Install Python stdlib */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -583,7 +593,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "case \"$PLATFORM_NAME\" in macosx*) ;; *) exit 0 ;; esac\nset -e\nRES=\"$CODESIGNING_FOLDER_PATH/Contents/Resources\"\nmkdir -p \"$RES\"\nrsync -au --delete \"$SRCROOT/../deps_macos/python-standalone/python/\" \"$RES/python/\"\nditto \"$SRCROOT/../modules\" \"$RES/modules\"\nditto \"$SRCROOT/../data\" \"$RES/data\"\n# Vendored pure-Python packages (rsa + pyasn1) for on-device Vertex\n# token minting; bridge adds <res>/pyvendor to sys.path (same dir name\n# as the iOS build, so the bridge path logic is platform-agnostic).\nditto \"$SRCROOT/vendor_py\" \"$RES/pyvendor\"\n";
+			shellScript = "case \"$PLATFORM_NAME\" in macosx*) ;; *) exit 0 ;; esac\nset -e\nRES=\"$CODESIGNING_FOLDER_PATH/Contents/Resources\"\nmkdir -p \"$RES\"\nrsync -au --delete \"$SRCROOT/../deps_macos/python-standalone/python/\" \"$RES/python/\"\nditto \"$SRCROOT/../modules\" \"$RES/modules\"\nditto \"$SRCROOT/../data\" \"$RES/data\"\n# Vendored pure-Python packages (rsa + pyasn1) for on-device Vertex\n# token minting; bridge adds <res>/pyvendor to sys.path (same dir name\n# as the iOS build, so the bridge path logic is platform-agnostic).\nditto \"$SRCROOT/vendor_py\" \"$RES/pyvendor\"\n# Mac App Store code-signing of the embedded Python. python-standalone\n# ships its own signatures (foreign team, no app-sandbox), and Xcode's\n# final signing doesn't re-sign files under Resources/. So re-sign every\n# embedded Mach-O with OUR identity + hardened runtime here (before the\n# bundle is sealed): nested EXECUTABLES (bin/) get the app-sandbox +\n# inherit entitlement (Apple requires every nested executable to carry\n# app-sandbox — error 90296); libraries (.dylib/.so) get our signature\n# without entitlements. Runs only when signing (skipped for unsigned CLI).\nif [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n  ENT=\"$SRCROOT/PyMOLViewer/RayMolPython.entitlements\"\n  # Executables under the embedded python's bin/.\n  find \"$RES/python/bin\" -type f 2>/dev/null | while read -r f; do\n    /usr/bin/file \"$f\" | /usr/bin/grep -q \"Mach-O.*executable\" && \\\n      /usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \\\n        -o runtime --timestamp=none --entitlements \"$ENT\" \"$f\" || true\n  done\n  # All embedded libraries / extension modules.\n  find \"$RES/python\" \\( -name \"*.dylib\" -o -name \"*.so\" \\) -type f | while read -r f; do\n    /usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \\\n      -o runtime --timestamp=none \"$f\" || true\n  done\nfi\n";
 		};
 		D6E180B4CFF12A0215D1E81F /* iOS: Embed Python.framework */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -694,6 +704,7 @@
 		463D94E637C3A881C4BEEB97 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
@@ -701,6 +712,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
 				INFOPLIST_KEY_CFBundleDisplayName = RayMol;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -710,8 +722,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
-				PRODUCT_NAME = PyMOLViewer;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = io.raymol.RayMol;
+				PRODUCT_NAME = RayMol;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -721,6 +734,7 @@
 		4D9ACD9B455938F3397B8DB7 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -728,6 +742,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
 				INFOPLIST_KEY_CFBundleDisplayName = RayMol;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -737,8 +752,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
-				PRODUCT_NAME = PyMOLViewer;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = io.raymol.RayMol;
+				PRODUCT_NAME = RayMol;
 				SDKROOT = macosx;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -747,12 +763,19 @@
 		5DC18310572E12E35999B821 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PyMOLViewer/RayMol.entitlements;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VT99UQUQ89;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
 				INFOPLIST_KEY_CFBundleDisplayName = RayMol;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -762,8 +785,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
-				PRODUCT_NAME = PyMOLViewer;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = io.raymol.RayMol;
+				PRODUCT_NAME = RayMol;
 				SDKROOT = macosx;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 			};
@@ -781,7 +805,7 @@
 				);
 				OTHER_CPLUSPLUSFLAGS = "";
 				OTHER_LDFLAGS = "";
-				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.raymol.RayMol.uitests;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -792,12 +816,19 @@
 		659B60F0D963E0707D0A53CB /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PyMOLViewer/RayMol.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = VT99UQUQ89;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
 				INFOPLIST_KEY_CFBundleDisplayName = RayMol;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -807,8 +838,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer;
-				PRODUCT_NAME = PyMOLViewer;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = io.raymol.RayMol;
+				PRODUCT_NAME = RayMol;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -817,7 +849,7 @@
 		};
 		76B7E9DB75E073D1E60928FA /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_75E4AA80-56FC-47D9-92CE-3ABAD3D35ACE" /* PyMOLBridge.xcconfig */;
+			baseConfigurationReference = "TEMP_83615732-CAED-4B91-BD05-55D79A93458A" /* PyMOLBridge.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -892,7 +924,7 @@
 				);
 				OTHER_CPLUSPLUSFLAGS = "";
 				OTHER_LDFLAGS = "";
-				PRODUCT_BUNDLE_IDENTIFIER = org.pymol.viewer.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.raymol.RayMol.uitests;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -902,7 +934,7 @@
 		};
 		D8F44FDFF036013D2F03BA83 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_75E4AA80-56FC-47D9-92CE-3ABAD3D35ACE" /* PyMOLBridge.xcconfig */;
+			baseConfigurationReference = "TEMP_83615732-CAED-4B91-BD05-55D79A93458A" /* PyMOLBridge.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

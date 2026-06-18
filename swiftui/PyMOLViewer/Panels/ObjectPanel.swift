@@ -1876,17 +1876,20 @@ struct SettingsSheet: View {
             }.padding(16)
 
             // Experimental features (app-level). AI Assistant is opt-in.
-            VStack(alignment: .leading, spacing: 4) {
-                Text("EXPERIMENTAL")
-                    .font(.caption2).fontWeight(.semibold).foregroundStyle(.secondary)
-                Toggle(isOn: $aiAgentEnabled) {
-                    Label("AI Assistant (Raymond)", systemImage: "bubble.left.and.bubble.right")
+            // Hidden on the iOS App Store restricted build (guideline 2.5.2).
+            if !RayMolBuild.iosRestricted {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("EXPERIMENTAL")
+                        .font(.caption2).fontWeight(.semibold).foregroundStyle(.secondary)
+                    Toggle(isOn: $aiAgentEnabled) {
+                        Label("AI Assistant (Raymond)", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    Text("Adds the Raymond AI panel that can drive RayMol. Requires your own API key.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
-                Text("Adds the Raymond AI panel that can drive RayMol. Requires your own API key.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.bottom, 10)
+                Divider()
             }
-            .padding(.horizontal, 16).padding(.bottom, 10)
-            Divider()
 
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)

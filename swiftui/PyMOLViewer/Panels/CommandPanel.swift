@@ -7,6 +7,11 @@ import UIKit
 #endif
 
 struct CommandPanel: View {
+    // When false, the command-input bar is hidden and only the read-only log
+    // shows. Used by the iOS App Store "restricted" build (guideline 2.5.2) to
+    // remove the user-facing interpreter while keeping feedback visible.
+    var showInput: Bool = true
+
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager
 
@@ -27,29 +32,31 @@ struct CommandPanel: View {
             LogView(entries: engine.feedbackLog, textColor: logTextColor,
                     font: termFont, bg: bgColor)
 
-            Divider()
-                .background(Color.gray.opacity(0.4))
+            if showInput {
+                Divider()
+                    .background(Color.gray.opacity(0.4))
 
-            // Command input bar
-            HStack(spacing: 4) {
-                Text("RayMol>")
-                    .font(termFont)
-                    .foregroundColor(promptColor)
+                // Command input bar
+                HStack(spacing: 4) {
+                    Text("RayMol>")
+                        .font(termFont)
+                        .foregroundColor(promptColor)
 
-                CommandTextField(
-                    text: $commandText,
-                    textColor: logTextColor,
-                    bgColor: bgColor,
-                    fontSize: CGFloat(theme.terminalFont.size),
-                    onSubmit: submitCommand,
-                    onUpArrow: historyBack,
-                    onDownArrow: historyForward,
-                    onComplete: { engine.complete($0) }
-                )
+                    CommandTextField(
+                        text: $commandText,
+                        textColor: logTextColor,
+                        bgColor: bgColor,
+                        fontSize: CGFloat(theme.terminalFont.size),
+                        onSubmit: submitCommand,
+                        onUpArrow: historyBack,
+                        onDownArrow: historyForward,
+                        onComplete: { engine.complete($0) }
+                    )
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(bgColor)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(bgColor)
         }
         .background(bgColor)
     }

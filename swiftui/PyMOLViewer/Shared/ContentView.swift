@@ -10,6 +10,21 @@ import AppKit
 import UIKit
 #endif
 
+// App Store build configuration. `iosRestricted` is the iOS App Store fallback:
+// when the `RAYMOL_IOS_APPSTORE_RESTRICTED` compile flag is set, the iOS build
+// hides the command-line input + Raymond to satisfy App Review guideline 2.5.2
+// (no user-supplied/LLM-generated code execution). Default OFF — both surfaces
+// ship. macOS is never restricted (the flag is gated to os(iOS)).
+enum RayMolBuild {
+    static let iosRestricted: Bool = {
+        #if os(iOS) && RAYMOL_IOS_APPSTORE_RESTRICTED
+        return true
+        #else
+        return false
+        #endif
+    }()
+}
+
 struct ContentView: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager
@@ -24,6 +39,9 @@ struct ContentView: View {
     // ALL Raymond UI is hidden (panel, tabs, toggles, driving overlay). Enabled
     // via Settings → Experimental. Persisted app-wide.
     @AppStorage("raymol.experimental.aiAgent") private var aiAgentEnabled = false
+    // Effective Raymond availability: the user toggle AND not the iOS App Store
+    // restricted build (which removes Raymond for guideline 2.5.2).
+    private var aiOn: Bool { aiAgentEnabled && !RayMolBuild.iosRestricted }
 
     // Export menu state. exportRayTraced persists across launches; when on, all
     // image exports are ray-traced (AO + shadows) regardless of the live view.
@@ -73,7 +91,7 @@ struct ContentView: View {
     // Covers the entire window/screen (including side panels) and blocks input.
     // Attached at the same points as busyOverlay in both layouts.
     @ViewBuilder private var raymondOverlay: some View {
-        if aiAgentEnabled && engine.chatBusy {
+        if aiOn && engine.chatBusy {
             RaymondDrivingOverlay()
                 .transition(.opacity)
         }
@@ -167,7 +185,7 @@ struct ContentView: View {
             // each is hideable via the toolbar toggles.
             VSplitView {
                 if showCommandPanel {
-                    CommandPanel()
+                    CommandPanel(showInput: !RayMolBuild.iosRestricted)
                         .frame(minHeight: 44, idealHeight: 80, maxHeight: 300)
                 }
 
@@ -211,14 +229,14 @@ struct ContentView: View {
                     .environmentObject(engine)
                     .environmentObject(themeManager)
                     .frame(width: 340)
-            } else if showObjectPanel || (showChatPanel && aiAgentEnabled) {
+            } else if showObjectPanel || (showChatPanel && aiOn) {
                 VStack(spacing: 0) {
                     if showObjectPanel {
                         ObjectPanel()
                             .frame(minHeight: 150)
                     }
 
-                    if showChatPanel && aiAgentEnabled {
+                    if showChatPanel && aiOn {
                         Divider()
                         ChatPanel()
                             .frame(minHeight: 200)
@@ -602,7 +620,7 @@ struct ContentView: View {
         // land* state; iPad uses the show* bools (see consoleBinding etc.).
         let cTerm = consoleBinding.wrappedValue
         let cObj  = objectsBinding.wrappedValue
-        let cRay  = raymondBinding.wrappedValue && aiAgentEnabled   // experimental gate
+        let cRay  = raymondBinding.wrappedValue && aiOn   // experimental + 2.5.2 gate
         let showRight = cObj || cRay
         // Portrait bottom-panel height (Objects + Raymond below the viewer),
         // resizable via the same divider/panelFrac the iPhone layout uses.
@@ -614,7 +632,7 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     if cTerm {
-                        CommandPanel().frame(height: clampedTermH)
+                        CommandPanel(showInput: !RayMolBuild.iosRestricted).frame(height: clampedTermH)
                         termResizeDivider(maxTerm: maxTerm)
                     }
                     if engine.sequenceVisible {
@@ -649,7 +667,7 @@ struct ContentView: View {
             // Raymond panel BELOW it (side-by-side, resizable).
             VStack(spacing: 0) {
                 if cTerm {
-                    CommandPanel().frame(height: clampedTermH)
+                    CommandPanel(showInput: !RayMolBuild.iosRestricted).frame(height: clampedTermH)
                     termResizeDivider(maxTerm: maxTerm)
                 }
                 if engine.sequenceVisible {
@@ -879,13 +897,13 @@ struct ContentView: View {
     // (Sequence is its own tab now — not a strip and not a toolbar/Export item).
     private var panelContent: some View {
         TabView(selection: $selectedTab) {
-            CommandPanel()
+            CommandPanel(showInput: !RayMolBuild.iosRestricted)
                 .tabItem { Label("Console", systemImage: "terminal") }.tag(0)
             ObjectPanel()
                 .tabItem { Label("Objects", systemImage: "cube") }.tag(1)
             SequencePanel()
                 .tabItem { Label("Sequence", systemImage: "textformat.abc") }.tag(2)
-            if kShowChatTab && aiAgentEnabled {
+            if kShowChatTab && aiOn {
                 ChatPanel()
                     .tabItem { Label("Raymond", systemImage: "bubble.left.and.bubble.right") }.tag(3)
             }
