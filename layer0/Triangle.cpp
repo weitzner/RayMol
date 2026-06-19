@@ -41,7 +41,10 @@ Z* -------------------------------------------------------------------
 #include"Feedback.h"
 #include"Util.h"
 
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 typedef struct {
   int index;
@@ -1619,11 +1622,11 @@ static int TriangleFill(TriangleSurfaceRec * II, float *v, float *vn, int n,
   TriangleSurfaceRec *I = II;
   int ok = true;
   int lastTri, lastTri2, lastTri3;
-  int a, i, j, h, k, l;
-  float minDist2, *v0, *n0, *n1;
+  int a;
+  float minDist2;
   int i1, i2 = 0;
   int n_pass = 0;
-  int first_vert = 0, first_vert_used = 0;
+  int first_vert_used = 0;
 
   PRINTFD(I->G, FB_Triangle)
     " TriangleFill-Debug: entered: n=%d\n", n ENDFD;
@@ -1636,6 +1639,56 @@ static int TriangleFill(TriangleSurfaceRec * II, float *v, float *vn, int n,
   double seedscan_s = 0.0;
   long seedscan_count = 0;
   long seedscan_active_iters = 0;
+
+  /* Prototype (PYMOL_TRI_WORKLIST): instead of rescanning all n vertices to
+   * find each seed, keep a compacting list of vertices still eligible to seed
+   * (edgeStatus==0). Candidates are examined in the same increasing-index
+   * order as the full scan and only finished vertices are dropped, so the
+   * selected seed -- and therefore the resulting mesh -- is identical; later
+   * scans simply get cheaper as the candidate set shrinks. */
+  const char* wl_env = getenv("PYMOL_TRI_WORKLIST");
+  const bool use_worklist =
+      wl_env && *wl_env && strcmp(wl_env, "0") && strcmp(wl_env, "off");
+  std::vector<int> seedCand;
+  int nSeedCand = 0;
+  if (use_worklist) {
+    seedCand.resize(n);
+    for (a = 0; a < n; a++)
+      seedCand[a] = a;
+    nSeedCand = n;
+  }
+
+  /* per-candidate seed examination; identical logic for both code paths */
+  auto examineSeed = [&](int a) {
+    if (fill_timing)
+      seedscan_active_iters++;
+    float* lv0 = v + a * 3;
+    float* ln0 = vn + 3 * a;
+    int lh, lk, ll, ii, jj;
+    MapLocus(map, lv0, &lh, &lk, &ll);
+    ii = *(MapEStart(map, lh, lk, ll));
+    if (ii) {
+      jj = map->EList[ii++];
+      int first_vert = jj;
+      while (jj >= 0) {
+        if (jj != a) {
+          float dif2 = diffsq3f(v + 3 * jj, lv0);
+          if (dif2 < minDist2)
+            if (I->vertActive[a] == -1)
+              if (TriangleEdgeStatus(I, a, jj) >= 0) {
+                float* ln1 = vn + 3 * jj;
+                if (dot_product3f(ln0, ln1) > 0.5) {
+                  minDist2 = dif2;
+                  i1 = a;
+                  i2 = jj;
+                  first_vert_used = first_vert;
+                }
+              }
+        }
+        jj = map->EList[ii++];
+      }
+    }
+  };
 
   lastTri3 = -1;
   while(ok && (lastTri3 != I->nTri)) {
@@ -1652,36 +1705,20 @@ static int TriangleFill(TriangleSurfaceRec * II, float *v, float *vn, int n,
       double _ss0 = fill_timing ? UtilGetSeconds(I->G) : 0.0;
       if (fill_timing)
         seedscan_count++;
-      for(a = 0; a < n; a++) {
-        if(!I->edgeStatus[a]) {
-          if (fill_timing)
-            seedscan_active_iters++;
-          v0 = v + a * 3;
-          n0 = vn + 3 * a;
-
-          MapLocus(map, v0, &h, &k, &l);
-          i = *(MapEStart(map, h, k, l));
-          if(i) {
-            j = map->EList[i++];
-            first_vert = j;
-            while(j >= 0) {
-              if(j != a) {
-                float dif2 = diffsq3f(v + 3 * j, v0);
-                if(dif2 < minDist2)
-                  if(I->vertActive[a] == -1)
-                    if(TriangleEdgeStatus(I, a, j) >= 0) {      /* can we put a triangle here? */
-                      n1 = vn + 3 * j;
-                      if(dot_product3f(n0, n1) > 0.5) { /* start with vertices pointing the same way */
-                        minDist2 = dif2;
-                        i1 = a;
-                        i2 = j;
-                        first_vert_used = first_vert;
-                      }
-                    }
-              }
-              j = map->EList[i++];
-            }
-          }
+      if (use_worklist) {
+        int wr = 0;
+        for (int idx = 0; idx < nSeedCand; idx++) {
+          a = seedCand[idx];
+          if (I->edgeStatus[a])
+            continue; /* permanently connected: drop from candidate list */
+          seedCand[wr++] = a; /* keep, preserving increasing-index order */
+          examineSeed(a);
+        }
+        nSeedCand = wr;
+      } else {
+        for (a = 0; a < n; a++) {
+          if (!I->edgeStatus[a])
+            examineSeed(a);
         }
       }
       if (fill_timing)
@@ -2460,6 +2497,30 @@ std::vector<int> TrianglePointsToSurface(PyMOLGlobals* G, float* v, float* vn,
       MapFree(map);
 
       result = std::move(I->tri);
+
+      /* env-gated (PYMOL_TRI_CHECKSUM): hash the triangulation output so the
+       * worklist prototype can be proven bit-identical to the full scan */
+      if (getenv("PYMOL_TRI_CHECKSUM")) {
+        auto fnv = [](const void* data, size_t bytes) {
+          uint64_t h = 1469598103934665603ULL;
+          const unsigned char* p = (const unsigned char*) data;
+          for (size_t z = 0; z < bytes; z++) {
+            h ^= p[z];
+            h *= 1099511628211ULL;
+          }
+          return h;
+        };
+        uint64_t hT = fnv(result.data(), result.size() * sizeof(int));
+        uint64_t hS = fnv(stripPtr.data(), stripPtr.size() * sizeof(int));
+        uint64_t hVN = fnv(vn, sizeof(float) * 3 * n);
+        fprintf(stderr,
+            "TRI_CHECKSUM nTri=%d triN=%zu stripN=%zu hT=%016llx hS=%016llx "
+            "hVN=%016llx\n",
+            *nTriPtr, result.size(), stripPtr.size(),
+            (unsigned long long) hT, (unsigned long long) hS,
+            (unsigned long long) hVN);
+        fflush(stderr);
+      }
     }
   }
   if(!ok) {
