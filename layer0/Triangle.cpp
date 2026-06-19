@@ -41,6 +41,8 @@ Z* -------------------------------------------------------------------
 #include"Feedback.h"
 #include"Util.h"
 
+#include <cstdlib>
+
 typedef struct {
   int index;
   int value;
@@ -1629,6 +1631,12 @@ static int TriangleFill(TriangleSurfaceRec * II, float *v, float *vn, int n,
   auto* map = I->map;
   auto* cache = &I->map_cache;
 
+  /* env-gated: separate the global seed-finding scan from mesh growth */
+  const bool fill_timing = getenv("PYMOL_SURFACE_TIMING") != nullptr;
+  double seedscan_s = 0.0;
+  long seedscan_count = 0;
+  long seedscan_active_iters = 0;
+
   lastTri3 = -1;
   while(ok && (lastTri3 != I->nTri)) {
     lastTri3 = I->nTri;
@@ -1641,8 +1649,13 @@ static int TriangleFill(TriangleSurfaceRec * II, float *v, float *vn, int n,
       i1 = -1;
       minDist2 = I->maxEdgeLenSq;
 
+      double _ss0 = fill_timing ? UtilGetSeconds(I->G) : 0.0;
+      if (fill_timing)
+        seedscan_count++;
       for(a = 0; a < n; a++) {
         if(!I->edgeStatus[a]) {
+          if (fill_timing)
+            seedscan_active_iters++;
           v0 = v + a * 3;
           n0 = vn + 3 * a;
 
@@ -1671,6 +1684,8 @@ static int TriangleFill(TriangleSurfaceRec * II, float *v, float *vn, int n,
           }
         }
       }
+      if (fill_timing)
+        seedscan_s += UtilGetSeconds(I->G) - _ss0;
       if(i1 >= 0) {
 
         if(!cache->cached(first_vert_used)) {
@@ -1804,6 +1819,13 @@ static int TriangleFill(TriangleSurfaceRec * II, float *v, float *vn, int n,
   }
   PRINTFD(I->G, FB_Triangle)
     " TriangleFill: leaving... nTri=%d nActive=%d\n", I->nTri, I->nActive ENDFD;
+  if (fill_timing) {
+    fprintf(stderr,
+        "SURFACE_TIMING: stage=tri.fill.seedscan ms=%.3f scans=%ld "
+        "active_iters=%ld n=%d\n",
+        seedscan_s * 1000.0, seedscan_count, seedscan_active_iters, n);
+    fflush(stderr);
+  }
   if(I->G->Interrupt)
     ok = false;
   return ok;
@@ -2295,6 +2317,21 @@ std::vector<int> TrianglePointsToSurface(PyMOLGlobals* G, float* v, float* vn,
       I->G = G;
       I->N = n;
       I->nActive = 0;
+
+      /* env-gated phase profiling: set PYMOL_SURFACE_TIMING to emit a
+       * per-phase breakdown of triangulation on stderr */
+      const bool tri_timing = getenv("PYMOL_SURFACE_TIMING") != nullptr;
+      double t_last = tri_timing ? UtilGetSeconds(G) : 0.0;
+      auto lap = [&](const char* name) {
+        if (tri_timing) {
+          double now = UtilGetSeconds(G);
+          fprintf(stderr, "SURFACE_TIMING: stage=tri.%s ms=%.3f\n", name,
+              (now - t_last) * 1000.0);
+          fflush(stderr);
+          t_last = now;
+        }
+      };
+
       I->activeEdge = VLAlloc(int, 1000);
       CHECKOK(ok, I->activeEdge);
       if (ok)
@@ -2362,9 +2399,12 @@ std::vector<int> TrianglePointsToSurface(PyMOLGlobals* G, float* v, float* vn,
       }
       }
 
+      lap("setup");
+
       if(ok) {
         ok = TriangleFill(I.get(), v, vn, n, true);
       }
+      lap("fill");
 
       if(ok) {
 
@@ -2377,9 +2417,11 @@ std::vector<int> TrianglePointsToSurface(PyMOLGlobals* G, float* v, float* vn,
 
       if(ok)
         ok = TriangleTxfFolds(I.get(), v, vn, n);
+      lap("txffolds");
 
       if(ok)
         ok = TriangleFixProblems(I.get(), v, vn, n);
+      lap("fixproblems");
 
       if(Feedback(G, FB_Triangle, FB_Debugging)) {
         for(a = 0; a < n; a++)
@@ -2391,18 +2433,21 @@ std::vector<int> TrianglePointsToSurface(PyMOLGlobals* G, float* v, float* vn,
         if(cavity_mode) {
           ok = TriangleBruteForceClosure(I.get(), v, vn, n, maxEdgeLen);
         } else {
-          ok = TriangleBruteForceClosure(I.get(), v, vn, n, cutoff * 3);       
+          ok = TriangleBruteForceClosure(I.get(), v, vn, n, cutoff * 3);
         }
       }
-                                                           
+      lap("closure");
+
       /* abandon algorithm, just CLOSE THOSE GAPS! */
 
       if(ok)
         ok = TriangleAdjustNormals(I.get(), v, vn, n, true);
+      lap("adjnormals");
 
       if(ok) {
         stripPtr = TriangleMakeStripVLA(I.get(), v, vn, n);
       }
+      lap("makestrip");
 
       (*nTriPtr) = I->nTri;
       VLAFreeP(I->activeEdge);
