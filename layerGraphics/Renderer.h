@@ -290,6 +290,14 @@ public:
   {
   }
 
+  // PyMOL lighting model (ambient/direct/reflect/specular/shininess). Default:
+  // no-op (the GL renderer reads these settings itself). The Metal renderer
+  // uploads them into its lit shaders so the Scene lighting sliders take effect.
+  virtual void setLightingParams(float ambient, float direct, float reflect,
+      float specular, float shininess)
+  {
+  }
+
   // MSAA sample count for the scene (opaque) pass. SceneRenderMetal calls this
   // each frame from the metal_msaa setting (4 = on, 1 = off). The renderer
   // stashes it and applies the rebuild at the next frame's setDrawable (before

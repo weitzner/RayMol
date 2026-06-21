@@ -1007,6 +1007,16 @@ void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
   _rtEnabled = (rtEnabled && _rtSupported && !noRT) ? 1 : 0;
 }
 
+void RendererMetal::setLightingParams(float ambient, float direct,
+    float reflect, float specular, float shininess)
+{
+  _lightAmbient = ambient;
+  _lightDirect = direct;
+  _lightReflect = reflect;
+  _lightSpecular = specular;
+  _lightShininess = shininess;
+}
+
 // ---------------------------------------------------------------------------
 #pragma mark - Real-time ray tracing: acceleration structures
 // ---------------------------------------------------------------------------
@@ -2589,6 +2599,12 @@ void RendererMetal::endBatch()
   uniforms.pointSize = _pointSize > 0.0f ? _pointSize : 1.0f;
   uniforms._pad[0] = uniforms._pad[1] = uniforms._pad[2] = 0.0f;
   [_encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+  // Lighting (Scene sliders) for the lit vbo_fragment / vbo_fragment_oit at
+  // fragment buffer(0). Harmless for the unlit/flat pipelines (they don't read
+  // it). Scoped so the local doesn't clash across multiple draw paths.
+  { struct { float a, d, r, s, sh; } _lt = { _lightAmbient, _lightDirect,
+      _lightReflect, _lightSpecular, _lightShininess };
+    [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
 
   // Always use the built-in batch pipeline for batch rendering.
   // _currentPipeline is for VBO draws with a different vertex layout.
@@ -2729,19 +2745,20 @@ struct VBOVertexOut {
   float3 normalEye;   // eye-space normal, interpolated → per-fragment (Phong)
 };
 
-// PyMOL default two-light model (matches the sphere/cylinder impostors and
-// data/shaders/compute_color_for_light.fs): ambient .14, headlight direct .45,
-// key reflect .481, specular .5, shininess 55. Two-sided: the interpolated
+// PyMOL two-light model. The ambient/direct/reflect/specular/shininess come
+// from the live PyMOL settings (Scene lighting sliders) via LightU, instead of
+// hard-coded constants, so the sliders take effect. Two-sided: the interpolated
 // normal is flipped to face the viewer so cartoon undersides / surface
 // interiors light up instead of going dark.
-static float3 vbo_shade(float3 baseColor, float3 nEye) {
+struct LightU { float ambient, direct, reflect, spec, shininess; };
+static float3 vbo_shade(float3 baseColor, float3 nEye, LightU lt) {
   float3 normal = normalize(nEye);
   if (normal.z < 0.0) normal = -normal;
-  const float ambient    = 0.14;
-  const float direct     = 0.45;
-  const float reflect    = 0.481;
-  const float spec_value = 0.5;
-  const float shininess  = 55.0;
+  float ambient    = lt.ambient;
+  float direct     = lt.direct;
+  float reflect    = lt.reflect;
+  float spec_value = lt.spec;
+  float shininess  = max(lt.shininess, 1.0);
   const float3 L0 = float3(0.0, 0.0, 1.0);
   const float3 L1 = normalize(float3(0.4, 0.4, 1.0));
   float intensity = ambient;
@@ -2791,9 +2808,10 @@ vertex VBOVertexOut vbo_vertex(
   return out;
 }
 
-fragment float4 vbo_fragment(VBOVertexOut in [[stage_in]])
+fragment float4 vbo_fragment(VBOVertexOut in [[stage_in]],
+    constant LightU& lt [[buffer(0)]])
 {
-  return float4(vbo_shade(in.color.rgb, in.normalEye), in.color.a);
+  return float4(vbo_shade(in.color.rgb, in.normalEye, lt), in.color.a);
 }
 
 // Unlit: flat color, no lighting. Used for lines/ribbon (GL_LINES) and dots
@@ -2864,9 +2882,9 @@ vertex CapFillOut cap_fill_vertex(uint vid [[vertex_id]]) {
 fragment float4 cap_fill_fragment(constant float4& interiorColor [[buffer(0)]]) {
   // The cut cross-section faces the viewer, so light it with a +Z normal
   // through the shared two-light model (matches desktop's interior_normal
-  // {0,0,1}). Without this the cap is a flat, unlit, dark patch while the
-  // surface around it is lit — "light not reaching the interior".
-  return float4(vbo_shade(interiorColor.rgb, float3(0.0, 0.0, 1.0)), interiorColor.a);
+  // {0,0,1}). Caps use the default lighting (a minor flat fill).
+  LightU lt = {0.14, 0.45, 0.481, 0.5, 55.0};
+  return float4(vbo_shade(interiorColor.rgb, float3(0.0, 0.0, 1.0), lt), interiorColor.a);
 }
 
 // Weighted-blended OIT output (McGuire/Bavoil). Transparent geometry writes
@@ -2880,9 +2898,10 @@ static float oit_weight(float a, float z) {
   return clamp(pow(min(1.0, a * 10.0) + 0.01, 3.0) * 1e8 *
                pow(1.0 - z * 0.9, 3.0), 1e-2, 3e3);
 }
-fragment OITFragOut vbo_fragment_oit(VBOVertexOut in [[stage_in]])
+fragment OITFragOut vbo_fragment_oit(VBOVertexOut in [[stage_in]],
+    constant LightU& lt [[buffer(0)]])
 {
-  float4 c = float4(vbo_shade(in.color.rgb, in.normalEye), in.color.a);
+  float4 c = float4(vbo_shade(in.color.rgb, in.normalEye, lt), in.color.a);
   float w = oit_weight(c.a, in.position.z);
   OITFragOut o;
   o.accum = float4(c.rgb * c.a, c.a) * w;
@@ -3547,6 +3566,12 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   uniforms.pointSize = _pointSize > 0.0f ? _pointSize : 1.0f;
   uniforms._pad[0] = uniforms._pad[1] = uniforms._pad[2] = 0.0f;
   [_encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+  // Lighting (Scene sliders) for the lit vbo_fragment / vbo_fragment_oit at
+  // fragment buffer(0). Harmless for the unlit/flat pipelines (they don't read
+  // it). Scoped so the local doesn't clash across multiple draw paths.
+  { struct { float a, d, r, s, sh; } _lt = { _lightAmbient, _lightDirect,
+      _lightReflect, _lightSpecular, _lightShininess };
+    [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
 
   // Flat (uniform-colored) geometry: supply the color the flat shader reads
   // from buffer 2. No per-vertex color is available here (the GL path would set
@@ -3596,6 +3621,12 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
       [_encoder setCullMode:MTLCullModeNone];
       [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
       [_encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:1];
+  // Lighting (Scene sliders) for the lit vbo_fragment / vbo_fragment_oit at
+  // fragment buffer(0). Harmless for the unlit/flat pipelines (they don't read
+  // it). Scoped so the local doesn't clash across multiple draw paths.
+  { struct { float a, d, r, s, sh; } _lt = { _lightAmbient, _lightDirect,
+      _lightReflect, _lightSpecular, _lightShininess };
+    [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
       [_encoder drawPrimitives:toMTL(mode)
                    vertexStart:0
                    vertexCount:static_cast<NSUInteger>(vertexCount)];
@@ -3861,6 +3892,8 @@ struct SphereU {
   float depthZeroToOne; // 1 if clip Z already [0,1]; else apply 0.5+0.5 remap
   float interiorCap;    // 1 = cap the slab cross-section with a solid interior color
   float4 interiorColor; // rgb cap color; .a > 0.5 => use it (else atom*0.45)
+  // PyMOL lighting model (Scene sliders): ambient/direct/reflect/spec/shininess.
+  float lAmbient, lDirect, lReflect, lSpecular, lShininess;
 };
 struct SphereVOut {
   float4 position [[position]];
@@ -3963,13 +3996,13 @@ static void sphere_shade(SphereVOut in, constant SphereU& u,
   }
   float3 normal = normalize(ipoint - in.sphere_center);
 
-  // PyMOL default two-light model (see data/shaders/compute_color_for_light.fs):
-  // ambient .14, headlight direct .45, key reflect .481, specular .5, shine 55.
-  const float ambient    = 0.14;
-  const float direct     = 0.45;
-  const float reflect    = 0.481;
-  const float spec_value = 0.5;
-  const float shininess  = 55.0;
+  // PyMOL two-light model, driven by the live ambient/direct/reflect/specular/
+  // shininess settings (Scene sliders) uploaded in SphereU.
+  float ambient    = u.lAmbient;
+  float direct     = u.lDirect;
+  float reflect    = u.lReflect;
+  float spec_value = u.lSpecular;
+  float shininess  = max(u.lShininess, 1.0);
   const float3 L0 = float3(0.0, 0.0, 1.0);
   const float3 L1 = normalize(float3(0.4, 0.4, 1.0));
   float intensity = ambient;
@@ -4171,9 +4204,13 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
     float depthZeroToOne;
     float interiorCap;
     float interiorColor[4];
+    float lAmbient, lDirect, lReflect, lSpecular, lShininess;
   } u;
   std::memcpy(u.modelview, _modelviewMatrix.data(), 64);
   std::memcpy(u.projection, _projectionMatrix.data(), 64);
+  u.lAmbient = _lightAmbient; u.lDirect = _lightDirect;
+  u.lReflect = _lightReflect; u.lSpecular = _lightSpecular;
+  u.lShininess = _lightShininess;
   u.sphere_size_scale = call.sphereSizeScale;
   u.ortho = (float)call.ortho;
   // Projection is GL-convention ([-1,1] clip Z): remap to [0,1] for Metal's
@@ -4229,6 +4266,8 @@ struct CylU {
   float inv_height;
   float interiorCap;    // 1 = cap the slab cross-section with a solid interior color
   float4 interiorColor; // rgb cap color; .a > 0.5 => use it (else bond*0.45)
+  // PyMOL lighting model (Scene sliders): ambient/direct/reflect/spec/shininess.
+  float lAmbient, lDirect, lReflect, lSpecular, lShininess;
 };
 struct CylVOut {
   float4 position [[position]];
@@ -4405,12 +4444,12 @@ static void cyl_shade(CylVOut in, constant CylU& u,
     return;
   }
 
-  // PyMOL default two-light model (identical to the sphere impostor).
-  const float ambient    = 0.14;
-  const float direct     = 0.45;
-  const float reflect    = 0.481;
-  const float spec_value = 0.5;
-  const float shininess  = 55.0;
+  // PyMOL two-light model, driven by the live lighting settings in CylU.
+  float ambient    = u.lAmbient;
+  float direct     = u.lDirect;
+  float reflect    = u.lReflect;
+  float spec_value = u.lSpecular;
+  float shininess  = max(u.lShininess, 1.0);
   const float3 L0 = float3(0.0, 0.0, 1.0);
   const float3 L1 = normalize(float3(0.4, 0.4, 1.0));
   float intensity = ambient;
@@ -4624,9 +4663,13 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
     float inv_height;
     float interiorCap;
     float interiorColor[4];
+    float lAmbient, lDirect, lReflect, lSpecular, lShininess;
   } u;
   std::memcpy(u.modelview, _modelviewMatrix.data(), 64);
   std::memcpy(u.projection, _projectionMatrix.data(), 64);
+  u.lAmbient = _lightAmbient; u.lDirect = _lightDirect;
+  u.lReflect = _lightReflect; u.lSpecular = _lightSpecular;
+  u.lShininess = _lightShininess;
   u.uni_radius = call.uniRadius;
   u.ortho = (float)call.ortho;
   u.depthZeroToOne = 0.0f; // GL-convention clip Z (matches the sphere path)
@@ -4707,14 +4750,17 @@ vertex TubeOut bezier_tube_vertex(
   return o;
 }
 
-fragment float4 bezier_tube_fragment(TubeOut in [[stage_in]]) {
-  // PyMOL default two-light model (same as the impostors). Two-sided via the
-  // view vector: orient the normal toward the camera (eye-space +z) so both the
-  // outer surface and the open tube ends/interior are lit, never black.
+struct LightU { float ambient, direct, reflect, spec, shininess; };
+fragment float4 bezier_tube_fragment(TubeOut in [[stage_in]],
+    constant LightU& lt [[buffer(0)]]) {
+  // PyMOL two-light model driven by the live lighting settings (Scene sliders).
+  // Two-sided via the view vector: orient the normal toward the camera
+  // (eye-space +z) so both the outer surface and the open tube ends/interior
+  // are lit, never black.
   float3 nrm = normalize(in.eyeNormal);
   if (nrm.z < 0.0) nrm = -nrm;
-  const float ambient = 0.14, direct = 0.45, reflectv = 0.481;
-  const float spec_value = 0.5, shininess = 55.0;
+  float ambient = lt.ambient, direct = lt.direct, reflectv = lt.reflect;
+  float spec_value = lt.spec, shininess = max(lt.shininess, 1.0);
   const float3 L0 = float3(0.0,0.0,1.0);
   const float3 L1 = normalize(float3(0.4,0.4,1.0));
   float intensity = ambient, specular = 0.0;
@@ -4840,6 +4886,10 @@ void RendererMetal::drawBezierTubes(const void* cp, size_t dataSize,
   u._p0 = u._p1 = u._p2 = 0.0f;
   u.color[0] = r; u.color[1] = g; u.color[2] = b; u.color[3] = 1.0f;
   [_encoder setVertexBytes:&u length:sizeof(u) atIndex:1];
+  // Lighting (Scene sliders) for bezier_tube_fragment at fragment buffer(0).
+  { struct { float a, d, r, s, sh; } _lt = { _lightAmbient, _lightDirect,
+      _lightReflect, _lightSpecular, _lightShininess };
+    [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
 
   [_encoder setTessellationFactorBuffer:_bezierTessFactors offset:0 instanceStride:0];
   [_encoder drawPatches:4

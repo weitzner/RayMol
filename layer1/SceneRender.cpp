@@ -1977,6 +1977,14 @@ void SceneRenderMetal(PyMOLGlobals* G)
         bg[2], aoEnabled, shadowEnabled, aaEnabled, outlineEnabled, proj[10],
         proj[14], proj[0], proj[5], rtEnabled, tonemapEnabled, exposure,
         rtShadowEnabled);
+    // Lighting model — the Metal lit shaders read these instead of hard-coded
+    // constants, so the Scene-panel lighting sliders take effect.
+    G->Renderer->setLightingParams(
+        SettingGetGlobal_f(G, cSetting_ambient),
+        SettingGetGlobal_f(G, cSetting_direct),
+        SettingGetGlobal_f(G, cSetting_reflect),
+        SettingGetGlobal_f(G, cSetting_specular),
+        SettingGetGlobal_f(G, cSetting_shininess));
     // MSAA: 4x when metal_msaa is on, otherwise single-sample. The renderer
     // stashes this and applies it at the next setDrawable (no encoder open),
     // so toggling at runtime never mismatches an in-flight encoder.

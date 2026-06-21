@@ -151,6 +151,8 @@ public:
       int outlineEnabled, float projA, float projB, float projX,
       float projY, int rtEnabled, int tonemapEnabled = 0,
       float exposure = 1.0f, int rtShadowEnabled = 0) override;
+  void setLightingParams(float ambient, float direct, float reflect,
+      float specular, float shininess) override;
 
   // Letterbox: render the scene into a centered sub-rect of the given aspect
   // (W/H) so a loaded .pse reproduces its saved-viewport framing. 0 = fill.
@@ -401,6 +403,12 @@ private:
   int _tonemapEnabled = 0;
   float _exposure = 1.0f;
   id<MTLRenderPipelineState> _tonemapPipeline = nil;
+  // PyMOL lighting model (cSetting_ambient/direct/reflect/specular/shininess),
+  // set per frame by SceneRenderMetal and uploaded into each lit shader's
+  // uniform so the Scene-panel lighting sliders actually affect the render.
+  // Defaults match the values the shaders previously hard-coded.
+  float _lightAmbient = 0.14f, _lightDirect = 0.45f, _lightReflect = 0.481f;
+  float _lightSpecular = 0.5f, _lightShininess = 55.0f;
   float _projA = -1.f, _projB = 0.f;  // projection[10], projection[14]
   float _projX = 1.f, _projY = 1.f;   // projection[0], projection[5]
   float _letterboxAspect = 0.f;       // saved-viewport W/H; 0 = fill window
