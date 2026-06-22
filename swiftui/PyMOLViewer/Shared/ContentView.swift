@@ -42,16 +42,6 @@ struct ContentView: View {
     @AppStorage("mouseLegendCollapsed") private var mouseLegendCollapsed = false
     @State private var showObjectPanel = true
     @State private var showCommandPanel = true
-    // Surface the AI chat in the right column by default (the toolbar toggle can
-    // hide it). The backend is wired to the headless ai_chat_swift sink.
-    @State private var showChatPanel = true
-    // Raymond (AI agent) is an EXPERIMENTAL feature, OFF by default. When off,
-    // ALL Raymond UI is hidden (panel, tabs, toggles, driving overlay). Enabled
-    // via Settings → Experimental. Persisted app-wide.
-    @AppStorage("raymol.experimental.aiAgent") private var aiAgentEnabled = false
-    // Effective Raymond availability: the user toggle AND not the iOS App Store
-    // restricted build (which removes Raymond for guideline 2.5.2).
-    private var aiOn: Bool { aiAgentEnabled && !RayMolBuild.iosRestricted }
 
     // Export menu state. exportRayTraced persists across launches; when on, all
     // image exports are ray-traced (AO + shadows) regardless of the live view.
@@ -94,16 +84,6 @@ struct ContentView: View {
     @ViewBuilder private var busyOverlay: some View {
         if engine.isBusy {
             CalculatingOverlay(label: engine.busyLabel)
-        }
-    }
-
-    // Full-app frosted-glass overlay shown whenever the AI ("Raymond") is busy.
-    // Covers the entire window/screen (including side panels) and blocks input.
-    // Attached at the same points as busyOverlay in both layouts.
-    @ViewBuilder private var raymondOverlay: some View {
-        if aiOn && engine.chatBusy {
-            RaymondDrivingOverlay()
-                .transition(.opacity)
         }
     }
 
@@ -252,25 +232,17 @@ struct ContentView: View {
                     .environmentObject(engine)
                     .environmentObject(themeManager)
                     .frame(width: 340)
-            } else if showObjectPanel || (showChatPanel && aiOn) {
+            } else if showObjectPanel {
                 VStack(spacing: 0) {
                     if showObjectPanel {
                         ObjectPanel()
                             .frame(minHeight: 150)
-                    }
-
-                    if showChatPanel && aiOn {
-                        Divider()
-                        ChatPanel()
-                            .frame(minHeight: 200)
                     }
                 }
                 .frame(width: 300)
             }
         }
         .overlay { busyOverlay }
-        .overlay { raymondOverlay }
-        .animation(.easeInOut(duration: 0.2), value: engine.chatBusy)
         .alert("Fetch from PDB", isPresented: $showMacFetch) {
             TextField("PDB ID (e.g. 1ubq)", text: $macFetchID)
             Button("Fetch") { macFetch() }
@@ -377,9 +349,6 @@ struct ContentView: View {
     // Test affordance (PYMOL_AUTOEXPORTMOVIE="mp4|gif,first,last"): run a headless
     // movie export and copy the result to /tmp so the harness can validate it.
     @StateObject private var exportTester = MovieExporter()
-    // AI Chat tab. The backend (pymol.ai_chat → Claude/Anthropic) is wired to the
-    // headless ai_chat_swift sink, so the chat is functional; surface its tab.
-    private let kShowChatTab = true
 
     // Adaptive control surface. Placement + sizing depend on size class AND
     // orientation: a resizable SIDE column only on a regular-width iPad in
@@ -411,13 +380,12 @@ struct ContentView: View {
     @State private var showPanePopover = false
 
     // iPhone-LANDSCAPE pane visibility. Separate from the iPad bools (showCommand/
-    // Object/ChatPanel, which default ON) so iPhone landscape starts MINIMAL —
-    // Console + Objects + Raymond OFF, showing just the viewport (+ the sequence
+    // Object, which default ON) so iPhone landscape starts MINIMAL —
+    // Console + Objects OFF, showing just the viewport (+ the sequence
     // strip if the shared engine.sequenceVisible is on). They persist across
     // rotations (so a pane the user turned on stays on). iPad keeps the show* bools.
     @State private var landConsole = false
     @State private var landObjects = false
-    @State private var landRaymond = false
 
     // iPhone landscape == compact width + compact height (iPad is regular height in
     // both orientations; iPhone portrait is compact width + regular height).
@@ -426,7 +394,6 @@ struct ContentView: View {
     // everywhere else (iPad) uses the shared show* bools.
     private var consoleBinding: Binding<Bool> { isPhoneLandscape ? $landConsole : $showCommandPanel }
     private var objectsBinding: Binding<Bool> { isPhoneLandscape ? $landObjects : $showObjectPanel }
-    private var raymondBinding: Binding<Bool> { isPhoneLandscape ? $landRaymond : $showChatPanel }
 
     // iPad (regular size class) mac-style layout state. The left column stacks the
     // terminal (CommandPanel) on top, the sequence (SequencePanel) under it, then
@@ -556,12 +523,6 @@ struct ContentView: View {
                 }
             }
         }
-        // Cover the ENTIRE screen (viewport + bottom panel/tabs + toolbar) with
-        // the "Raymond is driving" glass while the AI runs. Attached here on the
-        // outer NavigationStack — not on viewportView — so the panels are covered
-        // and blocked too (the busy overlay only needs the viewport).
-        .overlay { raymondOverlay }
-        .animation(.easeInOut(duration: 0.2), value: engine.chatBusy)
         .onAppear {
             initializeEngine()
             maybePresentFirstBootTheme()
@@ -667,8 +628,7 @@ struct ContentView: View {
         // land* state; iPad uses the show* bools (see consoleBinding etc.).
         let cTerm = consoleBinding.wrappedValue
         let cObj  = objectsBinding.wrappedValue
-        let cRay  = raymondBinding.wrappedValue && aiOn   // experimental + 2.5.2 gate
-        let showRight = cObj || cRay
+        let showRight = cObj
         // Portrait bottom-panel height (Objects + Raymond below the viewer),
         // resizable via the same divider/panelFrac the iPhone layout uses.
         let bottomH = min(max(geo.size.height * panelFrac, 220), geo.size.height * 0.55)
@@ -708,10 +668,6 @@ struct ContentView: View {
                     Divider()
                     VStack(spacing: 0) {
                         if cObj { ObjectPanel().frame(maxHeight: .infinity) }
-                        if cRay {
-                            if cObj { Divider() }
-                            ChatPanel().frame(maxHeight: .infinity)
-                        }
                     }
                     // Reserve top space so the floating toolbar doesn't hide the
                     // Objects panel header / first object on iPhone (full-bleed).
@@ -745,10 +701,6 @@ struct ContentView: View {
                     resizeDivider(landscape: false, total: geo.size.height)
                     HStack(spacing: 0) {
                         if cObj { ObjectPanel().frame(maxWidth: .infinity) }
-                        if cRay {
-                            if cObj { Divider() }
-                            ChatPanel().frame(maxWidth: .infinity)
-                        }
                     }
                     .frame(height: bottomH)
                     .background(themeChromeBg)
@@ -866,9 +818,6 @@ struct ContentView: View {
             paneRow("Console",  "terminal",                       consoleBinding)
             paneRow("Sequence", "textformat.abc",                 $engine.sequenceVisible)
             paneRow("Objects",  "cube",                           objectsBinding)
-            if aiAgentEnabled {
-                paneRow("Raymond",  "bubble.left.and.bubble.right",   raymondBinding)
-            }
         }
         .padding(6)
         .frame(minWidth: 240)
@@ -985,10 +934,6 @@ struct ContentView: View {
                 .tabItem { Label("Objects", systemImage: "cube") }.tag(1)
             SequencePanel()
                 .tabItem { Label("Sequence", systemImage: "textformat.abc") }.tag(2)
-            if kShowChatTab && aiOn {
-                ChatPanel()
-                    .tabItem { Label("Raymond", systemImage: "bubble.left.and.bubble.right") }.tag(3)
-            }
         }
         .background(themeChromeBg)
     }
@@ -1364,11 +1309,6 @@ struct ContentView: View {
             Toggle(isOn: $showCommandPanel) {
                 Label("Console", systemImage: "terminal")
             }
-            if aiAgentEnabled {
-                Toggle(isOn: $showChatPanel) {
-                    Label("Raymond", systemImage: "bubble.left.and.bubble.right")
-                }
-            }
         }
     }
 
@@ -1687,95 +1627,3 @@ struct CalculatingOverlay: View {
     }
 }
 
-// Full-bleed frosted-glass overlay shown while the AI assistant ("Raymond") is
-// driving. It (a) blocks ALL interaction with the app underneath, (b) states
-// clearly that Raymond is driving, (c) shows a live elapsed timer, and (d) has
-// a Stop button that cooperatively cancels the running AI turn.
-struct RaymondDrivingOverlay: View {
-    @EnvironmentObject var engine: PyMOLEngine
-
-    // Prefer the steering-wheel glyph; fall back to "sparkles" on OS versions
-    // where it isn't available (kept symbolic so it renders on iOS + macOS).
-    private var iconName: String {
-        #if canImport(UIKit)
-        return UIImage(systemName: "steeringwheel") != nil ? "steeringwheel" : "sparkles"
-        #else
-        return NSImage(systemSymbolName: "steeringwheel", accessibilityDescription: nil) != nil
-            ? "steeringwheel" : "sparkles"
-        #endif
-    }
-
-    private func elapsedString(_ now: Date) -> String {
-        guard let start = engine.chatStartedAt else { return "0:00" }
-        let secs = max(0, Int(now.timeIntervalSince(start)))
-        return String(format: "%d:%02d", secs / 60, secs % 60)
-    }
-
-    var body: some View {
-        ZStack {
-            // Slight dim UNDER the glass for contrast, then the frosted material.
-            // The material rectangle fills the whole screen and, with a content
-            // shape + a no-op gesture, swallows EVERY tap/click/drag so the app
-            // underneath is fully inert. The centered card sits ON TOP in the
-            // ZStack, so the Stop button still receives its own hits.
-            Color.black.opacity(0.12)
-                .ignoresSafeArea()
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .opacity(0.7)            // a tad more transparent — let the scene show through
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0))    // absorb stray hits (opacity doesn't affect hit-testing)
-
-            // Centered card on the glass.
-            VStack(spacing: 18) {
-                Image(systemName: iconName)
-                    .font(.system(size: 52, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.tint)
-
-                Text("Raymond is driving")
-                    .font(.title2).fontWeight(.semibold)
-
-                // Live status subtitle from the backend ("Thinking…"/"Working…").
-                if !engine.chatStatus.isEmpty {
-                    Text(engine.chatStatus)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                // Elapsed timer — ticks once per second from chatStartedAt.
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Label(elapsedString(context.date), systemImage: "clock")
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-
-                Button(role: .destructive) {
-                    engine.stopRaymond()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
-                        .frame(minWidth: 120)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .controlSize(.large)
-                .keyboardShortcut(.cancelAction)
-                .padding(.top, 4)
-            }
-            .padding(32)
-            .frame(maxWidth: 360)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.3), radius: 24, y: 8)
-        }
-        // Belt-and-suspenders: ensure the whole overlay participates in hit
-        // testing (the absorbing rectangle above is what actually blocks the
-        // layers below; the card's Stop button keeps its own hits).
-        .allowsHitTesting(true)
-    }
-}
