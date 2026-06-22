@@ -59,6 +59,8 @@ struct ContentView: View {
     // NSOpenPanel directly, so it needs no presentation state).
     @State private var showMacFetch = false
     @State private var macFetchID = ""
+    @EnvironmentObject private var mcpManager: MCPServerManager
+    @State private var showConnectSheet = false
     #endif
 
     // Export render-option toggles (shared by the iOS + macOS export menus).
@@ -269,8 +271,14 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .raymolFetch)) { _ in macFetchID = ""; showMacFetch = true }
         .onReceive(NotificationCenter.default.publisher(for: .raymolSaveSession)) { _ in saveSession() }
         .onReceive(NotificationCenter.default.publisher(for: .raymolExportImage)) { _ in saveImage(size: exportSize(scale: 2)) }
+        .onReceive(NotificationCenter.default.publisher(for: .mcpOpenConnectSheet)) { _ in
+            showConnectSheet = true
+        }
         .sheet(isPresented: $showCustomSizeSheet) {
             customSizeSheet
+        }
+        .sheet(isPresented: $showConnectSheet) {
+            MCPConnectSheet().environmentObject(mcpManager)
         }
         .preferredColorScheme(themeManager.active.resolvedColorScheme)
         .tint(themeManager.active.tabTint.color)

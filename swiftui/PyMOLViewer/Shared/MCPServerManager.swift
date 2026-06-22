@@ -127,6 +127,93 @@ final class MCPServerManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: w)
     }
 
+    // MARK: Connect (Claude Code)
+
+    var claudeCLIPath: String? { Self.findClaude() }
+
+    @discardableResult
+    func connectClaudeCode() -> (ok: Bool, message: String) {
+        guard isRunning, let port = port else {
+            return (false, "Turn on the MCP server first.")
+        }
+        noteUserInitiatedConnect()
+        installSkillFile()
+        let url = "http://127.0.0.1:\(port)/mcp"
+        let header = "Authorization: Bearer \(token)"
+        let manual = "claude mcp add --transport http raymol \(url) "
+            + "--header \"\(header)\" --scope user"
+        guard let claude = Self.findClaude() else {
+            return (false, "Claude Code CLI not found. Run this in a terminal:\n\n\(manual)")
+        }
+        _ = Self.runClaude(claude, ["mcp", "remove", "raymol", "--scope", "user"])  // idempotent
+        let (code, out) = Self.runClaude(claude, [
+            "mcp", "add", "--transport", "http", "raymol", url,
+            "--header", header, "--scope", "user",
+        ])
+        if code == 0 {
+            return (true, "Connected. In Claude Code, run /mcp (or restart it) to pick up RayMol, "
+                + "then ask it to load and view a structure.")
+        }
+        return (false, "claude exited \(code): \(out)\n\nManual command:\n\(manual)")
+    }
+
+    private func installSkillFile() {
+        let dir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".claude/skills/raymol", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? Self.skillMarkdown.write(to: dir.appendingPathComponent("SKILL.md"),
+                                      atomically: true, encoding: .utf8)
+    }
+
+    private static func findClaude() -> String? {
+        let home = NSHomeDirectory()
+        let candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+                          home + "/.claude/local/claude", home + "/.local/bin/claude"]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    private static func runClaude(_ claude: String, _ args: [String]) -> (Int32, String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: claude)
+        proc.arguments = args
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        do { try proc.run(); proc.waitUntilExit() } catch { return (-1, "\(error)") }
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                         encoding: .utf8) ?? ""
+        return (proc.terminationStatus, out)
+    }
+
+    private static let skillMarkdown = """
+    ---
+    name: raymol
+    description: Drive the running RayMol molecular viewer (a PyMOL fork) over its built-in MCP server. Use when the user asks to load, view, color, select, measure, render, or analyze molecular structures in RayMol.
+    ---
+
+    # Driving RayMol
+
+    RayMol is a desktop molecular visualization app. Its MCP server exposes these tools:
+
+    - `run_pymol_command` — one PyMOL command-language statement (`fetch 1ubq, async=0`, `show cartoon`, `color red, chain A`, `bg_color white`). Use `async=0` on `fetch`/`load`.
+    - `run_python` — arbitrary Python with `cmd` (the PyMOL API), plus `np` and `Bio` when available. State persists across calls. Prefer this for multi-step logic, measurements, and data access.
+    - `get_session_state` — JSON of loaded objects, selections, camera view, and frame info. Call this first to see what's loaded.
+    - `capture_viewport` — ray-traced PNG of the current view. Call after changes so you can SEE the result before describing it.
+    - `search_pdb` — full-text RCSB search returning PDB IDs.
+
+    ## Working style
+
+    1. Call `get_session_state` to orient yourself.
+    2. Make ONE change at a time with `run_pymol_command` or `run_python`.
+    3. Call `capture_viewport` to verify visually before reporting success.
+    4. Keep selections explicit (`chain A`, `resi 1-50`, `polymer`); don't clobber the user's view without saying so.
+
+    ## Examples
+
+    - "Show 1UBQ as cartoon colored by chain": `run_pymol_command "fetch 1ubq, async=0"` → `"hide everything"` → `"show cartoon"` → `"util.cbc"` → `capture_viewport`.
+    - "How far apart are two residues?": use `run_python` with `cmd.get_distance(...)`.
+    """
+
     // MARK: Handoff file (for the Phase 2 Claude Mac app bridge)
 
     private func handoffURL() -> URL? {
