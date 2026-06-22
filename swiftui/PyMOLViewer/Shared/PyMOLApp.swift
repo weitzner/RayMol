@@ -119,6 +119,32 @@ struct PyMOLApp: App {
                     NotificationCenter.default.post(name: .raymolExportImage, object: nil)
                 }.keyboardShortcut("e", modifiers: [.command, .shift])
             }
+            #if os(macOS)
+            CommandMenu("Connect") {
+                Toggle("Enable AI control", isOn: Binding(
+                    get: { mcp.isRunning }, set: { _ in mcp.toggle() }))
+                .keyboardShortcut("m", modifiers: [.control, .command])
+                Divider()
+                if mcp.isRunning, let port = mcp.port {
+                    Text("Listening on 127.0.0.1:\(port)")
+                    Text("Clients: \(mcp.clientCount)")
+                    Divider()
+                }
+                Button("Connect Claude Code…") {
+                    NotificationCenter.default.post(name: .mcpOpenConnectSheet, object: nil)
+                }
+                Button("Connect Claude for Mac… (soon)") {}.disabled(true)
+                Divider()
+                Button("Copy connection details") {
+                    if let port = mcp.port {
+                        let s = "URL: http://127.0.0.1:\(port)/mcp\n"
+                            + "Authorization: Bearer \(mcp.token)"
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(s, forType: .string)
+                    }
+                }.disabled(!mcp.isRunning)
+            }
+            #endif
         }
         #endif
     }

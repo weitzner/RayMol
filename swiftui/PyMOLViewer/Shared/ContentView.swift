@@ -33,6 +33,7 @@ extension Notification.Name {
     static let raymolFetch        = Notification.Name("raymol.menu.fetch")
     static let raymolSaveSession  = Notification.Name("raymol.menu.saveSession")
     static let raymolExportImage  = Notification.Name("raymol.menu.exportImage")
+    static let mcpOpenConnectSheet = Notification.Name("raymol.mcp.openConnectSheet")
 }
 
 struct ContentView: View {
@@ -256,6 +257,9 @@ struct ContentView: View {
             exportMenu
             macMeasureToolbar
             panelToggles
+            ToolbarItem(placement: .automatic) {
+                MCPStatusView()
+            }
         }
         // Native File-menu commands → reuse the same actions as the toolbar.
         .onReceive(NotificationCenter.default.publisher(for: .raymolOpenFile)) { _ in macOpenFile() }
