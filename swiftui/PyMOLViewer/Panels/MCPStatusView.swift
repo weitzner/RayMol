@@ -54,6 +54,23 @@ private struct MCPStatusPopover: View {
             } else {
                 Text("Server is off.").font(.caption).foregroundStyle(.secondary)
             }
+            if !mcp.activityLog.isEmpty {
+                Divider()
+                Text("Recent activity")
+                    .font(.caption).foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(mcp.activityLog.suffix(12).enumerated()),
+                                id: \.offset) { _, line in
+                            Text(line)
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 110)
+            }
             Divider()
             Button("Connect an AI app…") {
                 NotificationCenter.default.post(name: .mcpOpenConnectSheet, object: nil)

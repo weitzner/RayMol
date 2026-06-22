@@ -280,6 +280,15 @@ struct ContentView: View {
         .sheet(isPresented: $showConnectSheet) {
             MCPConnectSheet().environmentObject(mcpManager)
         }
+        .alert("Allow Claude to control RayMol?", isPresented: Binding(
+            get: { mcpManager.pendingApproval },
+            set: { if !$0 { mcpManager.pendingApproval = false } })) {
+            Button("Stop server", role: .destructive) { mcpManager.denyAndStop() }
+            Button("Allow") { mcpManager.approveSession() }
+        } message: {
+            Text("A local app connected to RayMol and can now run commands, "
+                + "run Python, and load structures until you stop it.")
+        }
         .preferredColorScheme(themeManager.active.resolvedColorScheme)
         .tint(themeManager.active.tabTint.color)
         .onChange(of: engine.isReady) { ready in if ready { applyPersistedTheme() } }
