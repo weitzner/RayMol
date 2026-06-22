@@ -403,6 +403,10 @@ private:
   int _tonemapEnabled = 0;
   float _exposure = 1.0f;
   id<MTLRenderPipelineState> _tonemapPipeline = nil;
+  // Offscreen-export-only pass: rewrites the framebuffer alpha from scene depth
+  // (background = far -> alpha 0) so a transparent-background PNG can be written
+  // on the Metal fast path. Gated on _offscreen && transparent clear (_clearA<0.5).
+  id<MTLRenderPipelineState> _exportAlphaPipeline = nil;
   // PyMOL lighting model (cSetting_ambient/direct/reflect/specular/shininess),
   // set per frame by SceneRenderMetal and uploaded into each lit shader's
   // uniform so the Scene-panel lighting sliders actually affect the render.

@@ -549,6 +549,20 @@ fragment float4 post_tonemap(PostVOut in [[stage_in]],
   return float4(saturate(c), 1.0);
 }
 
+// Offscreen transparent export: keep the fully post-processed RGB but rewrite
+// alpha from scene depth so the background (depth at the far plane) becomes
+// transparent and geometry stays opaque. Runs only for the offscreen PNG path
+// when a transparent background was requested (ray_opaque_background 0); the
+// live view never uses it. Alpha is binary (no matte fringing toward bg_rgb);
+// exporting at 2x and downscaling anti-aliases the cutout.
+fragment float4 post_export_alpha(PostVOut in [[stage_in]],
+    texture2d<float> src [[texture(0)]],
+    depth2d<float> depthTex [[texture(1)]], sampler s [[sampler(0)]]) {
+  float d = depthTex.sample(s, in.uv);
+  float a = (d >= 0.99995) ? 0.0 : 1.0;   // far plane == cleared background
+  return float4(src.sample(s, in.uv).rgb, a);
+}
+
 // Weighted-blended OIT resolve: composite accumulated transparent color over
 // the (already post-processed) opaque color. reveal = Π(1-α) = transmittance.
 fragment float4 oit_resolve(PostVOut in [[stage_in]],
@@ -980,6 +994,7 @@ void RendererMetal::buildPostPipelines()
   };
   _blitPipeline = mkpipe(@"post_blit");
   _tonemapPipeline = mkpipe(@"post_tonemap");
+  _exportAlphaPipeline = mkpipe(@"post_export_alpha");
   _fxaaPipeline = mkpipe(@"post_fxaa");
   _ssaoPipeline = mkpipe(@"post_ssao_fog");
   _oitResolvePipeline = mkpipe(@"oit_resolve");
@@ -1727,6 +1742,29 @@ void RendererMetal::runPostChain()
     [et setFragmentBytes:&u length:sizeof(u) atIndex:0];
     [et drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [et endEncoding];
+    sceneSrc = dst;
+  }
+
+  // Transparent-export alpha (offscreen only). When a transparent background was
+  // requested (ray_opaque_background 0 -> clear alpha 0), rewrite the captured
+  // alpha from scene depth so the background is cut out while geometry stays
+  // opaque. The post passes above all emit alpha=1, so this restores a usable
+  // matte regardless of which of them ran. Live rendering (to a drawable) never
+  // takes this path — its layer is opaque.
+  if (_offscreen && _clearA < 0.5f && _exportAlphaPipeline && _sceneDepth) {
+    id<MTLTexture> dst = (sceneSrc == _sceneColor) ? _postColor : _sceneColor;
+    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    pd.colorAttachments[0].texture = dst;
+    pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pd.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> ea =
+        [_cmdBuffer renderCommandEncoderWithDescriptor:pd];
+    [ea setRenderPipelineState:_exportAlphaPipeline];
+    [ea setFragmentTexture:sceneSrc atIndex:0];
+    [ea setFragmentTexture:_sceneDepth atIndex:1];
+    [ea setFragmentSamplerState:_postSampler atIndex:0];
+    [ea drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [ea endEncoding];
     sceneSrc = dst;
   }
 
