@@ -12,7 +12,7 @@ import UIKit
 
 // App Store build configuration. `iosRestricted` is the iOS App Store fallback:
 // when the `RAYMOL_IOS_APPSTORE_RESTRICTED` compile flag is set, the iOS build
-// hides the command-line input + Raymond to satisfy App Review guideline 2.5.2
+// hides the command-line input to satisfy App Review guideline 2.5.2
 // (no user-supplied/LLM-generated code execution). Default OFF — both surfaces
 // ship. macOS is never restricted (the flag is gated to os(iOS)).
 enum RayMolBuild {
@@ -484,9 +484,9 @@ struct ContentView: View {
                     }
                 }
             }
-            // AI Chat needs near-full height to be usable, so selecting that tab
-            // grows the bottom panel to fill; leaving it (while still chat-sized)
-            // restores the remembered normal size. Compact (iPhone) only.
+            // A full-height tab needs near-full height to be usable, so selecting
+            // tab 3 grows the bottom panel to fill; leaving it restores the
+            // remembered normal size. Compact (iPhone) only.
             .onChange(of: selectedTab) { tab in
                 guard hSize == .compact else { return }
                 withAnimation(.easeInOut(duration: 0.22)) {

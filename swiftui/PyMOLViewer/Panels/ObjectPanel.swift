@@ -1932,8 +1932,6 @@ struct SettingsSheet: View {
     @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
-    // Experimental feature flags (app-level, persisted). Same key the ContentView
-    // gates read, so toggling here shows/hides all Raymond UI immediately.
     private var filtered: [SettingItem] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         if q.isEmpty { return engine.settingsCatalog }

@@ -75,7 +75,11 @@ final class MCPServerManager: ObservableObject {
     // Set by the Connect flow (Task 9) right before it triggers a client connection,
     // so the resulting connect is auto-trusted (no approval prompt for a connect you started).
     func noteUserInitiatedConnect() { userInitiatedConnectAt = Date() }
-    func approveSession() { trustedThisSession = true; pendingApproval = false }
+    private func pushTrusted() {
+        engine?.runPython("import raymol_mcp.server as _m\n_m.set_trusted(True)")
+    }
+
+    func approveSession() { trustedThisSession = true; pendingApproval = false; pushTrusted() }
     func denyAndStop() { pendingApproval = false; stop() }
 
     // MARK: Feedback (main thread, from PyMOLEngine.pollFeedback)
@@ -97,7 +101,11 @@ final class MCPServerManager: ObservableObject {
             logLine("client connected")
             let recent = userInitiatedConnectAt.map { Date().timeIntervalSince($0) < 60 } ?? false
             if recent { trustedThisSession = true }
-            if !trustedThisSession { pendingApproval = true }
+            if trustedThisSession {
+                pushTrusted()
+            } else {
+                pendingApproval = true
+            }
         case "disconnect":
             clientCount = max(0, clientCount - 1)
             logLine("client disconnected")
@@ -137,6 +145,7 @@ final class MCPServerManager: ObservableObject {
             return (false, "Turn on the MCP server first.")
         }
         noteUserInitiatedConnect()
+        pushTrusted()
         installSkillFile()
         let url = "http://127.0.0.1:\(port)/mcp"
         let header = "Authorization: Bearer \(token)"
@@ -230,6 +239,8 @@ final class MCPServerManager: ObservableObject {
         let obj: [String: Any] = ["port": port, "token": token]
         if let data = try? JSONSerialization.data(withJSONObject: obj) {
             try? data.write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                   ofItemAtPath: url.path)
         }
     }
 

@@ -35,6 +35,12 @@ _thread = None
 _port = None
 _token = None
 _sessions = set()
+_trusted = False
+
+
+def set_trusted(value):
+    global _trusted
+    _trusted = bool(value)
 
 
 def _summary(name, args):
@@ -76,9 +82,13 @@ def handle_jsonrpc(message, session_id):
     if method == "tools/list":
         return _ok(req_id, {"tools": tools.TOOLS})
     if method == "tools/call":
+        if not _trusted:
+            return _ok(req_id, {"content": [{"type": "text",
+                "text": "RayMol is waiting for the user to approve this connection. "
+                        "Ask the user to click Allow in RayMol, then retry."}],
+                "isError": True})
         params = message.get("params") or {}
-        name = params.get("name", "")
-        args = params.get("arguments") or {}
+        name = params.get("name", ""); args = params.get("arguments") or {}
         events.action_start(_summary(name, args))
         result = tools.call(name, args)
         events.action_end(not result.get("isError", False))
@@ -155,11 +165,12 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def start(port, token):
-    global _httpd, _thread, _port, _token
+    global _httpd, _thread, _port, _token, _trusted
     with _lock:
         if _httpd is not None:
             return _port
         _token = token
+        _trusted = False
         bind_port = port if port else 0
         _httpd = ThreadingHTTPServer(("127.0.0.1", bind_port), _Handler)
         _port = _httpd.server_address[1]
@@ -171,7 +182,7 @@ def start(port, token):
 
 
 def stop():
-    global _httpd, _thread, _port, _sessions
+    global _httpd, _thread, _port, _sessions, _trusted
     with _lock:
         if _httpd is None:
             return
@@ -184,6 +195,7 @@ def stop():
         _httpd = None
         _thread = None
         _port = None
+        _trusted = False
         if worker is not None:
             worker.join(timeout=2)
         events.server_stopped()

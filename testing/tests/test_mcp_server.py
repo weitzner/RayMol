@@ -9,6 +9,12 @@ import raymol_mcp.server as server
 
 
 class TestJsonRpc(unittest.TestCase):
+    def setUp(self):
+        server.set_trusted(True)
+
+    def tearDown(self):
+        server.set_trusted(False)
+
     def test_initialize_returns_protocol_capability_instructions(self):
         req = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
                "params": {"protocolVersion": "2025-06-18"}}
@@ -42,6 +48,19 @@ class TestJsonRpc(unittest.TestCase):
         self.assertTrue(resp["result"]["isError"])
         self.assertIn("MCP:action:", out)
         self.assertIn("MCP:actionend:", out)
+
+    def test_tools_call_blocked_when_untrusted(self):
+        server.set_trusted(False)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            resp = server.handle_jsonrpc({"jsonrpc": "2.0", "id": 9,
+                "method": "tools/call",
+                "params": {"name": "run_pymol_command",
+                           "arguments": {"command": "bg_color white"}}}, "s1")
+        out = buf.getvalue()
+        self.assertTrue(resp["result"]["isError"])
+        self.assertIn("approve", resp["result"]["content"][0]["text"].lower())
+        self.assertNotIn("MCP:action:", out)
 
 
 class TestHttpAuth(unittest.TestCase):
