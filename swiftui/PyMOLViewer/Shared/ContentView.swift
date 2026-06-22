@@ -173,7 +173,9 @@ struct ContentView: View {
         // the top row isn't clipped when several sequences are shown.
         let seqH = CGFloat(seqRows) * 30 + 30
 
-        return HSplitView {
+        return VStack(spacing: 0) {
+            MCPDrivingBanner()
+            HSplitView {
             // Left column: terminal on TOP, sequence directly under it, then the
             // 3D viewport, stacked in a VSplitView so each is drag-resizable and
             // each is hideable via the toolbar toggles.
@@ -243,6 +245,7 @@ struct ContentView: View {
                 .frame(width: 300)
             }
         }
+        } // end VStack
         .overlay { busyOverlay }
         .alert("Fetch from PDB", isPresented: $showMacFetch) {
             TextField("PDB ID (e.g. 1ubq)", text: $macFetchID)
