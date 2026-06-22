@@ -1454,21 +1454,18 @@ struct ContentView: View {
 
     private var rtFlag: Int { exportRayTraced ? 1 : 0 }
 
-    // Render a PNG to `path`. Transparent → CPU ray-trace (honors
-    // ray_opaque_background; the Metal fast path bakes the bg color via its post
-    // chain). Else the Metal fast path with the background color.
-    // Renders through runHeavy so the "Calculating…" overlay shows during the
-    // (slow, ray-traced) render; `done` runs on the main thread once written.
+    // Render a PNG to `path` via the Metal fast path. `ray_opaque_background`
+    // selects an opaque vs transparent background: when transparent, the
+    // offscreen post chain rewrites alpha from depth (background → cut out), so a
+    // straight-alpha PNG is produced without falling back to the slow CPU
+    // ray-tracer. `rtFlag` still selects hardware-RT AO/shadows for the export.
+    // Renders through runHeavy so the "Calculating…" overlay shows; `done` runs
+    // on the main thread once written.
     private func renderExportPNG(_ path: String, _ w: Int, _ h: Int,
                                  done: @escaping () -> Void = {}) {
         engine.runHeavy("Rendering image…") {
-            if exportTransparent {
-                engine.runCommand("set ray_opaque_background, 0")
-                engine.runCommand("png \(path), width=\(w), height=\(h), ray=1")
-            } else {
-                engine.runCommand("set ray_opaque_background, 1")
-                engine.renderHiResPNG(path, width: w, height: h, rayTraced: rtFlag)
-            }
+            engine.runCommand("set ray_opaque_background, \(exportTransparent ? 0 : 1)")
+            engine.renderHiResPNG(path, width: w, height: h, rayTraced: rtFlag)
             done()
         }
     }
