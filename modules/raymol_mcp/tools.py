@@ -63,6 +63,7 @@ def _run_pymol_command(args):
     from pymol import cmd
     try:
         cmd.do(cmd_str)
+        cmd.sync()
         return _text("ok")
     except Exception:
         return _error(traceback.format_exc())
@@ -77,6 +78,8 @@ def _run_python(args):
     try:
         with contextlib.redirect_stdout(buf):
             exec(code, ns)
+        from pymol import cmd
+        cmd.sync()
         out = buf.getvalue()
         return _text(out if out else "ok")
     except Exception:
