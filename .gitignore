@@ -31,3 +31,8 @@ xcuserdata
 .superpowers/
 *-this-session-is-being-continued-*.txt
 build_ios_dd/
+
+# notarized direct-distribution build artifacts
+/*.dmg
+/build_dmg/
+/swiftui/build_*/
