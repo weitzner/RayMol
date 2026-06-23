@@ -71,14 +71,6 @@ void PyMOLBridge_InitPython(PyMOLHandle h, const char *resourcePath)
 {
     if (!h || !resourcePath) return;
 
-    // This SwiftUI/Metal app ALWAYS drives the chat through the SwiftUI sink
-    // (pymol.ai_chat_swift), never the legacy AppKit NSPanel (pymol.ai_chat_ui).
-    // Set this BEFORE Python init so ai_chat binds the right sink: on iOS the
-    // AppKit import fails and it falls back to ai_chat_swift anyway, but on
-    // macOS AppKit imports fine and the chat would otherwise bind the dead
-    // NSPanel and never reach the SwiftUI ChatPanel. Forces the urllib path too.
-    setenv("PYMOL_AI_SINK", "swift", 1);
-
     // Register the statically-linked _cmd builtin BEFORE init (top-level name only).
     PyImport_AppendInittab("_cmd", PyInit__cmd);
     // Same for _champ (chemistry/charge assignment for vacuum electrostatics
@@ -90,10 +82,8 @@ void PyMOLBridge_InitPython(PyMOLHandle h, const char *resourcePath)
     NSString *pythonHome  = [resPath stringByAppendingPathComponent:@"python"];   // contains lib/python3.13
     NSString *modulesPath = [resPath stringByAppendingPathComponent:@"modules"];
     NSString *dataPath    = [resPath stringByAppendingPathComponent:@"data"];
-    // Pure-Python third-party packages bundled with the app (rsa + pyasn1, used
-    // by pymol.ai_vertex_auth to mint Vertex AI tokens on-device from a pasted
-    // service-account JSON). Kept in a dedicated dir so it works identically on
-    // iOS (which, unlike macOS, has no site-packages bundling step for numpy).
+    // Pure-Python third-party packages (pyvendor dir). Currently unused; the
+    // directory is kept in the bundle and on sys.path for future use.
     NSString *vendorPath  = [resPath stringByAppendingPathComponent:@"pyvendor"];
 
     // Modern PyConfig boot (mirrors layer5/main_appkit.mm). NOT isolated: PyMOL

@@ -11,6 +11,13 @@ configFiles:
   Debug: PyMOLBridge.xcconfig
   Release: PyMOLBridge.xcconfig
 
+# Sparkle auto-update framework. macOS-only — linked into the macOS slice of the
+# shared PyMOLViewer target via a platformFilter dependency; never the iOS slice.
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -45,8 +52,8 @@ targets:
         PRODUCT_NAME: RayMol
         PRODUCT_BUNDLE_IDENTIFIER: io.raymol.RayMol
         INFOPLIST_GENERATION_MODE: GeneratedFile
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: 4
+        MARKETING_VERSION: "1.1.0"
+        CURRENT_PROJECT_VERSION: 5
         GENERATE_INFOPLIST_FILE: YES
         # Generate a launch screen so iOS renders at the device's NATIVE
         # resolution. Without it the app is letterboxed at a legacy size on
@@ -83,6 +90,10 @@ targets:
           # them out of the iOS build (no effect on macOS — the flag is gated to
           # os(iOS) in RayMolBuild), then re-archive + resubmit GUI-only.
           # SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) RAYMOL_IOS_APPSTORE_RESTRICTED
+          # Mac App Store fallback: uncomment to compile the MCP server + bridge
+          # OUT of the macOS build (sandbox + 2.5.2). No effect on iOS — gated to
+          # os(macOS) in RayMolBuild.mcpEnabled. Then archive for the MAS.
+          # SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) RAYMOL_MAS_RESTRICTED
     # iOS runtime packaging (BeeWare CPython 3.13). Guarded to iOS via
     # PLATFORM_NAME so the macOS target is unaffected. The xcframework has no
     # macOS slice, so a native embed dependency can't be used on a shared target.
@@ -100,6 +111,23 @@ targets:
           [ -f "$PLIST" ] || { echo "no Info.plist at $PLIST"; exit 0; }
           /usr/bin/plutil -replace CFBundleName -string "RayMol" "$PLIST"
           echo "CFBundleName -> RayMol ($PLIST)"
+      # Sparkle auto-update keys. macOS only (Sparkle is not linked on iOS), and
+      # skipped for the Mac App Store fallback (RAYMOL_MAS_RESTRICTED) since that
+      # build updates through Apple. The public EdDSA key pairs with the private
+      # key in the developer's login keychain (used by swiftui/publish_release.sh).
+      - name: "Sparkle: inject auto-update Info.plist keys (macOS, non-MAS)"
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          case "${PLATFORM_NAME:-}" in macosx) ;; *) echo "Sparkle keys skipped ($PLATFORM_NAME)"; exit 0 ;; esac
+          case "${SWIFT_ACTIVE_COMPILATION_CONDITIONS:-}" in *RAYMOL_MAS_RESTRICTED*) echo "Sparkle keys skipped (MAS build)"; exit 0 ;; esac
+          PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          [ -f "$PLIST" ] || { echo "no Info.plist at $PLIST"; exit 0; }
+          /usr/bin/plutil -replace SUFeedURL -string "https://github.com/javierbq/RayMol/releases/latest/download/appcast.xml" "$PLIST"
+          /usr/bin/plutil -replace SUPublicEDKey -string "V+5+HSmGNq4JQXW6tDbODBtV3z0Sn/nk/qFyycc2Blg=" "$PLIST"
+          /usr/bin/plutil -replace SUEnableAutomaticChecks -bool true "$PLIST"
+          /usr/bin/plutil -replace SUScheduledCheckInterval -integer 86400 "$PLIST"
+          echo "Sparkle keys -> $PLIST"
       # Register RayMol as a handler/default for molecular file formats. The
       # generated Info.plist (GENERATE_INFOPLIST_FILE=YES) has no INFOPLIST_KEY_*
       # for the complex CFBundleDocumentTypes / UTImportedTypeDeclarations arrays,
@@ -221,6 +249,8 @@ targets:
           mkdir -p "$RES"
           rsync -au --delete "$SRCROOT/../deps_macos/python-standalone/python/" "$RES/python/"
           ditto "$SRCROOT/../modules" "$RES/modules"
+          # Mac App Store build: drop the MCP server package (compiled out of the app).
+          case "${SWIFT_ACTIVE_COMPILATION_CONDITIONS:-}" in *RAYMOL_MAS_RESTRICTED*) rm -rf "$RES/modules/raymol_mcp" ;; esac
           ditto "$SRCROOT/../data" "$RES/data"
           # Vendored pure-Python packages (rsa + pyasn1) for on-device Vertex
           # token minting; bridge adds <res>/pyvendor to sys.path (same dir name
@@ -256,7 +286,12 @@ targets:
           RES="$CODESIGNING_FOLDER_PATH/Contents/Resources"
           /usr/bin/python3 "$SRCROOT/../scripts/compile_metal_shaders.py" --sdk macosx --output "/tmp/pymol_macos.metallib" || true
           [ -f /tmp/pymol_macos.metallib ] && cp /tmp/pymol_macos.metallib "$RES/pymol.metallib" || echo "metallib skipped (runtime-compile fallback)"
-    dependencies: []
+    dependencies:
+      # macOS-only: Sparkle has no iOS slice, so the platforms filter keeps it
+      # out of the iOS build. All Swift usage is additionally guarded by
+      # #if os(macOS) && !RAYMOL_MAS_RESTRICTED.
+      - package: Sparkle
+        platforms: [macOS]
     scheme:
       testTargets:
         - PyMOLViewerUITests

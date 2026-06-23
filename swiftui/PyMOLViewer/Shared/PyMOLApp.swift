@@ -22,6 +22,10 @@ final class OrientationLockDelegate: NSObject, UIApplicationDelegate {
 @main
 struct PyMOLApp: App {
     @StateObject private var engine = PyMOLEngine.shared
+    #if os(macOS) && !RAYMOL_MAS_RESTRICTED
+    @StateObject private var mcp = MCPServerManager.shared
+    @StateObject private var updater = RayMolUpdater()
+    #endif
     #if os(iOS)
     @UIApplicationDelegateAdaptor(OrientationLockDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
@@ -51,6 +55,10 @@ struct PyMOLApp: App {
                 // Bring the app/window to the front on launch (a GUI app should
                 // foreground itself; also lets it be launched from a terminal).
                 .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
+            #endif
+            #if os(macOS) && !RAYMOL_MAS_RESTRICTED
+                .environmentObject(mcp)
+                .onAppear { mcp.bind(engine: engine) }
             #endif
             #if os(iOS)
                 // Test affordance (screenshot harness): force device orientation,
@@ -99,6 +107,13 @@ struct PyMOLApp: App {
         // standard shortcuts. Buttons post notifications that ContentView's macOS
         // layout handles (reusing the toolbar's open/save/export logic).
         .commands {
+            #if os(macOS) && !RAYMOL_MAS_RESTRICTED
+            // Sparkle auto-update (Developer-ID/DMG build only; the Mac App Store
+            // build updates through Apple). Placed in the app menu next to About.
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+            }
+            #endif
             CommandGroup(after: .newItem) {
                 Button("Open…") {
                     NotificationCenter.default.post(name: .raymolOpenFile, object: nil)
@@ -114,6 +129,32 @@ struct PyMOLApp: App {
                     NotificationCenter.default.post(name: .raymolExportImage, object: nil)
                 }.keyboardShortcut("e", modifiers: [.command, .shift])
             }
+            #if os(macOS) && !RAYMOL_MAS_RESTRICTED
+            CommandMenu("Connect") {
+                Toggle("Enable AI control", isOn: Binding(
+                    get: { mcp.isRunning }, set: { _ in mcp.toggle() }))
+                .keyboardShortcut("m", modifiers: [.control, .command])
+                Divider()
+                if mcp.isRunning, let port = mcp.port {
+                    Text("Listening on 127.0.0.1:\(port)")
+                    Text("Clients: \(mcp.clientCount)")
+                    Divider()
+                }
+                Button("Connect Claude Code…") {
+                    NotificationCenter.default.post(name: .mcpOpenConnectSheet, object: nil)
+                }
+                Button("Connect Claude for Mac… (soon)") {}.disabled(true)
+                Divider()
+                Button("Copy connection details") {
+                    if let port = mcp.port {
+                        let s = "URL: http://127.0.0.1:\(port)/mcp\n"
+                            + "Authorization: Bearer \(mcp.token)"
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(s, forType: .string)
+                    }
+                }.disabled(!mcp.isRunning)
+            }
+            #endif
         }
         #endif
     }

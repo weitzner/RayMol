@@ -53,14 +53,45 @@ cp -R "$SRC_APP" "$WORK/$APPNAME.app"
 APP="$WORK/$APPNAME.app"
 
 echo "== 2/8  Sign every embedded Mach-O, deepest path first =="
-# Robust: enumerate ALL real files, keep the Mach-O ones (incl. extensionless
+# Enumerate ALL real files, keep the Mach-O ones (incl. extensionless
 # executables like python3.13), sign deepest-first so nested code is sealed
-# before its container.
-find "$APP" -type f | while read -r f; do
+# before its container. Capture the list with `|| true`: the enumeration
+# pipeline exits non-zero whenever the final file is non-Mach-O (grep -q → 1),
+# which would otherwise trip `set -e -o pipefail` after a fully successful run.
+machos="$( { find "$APP" -type f | while read -r f; do
   file "$f" | grep -q "Mach-O" && printf '%d\t%s\n' "$(grep -o / <<<"$f" | wc -l)" "$f"
-done | sort -rn | cut -f2- | while read -r macho; do
-  codesign --force --options runtime --timestamp --sign "$DEVID" "$macho"
-done
+done | sort -rn | cut -f2-; } || true )"
+while IFS= read -r macho; do
+  [ -n "$macho" ] || continue
+  # Retry the secure timestamp: Apple's TSA (timestamp.apple.com) occasionally
+  # throttles rapid batch requests across dozens of nested binaries.
+  signed=0
+  for attempt in 1 2 3 4 5; do
+    if codesign --force --options runtime --timestamp --sign "$DEVID" "$macho"; then signed=1; break; fi
+    echo "  (timestamp retry $attempt for $(basename "$macho"))"; sleep 5
+  done
+  [ "$signed" = 1 ] || { echo "ERROR: could not sign $macho after retries"; exit 1; }
+done <<< "$machos"
+
+# Sparkle re-seal: the flat loop above signs each nested Mach-O as a bare file,
+# but Sparkle ships nested *bundles* (Updater.app + XPCServices/*.xpc) whose
+# seals must be re-established as bundles, inside-out, or `codesign --verify
+# --deep` reports "nested code is modified or invalid". Sign the helpers, then
+# the framework itself. Guarded so non-Sparkle builds are unaffected.
+SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+  echo "== 2b/8  Re-seal Sparkle nested bundles (inside-out) =="
+  SPV="$SPARKLE_FW/Versions/Current"
+  for sp in \
+    "$SPV/XPCServices/Downloader.xpc" \
+    "$SPV/XPCServices/Installer.xpc" \
+    "$SPV/Autoupdate" \
+    "$SPV/Updater.app" \
+    "$SPARKLE_FW"; do
+    [ -e "$sp" ] || continue
+    codesign --force --options runtime --timestamp --sign "$DEVID" "$sp"
+  done
+fi
 
 echo "== 3/8  Sign the app bundle (Hardened Runtime + entitlements) =="
 codesign --force --options runtime --timestamp \
