@@ -875,6 +875,11 @@ final class PyMOLEngine: ObservableObject {
     func clearSession() {
         guard isReady else { return }
         runCommand("reinitialize")
+        // reinitialize also resets engine settings to defaults — restore the
+        // fetch_path that initialize() set (the writable temp dir) so a post-clear
+        // `fetch` doesn't fall back to cwd (which can fail or prompt for file
+        // access), then re-apply the RayMol theme.
+        runPython("from pymol import cmd as _c; _c.set('fetch_path', '\(NSTemporaryDirectory())')")
         applyTheme(ThemeManager.shared.active)
     }
 
