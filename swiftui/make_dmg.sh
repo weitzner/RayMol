@@ -73,6 +73,26 @@ while IFS= read -r macho; do
   [ "$signed" = 1 ] || { echo "ERROR: could not sign $macho after retries"; exit 1; }
 done <<< "$machos"
 
+# Sparkle re-seal: the flat loop above signs each nested Mach-O as a bare file,
+# but Sparkle ships nested *bundles* (Updater.app + XPCServices/*.xpc) whose
+# seals must be re-established as bundles, inside-out, or `codesign --verify
+# --deep` reports "nested code is modified or invalid". Sign the helpers, then
+# the framework itself. Guarded so non-Sparkle builds are unaffected.
+SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+  echo "== 2b/8  Re-seal Sparkle nested bundles (inside-out) =="
+  SPV="$SPARKLE_FW/Versions/Current"
+  for sp in \
+    "$SPV/XPCServices/Downloader.xpc" \
+    "$SPV/XPCServices/Installer.xpc" \
+    "$SPV/Autoupdate" \
+    "$SPV/Updater.app" \
+    "$SPARKLE_FW"; do
+    [ -e "$sp" ] || continue
+    codesign --force --options runtime --timestamp --sign "$DEVID" "$sp"
+  done
+fi
+
 echo "== 3/8  Sign the app bundle (Hardened Runtime + entitlements) =="
 codesign --force --options runtime --timestamp \
   --entitlements "$ENTITLEMENTS" --sign "$DEVID" "$APP"
