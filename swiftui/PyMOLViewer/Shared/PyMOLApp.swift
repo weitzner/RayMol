@@ -22,7 +22,7 @@ final class OrientationLockDelegate: NSObject, UIApplicationDelegate {
 @main
 struct PyMOLApp: App {
     @StateObject private var engine = PyMOLEngine.shared
-    #if os(macOS)
+    #if os(macOS) && !RAYMOL_MAS_RESTRICTED
     @StateObject private var mcp = MCPServerManager.shared
     #endif
     #if os(iOS)
@@ -54,6 +54,8 @@ struct PyMOLApp: App {
                 // Bring the app/window to the front on launch (a GUI app should
                 // foreground itself; also lets it be launched from a terminal).
                 .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
+            #endif
+            #if os(macOS) && !RAYMOL_MAS_RESTRICTED
                 .environmentObject(mcp)
                 .onAppear { mcp.bind(engine: engine) }
             #endif
@@ -119,7 +121,7 @@ struct PyMOLApp: App {
                     NotificationCenter.default.post(name: .raymolExportImage, object: nil)
                 }.keyboardShortcut("e", modifiers: [.command, .shift])
             }
-            #if os(macOS)
+            #if os(macOS) && !RAYMOL_MAS_RESTRICTED
             CommandMenu("Connect") {
                 Toggle("Enable AI control", isOn: Binding(
                     get: { mcp.isRunning }, set: { _ in mcp.toggle() }))

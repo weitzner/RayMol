@@ -83,6 +83,10 @@ targets:
           # them out of the iOS build (no effect on macOS — the flag is gated to
           # os(iOS) in RayMolBuild), then re-archive + resubmit GUI-only.
           # SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) RAYMOL_IOS_APPSTORE_RESTRICTED
+          # Mac App Store fallback: uncomment to compile the MCP server + bridge
+          # OUT of the macOS build (sandbox + 2.5.2). No effect on iOS — gated to
+          # os(macOS) in RayMolBuild.mcpEnabled. Then archive for the MAS.
+          # SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) RAYMOL_MAS_RESTRICTED
     # iOS runtime packaging (BeeWare CPython 3.13). Guarded to iOS via
     # PLATFORM_NAME so the macOS target is unaffected. The xcframework has no
     # macOS slice, so a native embed dependency can't be used on a shared target.
@@ -221,6 +225,8 @@ targets:
           mkdir -p "$RES"
           rsync -au --delete "$SRCROOT/../deps_macos/python-standalone/python/" "$RES/python/"
           ditto "$SRCROOT/../modules" "$RES/modules"
+          # Mac App Store build: drop the MCP server package (compiled out of the app).
+          case "${SWIFT_ACTIVE_COMPILATION_CONDITIONS:-}" in *RAYMOL_MAS_RESTRICTED*) rm -rf "$RES/modules/raymol_mcp" ;; esac
           ditto "$SRCROOT/../data" "$RES/data"
           # Vendored pure-Python packages (rsa + pyasn1) for on-device Vertex
           # token minting; bridge adds <res>/pyvendor to sys.path (same dir name

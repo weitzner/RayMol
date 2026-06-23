@@ -1,5 +1,5 @@
 // MCPServerManager.swift — lifecycle + state for the built-in MCP server (macOS).
-#if os(macOS)
+#if os(macOS) && !RAYMOL_MAS_RESTRICTED
 import Foundation
 import Combine
 

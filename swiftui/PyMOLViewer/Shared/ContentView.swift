@@ -23,6 +23,18 @@ enum RayMolBuild {
         return false
         #endif
     }()
+
+    // macOS MCP server gate. The whole MCP feature (local server, run_python,
+    // bridge) is incompatible with the Mac App Store sandbox + guideline 2.5.2,
+    // so a MAS archive sets RAYMOL_MAS_RESTRICTED to compile it out. Default ON
+    // for the Developer-ID build. Gated to os(macOS).
+    static let mcpEnabled: Bool = {
+        #if os(macOS) && !RAYMOL_MAS_RESTRICTED
+        return true
+        #else
+        return false
+        #endif
+    }()
 }
 
 // macOS File-menu commands (defined on the App scene) post these; ContentView's
@@ -59,6 +71,8 @@ struct ContentView: View {
     // NSOpenPanel directly, so it needs no presentation state).
     @State private var showMacFetch = false
     @State private var macFetchID = ""
+    #endif
+    #if os(macOS) && !RAYMOL_MAS_RESTRICTED
     @EnvironmentObject private var mcpManager: MCPServerManager
     @State private var showConnectSheet = false
     #endif
@@ -176,7 +190,9 @@ struct ContentView: View {
         let seqH = CGFloat(seqRows) * 30 + 30
 
         return VStack(spacing: 0) {
+            #if !RAYMOL_MAS_RESTRICTED
             MCPDrivingBanner()
+            #endif
             HSplitView {
             // Left column: terminal on TOP, sequence directly under it, then the
             // 3D viewport, stacked in a VSplitView so each is drag-resizable and
@@ -262,21 +278,26 @@ struct ContentView: View {
             exportMenu
             macMeasureToolbar
             panelToggles
+            #if !RAYMOL_MAS_RESTRICTED
             ToolbarItem(placement: .automatic) {
                 MCPStatusView()
             }
+            #endif
         }
         // Native File-menu commands → reuse the same actions as the toolbar.
         .onReceive(NotificationCenter.default.publisher(for: .raymolOpenFile)) { _ in macOpenFile() }
         .onReceive(NotificationCenter.default.publisher(for: .raymolFetch)) { _ in macFetchID = ""; showMacFetch = true }
         .onReceive(NotificationCenter.default.publisher(for: .raymolSaveSession)) { _ in saveSession() }
         .onReceive(NotificationCenter.default.publisher(for: .raymolExportImage)) { _ in saveImage(size: exportSize(scale: 2)) }
+        #if !RAYMOL_MAS_RESTRICTED
         .onReceive(NotificationCenter.default.publisher(for: .mcpOpenConnectSheet)) { _ in
             showConnectSheet = true
         }
+        #endif
         .sheet(isPresented: $showCustomSizeSheet) {
             customSizeSheet
         }
+        #if !RAYMOL_MAS_RESTRICTED
         .sheet(isPresented: $showConnectSheet) {
             MCPConnectSheet().environmentObject(mcpManager)
         }
@@ -289,6 +310,7 @@ struct ContentView: View {
             Text("A local app connected to RayMol and can now run commands, "
                 + "run Python, and load structures until you stop it.")
         }
+        #endif
         .preferredColorScheme(themeManager.active.resolvedColorScheme)
         .tint(themeManager.active.tabTint.color)
         .onChange(of: engine.isReady) { ready in if ready { applyPersistedTheme() } }

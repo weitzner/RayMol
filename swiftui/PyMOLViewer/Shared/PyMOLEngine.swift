@@ -1284,7 +1284,7 @@ final class PyMOLEngine: ObservableObject {
                 } else if line.hasPrefix("SETVAL:") {
                     parseSetValFeedback(line)
                 } else if line.hasPrefix("MCP:") {
-                    #if os(macOS)
+                    #if os(macOS) && !RAYMOL_MAS_RESTRICTED
                     let body = String(line.dropFirst("MCP:".count))
                     if let colon = body.firstIndex(of: ":") {
                         let kind = String(body[..<colon])

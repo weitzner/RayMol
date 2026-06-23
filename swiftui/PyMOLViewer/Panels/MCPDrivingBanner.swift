@@ -1,5 +1,5 @@
 // MCPDrivingBanner.swift — non-blocking "AI is driving" banner (macOS).
-#if os(macOS)
+#if os(macOS) && !RAYMOL_MAS_RESTRICTED
 import SwiftUI
 
 struct MCPDrivingBanner: View {

@@ -1,5 +1,5 @@
 // MCPStatusView.swift — toolbar status pill + popover for the MCP server (macOS).
-#if os(macOS)
+#if os(macOS) && !RAYMOL_MAS_RESTRICTED
 import SwiftUI
 
 struct MCPStatusView: View {

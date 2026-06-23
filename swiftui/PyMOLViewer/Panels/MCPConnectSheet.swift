@@ -1,5 +1,5 @@
 // MCPConnectSheet.swift — guided "Connect an AI app" sheet (macOS).
-#if os(macOS)
+#if os(macOS) && !RAYMOL_MAS_RESTRICTED
 import SwiftUI
 
 struct MCPConnectSheet: View {
