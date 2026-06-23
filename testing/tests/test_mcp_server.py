@@ -94,5 +94,34 @@ class TestHttpAuth(unittest.TestCase):
         self.assertEqual(server.status()["clients"], 1)
 
 
+class TestSessionExpiry(unittest.TestCase):
+    def setUp(self):
+        server._sessions = {}
+
+    def test_prune_removes_idle_and_emits_disconnect(self):
+        now = 10000.0
+        server._sessions = {"old": now - (server.SESSION_TTL + 10),  # idle past TTL
+                            "fresh": now - 5.0}                        # fresh
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            dead = server._prune_idle(now=now)
+        self.assertEqual(dead, ["old"])
+        self.assertIn("fresh", server._sessions)
+        self.assertIn("MCP:disconnect:", buf.getvalue())
+
+    def test_prune_keeps_all_fresh(self):
+        now = 10000.0
+        server._sessions = {"a": now - 5.0, "b": now - (server.SESSION_TTL - 5)}
+        dead = server._prune_idle(now=now)
+        self.assertEqual(dead, [])
+        self.assertEqual(set(server._sessions), {"a", "b"})
+
+    def test_touch_refreshes_last_seen(self):
+        server._sessions = {"a": 0.0}
+        server._touch("a")
+        dead = server._prune_idle(now=server._sessions["a"] + 1.0)
+        self.assertEqual(dead, [])
+
+
 if __name__ == "__main__":
     unittest.main()

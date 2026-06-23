@@ -11,6 +11,7 @@ worker used. Never call the C bridge from here.
 
 import json
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -29,18 +30,46 @@ INSTRUCTIONS = (
     "at a time and capturing the viewport to verify results."
 )
 
+# A session is dropped after this many seconds with no request. Claude Code sends no keepalive when idle, so 300s avoids flapping the count during normal between-task idleness; the desktop bridge sends an explicit DELETE on quit for instant cleanup.
+SESSION_TTL = 300.0
+SWEEP_INTERVAL = 20.0
+
 _lock = threading.Lock()
 _httpd = None
 _thread = None
 _port = None
 _token = None
-_sessions = set()
+_sessions = {}  # sid -> last_seen (monotonic)
 _trusted = False
+_stop_sweeper = threading.Event()
+_sweeper = None
 
 
 def set_trusted(value):
     global _trusted
     _trusted = bool(value)
+
+
+def _touch(sid):
+    if sid:
+        _sessions[sid] = time.monotonic()
+
+
+def _prune_idle(now=None):
+    now = time.monotonic() if now is None else now
+    dead = [s for s, t in list(_sessions.items()) if now - t > SESSION_TTL]
+    for s in dead:
+        _sessions.pop(s, None)
+        events.client_disconnected(s)
+    return dead
+
+
+def _sweep_loop():
+    while not _stop_sweeper.wait(SWEEP_INTERVAL):
+        try:
+            _prune_idle()
+        except Exception:
+            pass  # never let a sweep error kill the thread
 
 
 def _summary(name, args):
@@ -132,8 +161,10 @@ class _Handler(BaseHTTPRequestHandler):
         is_init = isinstance(message, dict) and message.get("method") == "initialize"
         if is_init:
             session_id = uuid.uuid4().hex
-            _sessions.add(session_id)
+            _sessions[session_id] = time.monotonic()
             events.client_connected(session_id)
+        elif session_id and session_id in _sessions:
+            _touch(session_id)
 
         response = handle_jsonrpc(message, session_id or "")
 
@@ -157,7 +188,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._reject(401, "unauthorized")
         session_id = self.headers.get("Mcp-Session-Id")
         if session_id and session_id in _sessions:
-            _sessions.discard(session_id)
+            _sessions.pop(session_id, None)
             events.client_disconnected(session_id)
         self.send_response(204)
         self.send_header("Content-Length", "0")
@@ -165,7 +196,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def start(port, token):
-    global _httpd, _thread, _port, _token, _trusted
+    global _httpd, _thread, _port, _token, _trusted, _sweeper, _stop_sweeper
     with _lock:
         if _httpd is not None:
             return _port
@@ -177,27 +208,37 @@ def start(port, token):
         _thread = threading.Thread(target=_httpd.serve_forever,
                                    name="raymol-mcp", daemon=True)
         _thread.start()
+        _stop_sweeper.clear()
+        _sweeper = threading.Thread(target=_sweep_loop,
+                                    name="raymol-mcp-sweep", daemon=True)
+        _sweeper.start()
         events.server_started(_port)
         return _port
 
 
 def stop():
-    global _httpd, _thread, _port, _sessions, _trusted
+    global _httpd, _thread, _port, _sessions, _trusted, _sweeper, _stop_sweeper
     with _lock:
         if _httpd is None:
             return
-        for sid in list(_sessions):
-            events.client_disconnected(sid)
-        _sessions = set()
+        _stop_sweeper.set()
+        sids = list(_sessions.keys())
+        _sessions = {}                      # cleared first: a waking sweeper finds nothing
         _httpd.shutdown()
         _httpd.server_close()
         worker = _thread
+        sweeper = _sweeper
         _httpd = None
         _thread = None
+        _sweeper = None
         _port = None
         _trusted = False
         if worker is not None:
             worker.join(timeout=2)
+        if sweeper is not None:
+            sweeper.join(timeout=2)
+        for s in sids:
+            events.client_disconnected(s)
         events.server_stopped()
 
 

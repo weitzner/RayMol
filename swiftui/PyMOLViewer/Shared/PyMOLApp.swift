@@ -19,7 +19,6 @@ final class OrientationLockDelegate: NSObject, UIApplicationDelegate {
 }
 #endif
 
-@main
 struct PyMOLApp: App {
     @StateObject private var engine = PyMOLEngine.shared
     #if os(macOS) && !RAYMOL_MAS_RESTRICTED
@@ -140,10 +139,9 @@ struct PyMOLApp: App {
                     Text("Clients: \(mcp.clientCount)")
                     Divider()
                 }
-                Button("Connect Claude Code…") {
+                Button("Connect an AI app…") {
                     NotificationCenter.default.post(name: .mcpOpenConnectSheet, object: nil)
                 }
-                Button("Connect Claude for Mac… (soon)") {}.disabled(true)
                 Divider()
                 Button("Copy connection details") {
                     if let port = mcp.port {
