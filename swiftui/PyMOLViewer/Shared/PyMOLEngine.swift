@@ -396,10 +396,17 @@ final class PyMOLEngine: ObservableObject {
                     guard let self = self else { return }
                     // Re-assert the caller's explicit state last, so neither the
                     // persisted theme nor PYMOL_AUTOTHEME can clobber the requested
-                    // background between init and this render.
+                    // background between init and this render. Use runCommandCore
+                    // (NOT runCommand): runCommand routes heavy ops like `show
+                    // surface` to runHeavy, which defers them ~50ms off this turn,
+                    // so the synchronous render below would race the surface build
+                    // and export with the surface rep still unflagged/unbuilt — the
+                    // exported PNG then drops the surface (issue #22). runCommandCore
+                    // flags the reps synchronously here, so the offscreen render's
+                    // SceneUpdate builds them before the capture.
                     if let c = autoCmd {
                         for one in c.split(separator: ";") {
-                            self.runCommand(one.trimmingCharacters(in: .whitespaces))
+                            self.runCommandCore(one.trimmingCharacters(in: .whitespaces))
                         }
                     }
                     self.renderHiResPNG(parts[0], width: w, height: h, rayTraced: rt)

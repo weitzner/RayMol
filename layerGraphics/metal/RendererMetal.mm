@@ -557,9 +557,18 @@ fragment float4 post_tonemap(PostVOut in [[stage_in]],
 // exporting at 2x and downscaling anti-aliases the cutout.
 fragment float4 post_export_alpha(PostVOut in [[stage_in]],
     texture2d<float> src [[texture(0)]],
-    depth2d<float> depthTex [[texture(1)]], sampler s [[sampler(0)]]) {
+    depth2d<float> depthTex [[texture(1)]],
+    texture2d<float> revealTex [[texture(2)]], sampler s [[sampler(0)]]) {
   float d = depthTex.sample(s, in.uv);
-  float a = (d >= 0.99995) ? 0.0 : 1.0;   // far plane == cleared background
+  // Opaque geometry (depth < far) stays fully opaque; the far-plane background is
+  // cut out. BUT transparent reps (the molecular surface) render via weighted-
+  // blended OIT and do NOT write depth, so a depth-only cutout erases them from
+  // the exported alpha wherever the translucent shell overhangs the background —
+  // the surface vanishes from a transparent-background PNG while showing fine in
+  // the viewport (issue #22). Recover their coverage from the OIT transmittance
+  // (cover = 1 - reveal, matching oit_resolve) so the surface survives the matte.
+  float cover = 1.0 - revealTex.sample(s, in.uv).r;
+  float a = (d < 0.99995) ? 1.0 : cover;   // far plane == cleared background
   return float4(src.sample(s, in.uv).rgb, a);
 }
 
@@ -1762,6 +1771,7 @@ void RendererMetal::runPostChain()
     [ea setRenderPipelineState:_exportAlphaPipeline];
     [ea setFragmentTexture:sceneSrc atIndex:0];
     [ea setFragmentTexture:_sceneDepth atIndex:1];
+    [ea setFragmentTexture:_oitReveal atIndex:2];  // recover transparent (surface) coverage
     [ea setFragmentSamplerState:_postSampler atIndex:0];
     [ea drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [ea endEncoding];
