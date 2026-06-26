@@ -168,42 +168,90 @@ struct SceneParam: Identifiable {
     var decimals: Int = 0
     var options: [(label: String, value: Double)] = []
     let group: String
+    // When set, this control is a dependent sub-setting: shown indented under
+    // its parent toggle and hidden while the parent (a setting key) is off.
+    var dependsOn: String? = nil
+    // Color rows (Background, Outline color) bind to sceneState.bg /
+    // .outlineColor via a ColorPicker instead of the kind switch.
+    var isColor: Bool = false
+    // One-line description shown in a (?) popover next to the control.
+    var help: String = ""
 }
 
 enum SceneCatalog {
-    static let groups = ["Lighting & Quality", "Camera"]
+    // Ordered sub-groups shown inside the SCENE section (see panel reorg).
+    static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Effects", "Quality"]
     static let params: [SceneParam] = [
-        SceneParam(setting: "metal_raytrace", label: "Ray tracing", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_rt_shadows", label: "RT hard shadows", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_shadows", label: "Shadows", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_ssao",    label: "Ambient occlusion", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_outline", label: "Outline", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_outline_width", label: "Outline width", kind: .slider, min: 0.5, max: 5.0, step: 0.1, decimals: 1, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_msaa",    label: "MSAA 4×", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_tonemap", label: "Filmic tone-map", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_exposure", label: "Exposure", kind: .slider, min: 0.2, max: 2.0, step: 0.05, decimals: 2, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_sss_wrap", label: "Subsurface wrap", kind: .slider, min: 0, max: 1, step: 0.05, decimals: 2, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_temporal_ao", label: "Temporal AO (RT)", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_upscale", label: "Reduced-res upscale", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera"),
-        SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera"),
-        SceneParam(setting: "metal_dof_range", label: "DOF range", kind: .slider, min: 1, max: 60, step: 0.5, decimals: 1, group: "Camera"),
-        SceneParam(setting: "metal_dof_aperture", label: "DOF aperture (blur)", kind: .slider, min: 0, max: 40, step: 1, decimals: 0, group: "Camera"),
-        SceneParam(setting: "depth_cue",     label: "Depth cue / fog", kind: .toggle, group: "Lighting & Quality"),
+        // --- Canvas: background + multi-object/state layout ---
+        SceneParam(setting: "bg_rgb",     label: "Background", kind: .toggle, group: "Canvas", isColor: true,
+                   help: "Viewport background color."),
         // grid_mode is an int (0=off, 1=by object, 2=by state); the toggle maps
-        // off→0 / on→1 and reads on for any non-zero mode. Lays each object out
-        // in its own viewport cell (Metal grid support added in 1.2.0).
-        SceneParam(setting: "grid_mode",     label: "Grid", kind: .toggle, group: "Lighting & Quality"),
-        SceneParam(setting: "all_states",    label: "Overlay all states", kind: .toggle, group: "Lighting & Quality"),
-        // Lighting (made real-time on Metal in Phase 3; tunable here in Phase 2).
-        SceneParam(setting: "ambient",   label: "Ambient",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
-        SceneParam(setting: "direct",    label: "Direct",   kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
-        SceneParam(setting: "reflect",   label: "Reflect",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
-        SceneParam(setting: "specular",  label: "Specular", kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting & Quality"),
-        SceneParam(setting: "shininess", label: "Shininess", kind: .slider, min: 0, max: 100, step: 1, decimals: 0, group: "Lighting & Quality"),
-        SceneParam(setting: "field_of_view", label: "Field of view", kind: .slider, min: 10, max: 60, step: 1, decimals: 0, group: "Camera"),
+        // off→0 / on→1 and reads on for any non-zero mode.
+        SceneParam(setting: "grid_mode",  label: "Grid", kind: .toggle, group: "Canvas",
+                   help: "Lay each object out in its own grid cell instead of overlaid in one view."),
+        SceneParam(setting: "all_states", label: "Overlay all states", kind: .toggle, group: "Canvas",
+                   help: "Show every coordinate state (NMR models / trajectory frames) at once."),
+
+        // --- Camera: viewpoint + lens ---
+        SceneParam(setting: "field_of_view", label: "Field of view", kind: .slider, min: 10, max: 60, step: 1, decimals: 0, group: "Camera",
+                   help: "Camera lens angle. Lower = flatter / telephoto; higher = wider with more perspective."),
+        SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
+                   help: "Blur objects in front of and behind the focal plane for a photographic bokeh look."),
+        SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
+                   help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest."),
+        SceneParam(setting: "metal_dof_range", label: "DOF range", kind: .slider, min: 1, max: 60, step: 0.5, decimals: 1, group: "Camera", dependsOn: "metal_dof",
+                   help: "How far beyond focus before blur reaches maximum. Smaller = sharper falloff."),
+        SceneParam(setting: "metal_dof_aperture", label: "DOF aperture (blur)", kind: .slider, min: 0, max: 40, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
+                   help: "Maximum out-of-focus blur (bokeh radius). Larger = stronger blur."),
+
+        // --- Lighting: real-time lighting model + shading ---
+        SceneParam(setting: "ambient",   label: "Ambient",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",
+                   help: "Baseline fill light hitting all surfaces evenly, even in shadow."),
+        SceneParam(setting: "direct",    label: "Direct",   kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",
+                   help: "Strength of the main directional light."),
+        SceneParam(setting: "reflect",   label: "Reflect",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",
+                   help: "Overall diffuse reflectivity of surfaces."),
+        SceneParam(setting: "specular",  label: "Specular", kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",
+                   help: "Intensity of shiny specular highlights."),
+        SceneParam(setting: "shininess", label: "Shininess", kind: .slider, min: 0, max: 100, step: 1, decimals: 0, group: "Lighting",
+                   help: "Tightness of specular highlights. Higher = smaller, sharper glints."),
+        SceneParam(setting: "metal_sss_wrap", label: "Subsurface wrap", kind: .slider, min: 0, max: 1, step: 0.05, decimals: 2, group: "Lighting",
+                   help: "Wraps light past the terminator for a soft, waxy/translucent look. 0 = plain Lambert."),
+
+        // --- Shadows & AO: occlusion + the hardware-RT subsystem ---
+        SceneParam(setting: "metal_shadows", label: "Shadows", kind: .toggle, group: "Shadows & AO",
+                   help: "Real-time screen-space directional shadows."),
+        SceneParam(setting: "metal_ssao",    label: "Ambient occlusion", kind: .toggle, group: "Shadows & AO",
+                   help: "Screen-space ambient occlusion — darkens crevices and contact points for depth."),
+        SceneParam(setting: "metal_raytrace", label: "Ray tracing (AO + shadows)", kind: .toggle, group: "Shadows & AO",
+                   help: "Hardware ray tracing for higher-quality ambient occlusion and shadows. Requires a supported GPU; it powers the two options below."),
+        SceneParam(setting: "metal_rt_shadows", label: "RT hard shadows", kind: .toggle, group: "Shadows & AO", dependsOn: "metal_raytrace",
+                   help: "Trace crisp hard shadow rays instead of the shadow-map approximation. Needs ray tracing on."),
+        SceneParam(setting: "metal_temporal_ao", label: "Temporal AO", kind: .toggle, group: "Shadows & AO", dependsOn: "metal_raytrace",
+                   help: "Accumulate ray-traced AO across frames while the view is still, for cleaner, smoother occlusion. Needs ray tracing on."),
+
+        // --- Effects: stylization + post-processing ---
+        SceneParam(setting: "metal_outline", label: "Outline", kind: .toggle, group: "Effects",
+                   help: "Draw a silhouette / toon outline around objects."),
+        SceneParam(setting: "metal_outline_color", label: "Outline color", kind: .toggle, group: "Effects", dependsOn: "metal_outline", isColor: true,
+                   help: "Color of the outline contour."),
+        SceneParam(setting: "metal_outline_width", label: "Outline width", kind: .slider, min: 0.5, max: 5.0, step: 0.1, decimals: 1, group: "Effects", dependsOn: "metal_outline",
+                   help: "Thickness of the outline, in pixels."),
+        SceneParam(setting: "metal_tonemap", label: "Filmic tone-map", kind: .toggle, group: "Effects",
+                   help: "ACES filmic tone-mapping for a cinematic look with a softer highlight rolloff."),
+        SceneParam(setting: "metal_exposure", label: "Exposure", kind: .slider, min: 0.2, max: 2.0, step: 0.05, decimals: 2, group: "Effects", dependsOn: "metal_tonemap",
+                   help: "Brightness multiplier applied by the tone-map. 1.0 = neutral."),
+        SceneParam(setting: "depth_cue",  label: "Depth cue / fog", kind: .toggle, group: "Effects",
+                   help: "Fade distant parts of the scene into the background to convey depth."),
+
+        // --- Quality: antialiasing / perf / tessellation ---
+        SceneParam(setting: "metal_msaa",   label: "MSAA 4×", kind: .toggle, group: "Quality",
+                   help: "4× multisample antialiasing — smoother edges at some GPU cost."),
+        SceneParam(setting: "metal_upscale", label: "Reduced-res upscale", kind: .toggle, group: "Quality",
+                   help: "Render at reduced resolution and upscale (MetalFX) for better performance on slower GPUs."),
         SceneParam(setting: "surface_quality", label: "Surface quality", kind: .segmented,
-                   options: [("0", 0), ("1", 1), ("2", 2)], group: "Camera"),
+                   options: [("0", 0), ("1", 1), ("2", 2)], group: "Quality",
+                   help: "Surface mesh detail: 0 = coarse/fast, 2 = fine/slow."),
     ]
 }
 
@@ -1700,9 +1748,35 @@ private struct RepPropertyGrid: View {
 
 // MARK: - Scene (global) card
 
+// Small (?) affordance that reveals a one-line description on click (and on hover).
+private struct HelpButton: View {
+    let text: String
+    @State private var show = false
+    var body: some View {
+        Button { show.toggle() } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: 11))
+                .foregroundColor(PanelTheme.disabledColor)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(text)
+        .popover(isPresented: $show, arrowEdge: .trailing) {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundColor(PanelTheme.textColor)
+                .frame(width: 230, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+        }
+    }
+}
+
 private struct SceneCard: View {
     @EnvironmentObject var engine: PyMOLEngine
     @State private var showSettings = false
+    // Per-sub-group expand state; the heavier groups start collapsed.
+    @State private var openGroups: Set<String> = ["Canvas", "Camera", "Lighting", "Effects"]
     // Collapsed by default and part of the accordion: at most one detail view
     // (SCENE or an object card) is open at a time. This is the single home for
     // display settings now (the redundant toolbar "View" menu was removed).
@@ -1732,37 +1806,8 @@ private struct SceneCard: View {
                 VStack(spacing: 3) {
                     SceneStrip()
                     Divider().background(PanelTheme.disabledColor.opacity(0.3))
-                    sceneRow("Background") {
-                        ColorPicker("", selection: Binding(
-                            get: { Color(.sRGB,
-                                         red: engine.sceneState.bg.count > 0 ? engine.sceneState.bg[0] : 0,
-                                         green: engine.sceneState.bg.count > 1 ? engine.sceneState.bg[1] : 0,
-                                         blue: engine.sceneState.bg.count > 2 ? engine.sceneState.bg[2] : 0) },
-                            set: { setBackground($0) }))
-                            .labelsHidden().frame(width: 28)
-                    }
-                    ForEach(SceneCatalog.params) { p in
-                        // Hardware ray tracing is unavailable on some GPUs
-                        // (Simulator, A-series iPads); gray the row out there
-                        // so the toggle doesn't read as a working control.
-                        let rtUnavailable = p.setting == "metal_raytrace" && !engine.rayTracingSupported
-                        sceneRow(rtUnavailable ? "\(p.label) (unavailable)" : p.label) {
-                            sceneControl(p)
-                        }
-                        .disabled(rtUnavailable)
-                        .opacity(rtUnavailable ? 0.45 : 1)
-                        // Keep the outline contour color directly under its toggle.
-                        if p.setting == "metal_outline" {
-                            sceneRow("Outline color") {
-                                ColorPicker("", selection: Binding(
-                                    get: { Color(.sRGB,
-                                                 red: engine.sceneState.outlineColor.count > 0 ? engine.sceneState.outlineColor[0] : 0,
-                                                 green: engine.sceneState.outlineColor.count > 1 ? engine.sceneState.outlineColor[1] : 0,
-                                                 blue: engine.sceneState.outlineColor.count > 2 ? engine.sceneState.outlineColor[2] : 0) },
-                                    set: { setOutlineColor($0) }))
-                                    .labelsHidden().frame(width: 28)
-                            }
-                        }
+                    ForEach(SceneCatalog.groups, id: \.self) { group in
+                        sceneGroup(group)
                     }
                     Button { showSettings = true } label: {
                         HStack(spacing: 6) {
@@ -1785,21 +1830,82 @@ private struct SceneCard: View {
         .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
 
+    // A collapsible sub-group of Scene settings (Canvas, Camera, Lighting, …).
+    @ViewBuilder
+    private func sceneGroup(_ group: String) -> some View {
+        let isOpen = openGroups.contains(group)
+        VStack(spacing: 3) {
+            Button {
+                if isOpen { openGroups.remove(group) } else { openGroups.insert(group) }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(PanelTheme.disabledColor)
+                        .frame(width: 10)
+                    Text(group.uppercased())
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .tracking(0.4)
+                        .foregroundColor(PanelTheme.headerColor)
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if isOpen {
+                ForEach(SceneCatalog.params.filter { $0.group == group }) { p in
+                    if visible(p) { paramRow(p) }
+                }
+            }
+        }
+    }
+
+    // Dependent rows (dependsOn set) are hidden while their parent toggle is off.
+    private func visible(_ p: SceneParam) -> Bool {
+        guard let dep = p.dependsOn else { return true }
+        return (engine.sceneState.values[dep] ?? 0) > 0.5
+    }
+
+    @ViewBuilder
+    private func paramRow(_ p: SceneParam) -> some View {
+        // Hardware ray tracing is unavailable on some GPUs (Simulator, A-series
+        // iPads); gray the row out so the toggle doesn't read as a working control.
+        let rtUnavailable = p.setting == "metal_raytrace" && !engine.rayTracingSupported
+        sceneRow(rtUnavailable ? "\(p.label) (unavailable)" : p.label, help: p.help) { sceneControl(p) }
+            .padding(.leading, p.dependsOn != nil ? 12 : 0)   // indent gated sub-settings
+            .disabled(rtUnavailable)
+            .opacity(rtUnavailable ? 0.45 : 1)
+    }
+
     @ViewBuilder
     private func sceneControl(_ p: SceneParam) -> some View {
-        let v = engine.sceneState.values[p.setting] ?? 0
-        switch p.kind {
-        case .toggle:
-            ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
-        case .segmented:
-            SegmentedSetting(prop: RepProperty(setting: p.setting, label: p.label, kind: .segmented, options: p.options),
-                             value: v) { engine.runCommand("set \(p.setting), \(Int($0))") }
-        case .slider:
-            LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
-                                            min: p.min, max: p.max, step: p.step, decimals: p.decimals),
-                          value: v,
-                          onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
-                          onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+        if p.isColor {
+            ColorPicker("", selection: Binding(
+                get: {
+                    let c = (p.setting == "bg_rgb") ? engine.sceneState.bg : engine.sceneState.outlineColor
+                    return Color(.sRGB, red: c.count > 0 ? c[0] : 0,
+                                 green: c.count > 1 ? c[1] : 0, blue: c.count > 2 ? c[2] : 0)
+                },
+                set: { c in
+                    if p.setting == "bg_rgb" { setBackground(c) } else { setOutlineColor(c) }
+                }))
+                .labelsHidden().frame(width: 28)
+        } else {
+            let v = engine.sceneState.values[p.setting] ?? 0
+            switch p.kind {
+            case .toggle:
+                ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
+            case .segmented:
+                SegmentedSetting(prop: RepProperty(setting: p.setting, label: p.label, kind: .segmented, options: p.options),
+                                 value: v) { engine.runCommand("set \(p.setting), \(Int($0))") }
+            case .slider:
+                LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                              value: v,
+                              onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
+                              onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+            }
         }
     }
 
@@ -1816,7 +1922,7 @@ private struct SceneCard: View {
     }
 
     @ViewBuilder
-    private func sceneRow<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
+    private func sceneRow<Content: View>(_ label: String, help: String = "", @ViewBuilder _ content: () -> Content) -> some View {
         HStack(spacing: 6) {
             Text(label)
                 .font(.system(size: 10))
@@ -1824,6 +1930,7 @@ private struct SceneCard: View {
                 .frame(width: 110, alignment: .leading)
             content()
             Spacer(minLength: 0)
+            if !help.isEmpty { HelpButton(text: help) }
         }
     }
 }
