@@ -2037,11 +2037,30 @@ void SceneRenderMetal(PyMOLGlobals* G)
     const float* outlineCol =
         ColorGet(G, SettingGetGlobal_color(G, cSetting_metal_outline_color));
     float outlineWidth = SettingGetGlobal_f(G, cSetting_metal_outline_width);
+    int dofEnabled = SettingGetGlobal_b(G, cSetting_metal_dof) ? 1 : 0;
+    float dofFocus = SettingGetGlobal_f(G, cSetting_metal_dof_focus);
+    if (dofFocus <= 0.0f) {
+      // Auto-focus on the center of interest (the rotation origin) rather than
+      // the screen-center pixel. The origin's eye-space distance is
+      // -(modelview * origin).z (mv is column-major: row 2 = mv[2,6,10,14]).
+      // If this can't be resolved to a positive distance, dofFocus stays 0 and
+      // the shader falls back to sampling the center-pixel depth.
+      float origin[3];
+      SceneOriginGet(G, origin);
+      float ez = mv[2] * origin[0] + mv[6] * origin[1] + mv[10] * origin[2] + mv[14];
+      if (-ez > 0.0f)
+        dofFocus = -ez;
+    }
+    float dofRange = SettingGetGlobal_f(G, cSetting_metal_dof_range);
+    int temporalAO = SettingGetGlobal_b(G, cSetting_metal_temporal_ao) ? 1 : 0;
+    int upscaleEnabled = SettingGetGlobal_b(G, cSetting_metal_upscale) ? 1 : 0;
+    float dofAperture = SettingGetGlobal_f(G, cSetting_metal_dof_aperture);
     G->Renderer->setPostParams(fogEnabled, fogStart, fogEnd, bg[0], bg[1],
         bg[2], aoEnabled, shadowEnabled, aaEnabled, outlineEnabled, proj[10],
         proj[14], proj[0], proj[5], rtEnabled, tonemapEnabled, exposure,
         rtShadowEnabled, outlineCol[0], outlineCol[1], outlineCol[2],
-        outlineWidth);
+        outlineWidth, dofEnabled, dofFocus, dofRange, temporalAO,
+        upscaleEnabled, dofAperture);
     // Lighting model — the Metal lit shaders read these instead of hard-coded
     // constants, so the Scene-panel lighting sliders take effect.
     G->Renderer->setLightingParams(
@@ -2049,7 +2068,8 @@ void SceneRenderMetal(PyMOLGlobals* G)
         SettingGetGlobal_f(G, cSetting_direct),
         SettingGetGlobal_f(G, cSetting_reflect),
         SettingGetGlobal_f(G, cSetting_specular),
-        SettingGetGlobal_f(G, cSetting_shininess));
+        SettingGetGlobal_f(G, cSetting_shininess),
+        SettingGetGlobal_f(G, cSetting_metal_sss_wrap));
     // MSAA: 4x when metal_msaa is on, otherwise single-sample. The renderer
     // stashes this and applies it at the next setDrawable (no encoder open),
     // so toggling at runtime never mismatches an in-flight encoder.

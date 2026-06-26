@@ -209,14 +209,25 @@ def all_macho(app):
                 yield p
 
 
-def collect(start):
-    """BFS the copyable-dependency graph from `start`.
+def macos_machos(app):
+    """The app's OWN compiled Mach-Os under Contents/MacOS — the main executable
+    plus, in Xcode debug-dylib builds, RayMol.debug.dylib / __preview.dylib.
+    These are the binaries that link Homebrew dylibs and must be scanned and
+    rewritten. The embedded CPython tree (Resources/python) and Sparkle
+    (Frameworks) are already self-contained, so they are intentionally NOT roots
+    here (step 6 still verifies them read-only)."""
+    macos = app / "Contents/MacOS"
+    return [p for p in macos.iterdir() if is_macho(p)] if macos.is_dir() else []
+
+
+def collect(starts):
+    """BFS the copyable-dependency graph from `starts` (one or more Mach-Os).
 
     Returns {basename: resolved_source_path}, keyed by the basename used in the
     load command so the @rpath/<basename> rewrite matches exactly.
     """
     found = {}
-    queue = [start]
+    queue = list(starts)
     while queue:
         f = queue.pop()
         for ref in copyable_deps(f):
@@ -247,12 +258,22 @@ def main():
         raise SystemExit(f"Not a .app bundle: {app}")
 
     binary = main_executable(app)
+    # Scan ALL of the app's own Mach-Os, not just the (possibly thin) main stub.
+    # Xcode's debug-dylib builds put the real code — and its Homebrew
+    # LC_LOAD_DYLIBs — in RayMol.debug.dylib, leaving Contents/MacOS/RayMol a stub
+    # with no copyable deps. Seeding only from the main binary then found nothing
+    # to bundle, and the debug dylib's absolute freetype/libpng refs tripped the
+    # whole-bundle verify in step 6.
+    roots = macos_machos(app) or [binary]
     fw_dir = app / "Contents/Frameworks"
     print(f"App:        {app}")
     print(f"Main binary: {binary.relative_to(app)}")
+    others = sorted(p.name for p in roots if p != binary)
+    if others:
+        print(f"Also scanning: {', '.join(others)}")
 
     # ---- 1. collect -----------------------------------------------------------
-    deps = collect(binary)
+    deps = collect(roots)
     if deps:
         print(f"Collected {len(deps)} bundleable dylib(s):")
         for base, src in sorted(deps.items()):
@@ -272,7 +293,7 @@ def main():
 
     # ---- 3. rewrite install names (driven by what we actually bundled) --------
     copied = set(deps)
-    for t in [binary] + [fw_dir / b for b in deps]:
+    for t in list(roots) + [fw_dir / b for b in deps]:
         changes = [(ref, f"@rpath/{os.path.basename(ref)}")
                    for ref in deps_of(t)
                    if ref.startswith("/") and os.path.basename(ref) in copied]
@@ -285,7 +306,8 @@ def main():
 
     # ---- 4. rpaths ------------------------------------------------------------
     if deps:
-        add_rpath(binary, "@executable_path/../Frameworks")
+        for r in roots:
+            add_rpath(r, "@executable_path/../Frameworks")
         for base in deps:
             add_rpath(fw_dir / base, "@loader_path")
 
