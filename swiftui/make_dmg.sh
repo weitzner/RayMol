@@ -82,13 +82,46 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 cp -R "$SRC_APP" "$WORK/$APPNAME.app"
 APP="$WORK/$APPNAME.app"
 
+echo "== 1b/8  Ensure Sparkle auto-update keys are in Info.plist =="
+# CRITICAL: the build-time injection (project.yml 'Sparkle: inject…' run-script
+# phase) edits the generated Info.plist but declares no dependency on it, so its
+# ordering vs Xcode's Info.plist processing is a RACE. When it loses, the app
+# ships WITHOUT SUPublicEDKey — and Sparkle rejects every such update on the
+# client as "(Ed)DSA key removal" → "The update is improperly signed and could
+# not be validated." (This is exactly what broke the first 1.3.2/build 10.)
+# Re-assert the keys here, deterministically, on the copied app BEFORE signing
+# so the signature covers them and BEFORE the long notarization so a keyless
+# build fails fast instead of shipping. The public key is read from the signing
+# keychain (generate_keys -p) so it ALWAYS matches the private key that
+# publish_release.sh's sign_update uses to sign the appcast.
+PLIST="$APP/Contents/Info.plist"
+GEN_KEYS="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*Sparkle/bin/generate_keys' 2>/dev/null | head -1)"
+[ -x "$GEN_KEYS" ] || { echo "ERROR: Sparkle generate_keys not found; build the project once so SPM resolves Sparkle."; exit 1; }
+ED_PUB="$("$GEN_KEYS" -p 2>/dev/null)"
+[ -n "$ED_PUB" ] || { echo "ERROR: could not read the Sparkle EdDSA public key from the keychain (is it unlocked?)."; exit 1; }
+/usr/bin/plutil -replace SUFeedURL -string "https://github.com/javierbq/RayMol/releases/latest/download/appcast.xml" "$PLIST"
+/usr/bin/plutil -replace SUPublicEDKey -string "$ED_PUB" "$PLIST"
+/usr/bin/plutil -replace SUEnableAutomaticChecks -bool true "$PLIST"
+/usr/bin/plutil -replace SUScheduledCheckInterval -integer 86400 "$PLIST"
+GOT="$(/usr/bin/plutil -extract SUPublicEDKey raw "$PLIST" 2>/dev/null)"
+[ "$GOT" = "$ED_PUB" ] || { echo "ERROR: SUPublicEDKey injection/verification failed."; exit 1; }
+echo "  SUPublicEDKey=$ED_PUB injected + verified in $PLIST"
+
 echo "== 2/8  Sign every embedded Mach-O, deepest path first =="
 # Enumerate ALL real files, keep the Mach-O ones (incl. extensionless
 # executables like python3.13), sign deepest-first so nested code is sealed
 # before its container. Capture the list with `|| true`: the enumeration
 # pipeline exits non-zero whenever the final file is non-Mach-O (grep -q → 1),
 # which would otherwise trip `set -e -o pipefail` after a fully successful run.
-machos="$( { find "$APP" -type f | while read -r f; do
+#
+# EXCLUDE the main executable (Contents/MacOS/$APPNAME): the bundled Homebrew
+# dylibs (libfreetype/libpng, embedded by the build's Frameworks phase) sit at
+# the SAME path depth as it, so the deepest-first sort can't guarantee they are
+# signed before it — and codesign refuses to sign the main binary while a linked
+# nested dylib is still unsigned ("code object is not signed at all in
+# subcomponent"). The main executable is sealed (with entitlements + hardened
+# runtime) by the bundle-level sign in step 3/8, after all nested code is signed.
+machos="$( { find "$APP" -type f ! -path "$APP/Contents/MacOS/$APPNAME" | while read -r f; do
   file "$f" | grep -q "Mach-O" && printf '%d\t%s\n' "$(grep -o / <<<"$f" | wc -l)" "$f"
 done | sort -rn | cut -f2-; } || true )"
 while IFS= read -r macho; do
