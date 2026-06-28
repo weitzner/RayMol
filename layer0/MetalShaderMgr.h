@@ -20,6 +20,8 @@ class MetalShaderMgr {
 public:
 #ifdef __OBJC__
   MetalShaderMgr(id<MTLDevice> device);
+  // MRC (no ARC): the caches and _library hold +1 objects that must be released.
+  ~MetalShaderMgr();
 
   /// Load the pre-compiled metallib from the app bundle.
   /// Falls back to runtime compilation from .metal source if not found.
