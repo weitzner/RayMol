@@ -12,6 +12,16 @@ namespace pymol {
 
 MetalShaderMgr::MetalShaderMgr(id<MTLDevice> device) : _device(device) {}
 
+MetalShaderMgr::~MetalShaderMgr()
+{
+  // MRC (no ARC): release every +1 object owned by the caches and the library.
+  // _device is not owned (plain ctor assignment) and is not released.
+  for (auto& kv : _vertexFunctions) [kv.second release];
+  for (auto& kv : _fragmentFunctions) [kv.second release];
+  for (auto& kv : _pipelineCache) [kv.second release];
+  [_library release];
+}
+
 // ============================================================
 // Library loading
 // ============================================================
@@ -46,10 +56,12 @@ bool MetalShaderMgr::loadMetallibFromBundle()
   NSError* error = nil;
   NSURL* url = [NSURL fileURLWithPath:libPath];
   _library = [_device newLibraryWithURL:url error:&error];
-  if (error) {
+  // Per Apple's convention, NSError is only meaningful when the return is nil;
+  // a non-nil library may come back with a (warning) error. Check the result,
+  // not the out-param, so a valid library isn't discarded (and leaked).
+  if (!_library) {
     NSLog(@"MetalShaderMgr: failed to load metallib: %@",
         error.localizedDescription);
-    _library = nil;
     return false;
   }
 
@@ -136,6 +148,7 @@ bool MetalShaderMgr::compileFromSourceFiles()
   _library = [_device newLibraryWithSource:fullSource
                                    options:options
                                      error:&error];
+  [options release];  // MRC: MTLCompileOptions (+1) consumed by the compile
   if (error) {
     // Metal reports warnings via error even on success
     if (!_library) {
@@ -251,7 +264,10 @@ id<MTLRenderPipelineState> MetalShaderMgr::getPipelineState(
   NSError* error = nil;
   id<MTLRenderPipelineState> pso =
       [_device newRenderPipelineStateWithDescriptor:desc error:&error];
-  if (error) {
+  [desc release];  // MRC: descriptor (+1) consumed by pipeline creation
+  // Check the result, not the out-param: a pipeline that compiled with warnings
+  // returns non-nil with a populated error and must not be discarded.
+  if (!pso) {
     NSLog(@"MetalShaderMgr: pipeline state error for '%s': %@",
         shaderName.c_str(), error.localizedDescription);
     return nil;

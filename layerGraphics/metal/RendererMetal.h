@@ -220,6 +220,12 @@ private:
 
   void ensureEncoder();
   void applyDepthStencilState();
+  // Cached depth-stencil states for the transparent (OIT) and opaque bezier-tube
+  // draw paths. Built once on first use and reused across all draws — previously
+  // a fresh state (+ descriptor) was created per draw call, leaking one of each
+  // every transparent/tube draw under MRC. Released in the destructor.
+  id<MTLDepthStencilState> oitDepthState();     // LessEqual, no depth write
+  id<MTLDepthStencilState> bezierDepthState();  // LessEqual, depth write
   MTLPrimitiveType toMTL(PrimitiveType t);
   void buildVBOPipelines();
 
@@ -347,6 +353,15 @@ private:
   // Build a weighted-blended OIT MRT pipeline (vbo_vertex + vbo_fragment_oit)
   // for an arbitrary vertex layout (e.g. the surface's stride-44 layout).
   id<MTLRenderPipelineState> oitPipelineForVD(MTLVertexDescriptor* vd);
+  // Build-once cache for one-off VBO pipelines whose vertex layout does not match
+  // a prebuilt stride (e.g. the molecular-surface stride-44 layout). Without it,
+  // drawVBO/drawVBOIndexed rebuilt a pipeline on EVERY such draw — a per-frame
+  // MRC leak plus the (significant) cost of pipeline-state compilation. The cache
+  // OWNS each +1 pipeline; callers borrow. Released in setSampleCount + the dtor.
+  enum class VBOPipelineVariant { Lit, Unlit, UnlitFlat, Oit, Shadow };
+  id<MTLRenderPipelineState> cachedVBOPipeline(VBOPipelineVariant variant,
+      size_t stride, int posOffset, int normalOffset, int colorOffset,
+      int colorType, MTLVertexDescriptor* vd);
   id<MTLRenderPipelineState> _sphereOitPipeline = nil;
   id<MTLRenderPipelineState> _cylinderOitPipeline = nil;
   NSUInteger _cylinderOitStride = 0;
@@ -496,6 +511,10 @@ private:
 
   // Depth/stencil state
   id<MTLDepthStencilState> _depthStencilState;
+  // Cached transparent/opaque-tube depth-stencil states (see oitDepthState/
+  // bezierDepthState). nil-init (MRC: not zero-initialized otherwise).
+  id<MTLDepthStencilState> _oitDepthState = nil;
+  id<MTLDepthStencilState> _bezierDepthState = nil;
   bool _depthTestEnabled = false;
   bool _depthWriteEnabled = true;
   MTLCompareFunction _depthCompareFunc = MTLCompareFunctionLess;
@@ -511,6 +530,8 @@ private:
 
   // VBO buffer cache — reuse Metal buffers across frames
   std::unordered_map<const void*, id<MTLBuffer>> _vboCache;
+  // One-off VBO pipeline cache (see cachedVBOPipeline). Owns each +1 pipeline.
+  std::unordered_map<uint64_t, id<MTLRenderPipelineState>> _vboPipelineCache;
   id<MTLBuffer> _batchBuffer;  // reusable buffer for batch drawing
 
   // Clear values

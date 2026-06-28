@@ -185,6 +185,10 @@ RendererMetal::RendererMetal(id<MTLDevice> device, id<MTLCommandQueue> queue)
 // indicators). Rebuilt by setSampleCount when the MSAA sample count changes.
 void RendererMetal::buildBatchPipeline()
 {
+  // MRC: release the previous pipeline before rebuilding (e.g. on MSAA change).
+  // On the first call (from the ctor) _batchPipeline is nil, so this is a no-op.
+  [_batchPipeline release];
+  _batchPipeline = nil;
   NSString* batchSrc = @R"(
 #include <metal_stdlib>
 using namespace metal;
@@ -235,7 +239,7 @@ fragment float4 batch_fragment(BatchVertexOut in [[stage_in]])
 
     if (vertFunc && fragFunc) {
       // Vertex descriptor matching BatchVertex { float3 pos, float4 color, float3 normal }
-      MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+      MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
       // position: offset 0, float3
       vd.attributes[0].format = MTLVertexFormatFloat3;
       vd.attributes[0].offset = 0;
@@ -274,7 +278,12 @@ fragment float4 batch_fragment(BatchVertexOut in [[stage_in]])
       if (!_batchPipeline) {
         NSLog(@"RendererMetal: failed to create batch pipeline: %@", error);
       }
+      [psd release];  // MRC: descriptor (+1) consumed by pipeline creation
     }
+    // MRC: the functions (+1) and library (+1) aren't needed past pipeline build.
+    [vertFunc release];
+    [fragFunc release];
+    [batchLib release];
   } else {
     NSLog(@"RendererMetal: failed to compile batch shader: %@", error);
   }
@@ -288,27 +297,115 @@ void RendererMetal::setSampleCount(NSUInteger n)
   // Rebuild every sample-count-dependent (opaque-pass) pipeline. OIT and
   // post-process pipelines stay single-sample. Lazy pipelines rebuild on next
   // use once nil'd; batch + VBO are rebuilt eagerly here.
-  _sphereImpostorPipeline = nil;
-  _cylinderImpostorPipeline = nil;
+  // MRC: release the +1 sample-count-dependent pipelines before discarding them.
+  // Lazy ones (sphere/cylinder/bezier/label/line) rebuild on next use; the eager
+  // batch/VBO pipelines are rebuilt by build*Pipelines() below.
+  [_sphereImpostorPipeline release];   _sphereImpostorPipeline = nil;
+  [_cylinderImpostorPipeline release]; _cylinderImpostorPipeline = nil;
   _cylinderPipelineStride = 0;
-  _bezierTubePipeline = nil;
-  _labelPipeline = nil;
-  _vboLinePipeline = nil;  // lazy; rebuilt at new sample count on next line draw
+  [_bezierTubePipeline release];       _bezierTubePipeline = nil;
+  [_labelPipeline release];            _labelPipeline = nil;
+  [_vboLinePipeline release];          _vboLinePipeline = nil;  // lazy; rebuilt on next line draw
+  // The interior-cap MARK pipeline is lazy + sample-count-dependent but is NOT
+  // rebuilt by buildVBOPipelines (it's stride-keyed, built in drawVBO*). Drop it
+  // so it rebuilds at the new count — otherwise its rasterSampleCount would
+  // mismatch the scene pass (leak + Metal validation error on capped surfaces).
+  [_capMarkPipeline release];          _capMarkPipeline = nil;  _capMarkStride = 0;
+  // The layout pipeline cache is keyed by sample count; drop it so one-off
+  // pipelines rebuild at the new count (release the +1s the cache owns).
+  for (auto& kv : _vboPipelineCache) [kv.second release];
+  _vboPipelineCache.clear();
   buildBatchPipeline();
   buildVBOPipelines();
   // Force scene-target recreation (single-sample vs multisampled) next frame.
-  _sceneColorMS = nil;
-  _sceneDepthMS = nil;
+  // MRC: release the old MS targets now; ensurePostTargets recreates them and its
+  // own release of these ivars then sees nil (a safe no-op).
+  [_sceneColorMS release];  _sceneColorMS = nil;
+  [_sceneDepthMS release];  _sceneDepthMS = nil;
   _rtW = 0;
   _rtH = 0;
 }
 
 RendererMetal::~RendererMetal()
 {
+  // MRC (no ARC, no autorelease pool): every +1-owned Metal/CF object created
+  // via alloc/init or a -new* method must be released here, or the entire GPU
+  // resource set leaks each time the renderer is torn down (device/context loss,
+  // view reinit). NOT released here: _device/_queue (plain ctor assignment, no
+  // retain — owned by the Metal layer), the per-frame _cmdBuffer/_encoder/
+  // _drawable (autoreleased), and _passDesc/_screenPassDesc/_currentPipeline
+  // (non-owning aliases of owned objects).
+
+  // Pooled Metal objects held by value in STL maps: clear()/erase() does NOT
+  // send -release under MRC, so release each entry before clearing.
+  for (auto& kv : _vboCache) [kv.second release];
+  _vboCache.clear();
+  for (auto& kv : _vboPipelineCache) [kv.second release];
+  _vboPipelineCache.clear();
+  for (auto& kv : _buffers) [kv.second release];
   _buffers.clear();
+  for (auto& kv : _textures) [kv.second release];
   _textures.clear();
+  for (auto& kv : _fbColorAttachments) [kv.second release];
   _fbColorAttachments.clear();
+  for (auto& kv : _fbDepthAttachments) [kv.second release];
   _fbDepthAttachments.clear();
+
+  // Offscreen scene/post/OIT/RT-AO/shadow targets + atlas + capture copy
+  // (mirror the ensurePostTargets release block, which only covers resize).
+  [_sceneColor release];     [_sceneDepth release];     [_postColor release];
+  [_sceneColorMS release];   [_sceneDepthMS release];
+  [_oitAccum release];       [_oitReveal release];
+  [_rtAO release];           [_rtAOHistory release];    [_rtAOAccum release];
+  [_shadowDepth release];    [_captureTex release];     [_labelAtlas release];
+
+  // Render-pass descriptors ([[MTLRenderPassDescriptor alloc] init], +1).
+  [_scenePassDesc release];  [_oitPassDesc release];    [_shadowPassDesc release];
+
+  // Pipeline states (newRenderPipelineStateWithDescriptor, +1).
+  [_batchPipeline release];
+  [_vboPipelineUByte release];        [_vboPipelineFloat release];
+  [_sphereImpostorPipeline release];  [_cylinderImpostorPipeline release];
+  [_vboOitPipelineUByte release];     [_vboOitPipelineFloat release];
+  [_sphereOitPipeline release];       [_cylinderOitPipeline release];
+  [_oitResolvePipeline release];
+  [_vboShadowPipelineUByte release];  [_vboShadowPipelineFloat release];
+  [_sphereShadowPipeline release];    [_cylinderShadowPipeline release];
+  [_shadowDebugPipeline release];
+  [_capMarkPipeline release];         [_capFillPipeline release];
+  [_vboLinePipeline release];         [_bezierTubePipeline release];
+  [_blitPipeline release];            [_ssaoPipeline release];
+  [_fxaaPipeline release];            [_outlinePipeline release];
+  [_tonemapPipeline release];         [_dofPipeline release];
+  [_exportAlphaPipeline release];
+  [_rtAOPipeline release];            [_rtResolvePipeline release];
+  [_rtAOAccumPipeline release];       [_labelPipeline release];
+
+  // Shader functions (newFunctionWithName, +1).
+  [_vboVertexFunc release];           [_vboFragmentFunc release];
+  [_vboVertexUnlitFunc release];      [_vboFragmentUnlitFunc release];
+  [_vboVertexUnlitFlatFunc release];
+  [_vboFragmentOitFunc release];      [_vboFragmentShadowFunc release];
+  [_capMarkVtxFunc release];          [_capMarkFragFunc release];
+  [_capFillVtxFunc release];          [_capFillFragFunc release];
+  [_lineAAVtxFunc release];           [_lineAAFragFunc release];
+
+  // Samplers (newSamplerStateWithDescriptor, +1).
+  [_postSampler release];   [_shadowSampler release];   [_labelSampler release];
+
+  // Depth-stencil states (newDepthStencilStateWithDescriptor, +1).
+  [_depthStencilState release];  [_shadowDepthState release];
+  [_capMarkDSS release];         [_capFillDSS release];
+  [_oitDepthState release];      [_bezierDepthState release];
+
+  // Real-time ray-tracing buffers + acceleration structures (+1).
+  [_rtProtoVerts release];       [_rtProtoIndices release];
+  [_rtSphereProtoAS release];    [_rtTriProtoAS release];   [_rtInstanceAS release];
+  [_bezierTessFactors release];
+
+  // Reusable batch buffer (+1; grown via newBufferWithLength).
+  [_batchBuffer release];
+
   // MRC: the grow-on-demand line-AA scratch buffer is owned here.
   [_lineBuffer release];
   _lineBuffer = nil;
@@ -431,7 +528,13 @@ void RendererMetal::applyDepthStencilState()
   desc.depthCompareFunction =
       _depthTestEnabled ? _depthCompareFunc : MTLCompareFunctionAlways;
   desc.depthWriteEnabled = _depthWriteEnabled;
+  // MRC: this runs whenever the depth mode changes (frequently — per rep, and
+  // every frame from endShadowPass). Release the previous state before replacing
+  // it and release the descriptor, or both leak on every call. Any state still
+  // referenced by an in-flight command buffer is kept alive by Metal's own retain.
+  [_depthStencilState release];
   _depthStencilState = [_device newDepthStencilStateWithDescriptor:desc];
+  [desc release];
   _depthStencilDirty = false;
 
   if (_encoder) {
@@ -1095,6 +1198,7 @@ void RendererMetal::buildPostPipelines()
     sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
     sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     _postSampler = [_device newSamplerStateWithDescriptor:sd];
+    [sd release];  // MRC: descriptor (+1) consumed by sampler creation
   }
   if (!_shadowSampler) {
     // Depth-COMPARISON sampler with LINEAR filtering: each sample_compare tap
@@ -1109,12 +1213,13 @@ void RendererMetal::buildPostPipelines()
     ss.tAddressMode = MTLSamplerAddressModeClampToEdge;
     ss.compareFunction = MTLCompareFunctionLessEqual;
     _shadowSampler = [_device newSamplerStateWithDescriptor:ss];
+    [ss release];  // MRC: descriptor (+1) consumed by sampler creation
   }
 
   id<MTLFunction> vfn = [lib newFunctionWithName:@"post_vertex"];
   auto mkpipe = [&](NSString* name) -> id<MTLRenderPipelineState> {
     id<MTLFunction> ffn = [lib newFunctionWithName:name];
-    if (!vfn || !ffn) return nil;
+    if (!vfn || !ffn) { [ffn release]; return nil; }
     MTLRenderPipelineDescriptor* psd = [[MTLRenderPipelineDescriptor alloc] init];
     psd.vertexFunction = vfn; psd.fragmentFunction = ffn;
     psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -1122,6 +1227,8 @@ void RendererMetal::buildPostPipelines()
     id<MTLRenderPipelineState> p =
         [_device newRenderPipelineStateWithDescriptor:psd error:&e];
     if (!p) NSLog(@"RendererMetal: post pipeline %@ failed: %@", name, e);
+    [psd release];  // MRC: descriptor (+1) consumed by pipeline creation
+    [ffn release];  // MRC: fragment function (+1) retained by the pipeline
     return p;
   };
   _blitPipeline = mkpipe(@"post_blit");
@@ -1145,8 +1252,14 @@ void RendererMetal::buildPostPipelines()
       _rtAOAccumPipeline = [_device newRenderPipelineStateWithDescriptor:psd error:&e];
       if (!_rtAOAccumPipeline)
         NSLog(@"RendererMetal: post_ao_accum pipeline failed: %@", e);
+      [psd release];  // MRC: descriptor (+1) consumed by pipeline creation
     }
+    [afn release];  // MRC: function (+1) retained by the pipeline
   }
+  // MRC: the shared vertex function and the source library (+1) are no longer
+  // needed once all post pipelines are built.
+  [vfn release];
+  [lib release];
 }
 
 void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
@@ -1496,7 +1609,9 @@ RendererMetal::buildAccelStructure(MTLAccelerationStructureDescriptor* desc)
   [e endEncoding];
   [cb commit];
   [cb waitUntilCompleted];
-  return as;
+  // MRC: the build has completed, so the scratch buffer (+1) is no longer needed.
+  [scratch release];
+  return as;  // +1 — caller takes ownership (stored in an _rt*AS ivar, dtor releases)
 }
 
 // One shared unit-radius icosphere (icosahedron subdivided once, ~80 tris) used
@@ -1596,6 +1711,7 @@ void RendererMetal::ensureRayTracingAS()
   if (_rtReady && _rtInstanceAS && h == _rtSphereHash) { /* unchanged */ }
   else {
     // (Re)build the world-triangle primitive AS (sticks + cartoon/surface).
+    [_rtTriProtoAS release];  // MRC: release the previous rebuild's proto AS (+1)
     _rtTriProtoAS = nil;
     if (nTris > 0) {
       id<MTLBuffer> tb = [_device newBufferWithBytes:_rtTris.data()
@@ -1612,6 +1728,9 @@ void RendererMetal::ensureRayTracingAS()
           [MTLPrimitiveAccelerationStructureDescriptor descriptor];
       pd.geometryDescriptors = @[tgeo];
       _rtTriProtoAS = buildAccelStructure(pd);
+      // MRC: buildAccelStructure committed+waited, so the source vertex buffer
+      // (+1) is no longer needed (the AS holds its own compacted geometry).
+      [tb release];
     }
 
     // Top-level instance AS: N icosphere instances (atoms) + 1 world-tri
@@ -1664,7 +1783,9 @@ void RendererMetal::ensureRayTracingAS()
     idesc.instancedAccelerationStructures = protos;
     idesc.instanceCount = (NSUInteger)nInst;
     idesc.instanceDescriptorBuffer = instBuf;
+    [_rtInstanceAS release];  // MRC: release the previous rebuild's instance AS (+1)
     _rtInstanceAS = buildAccelStructure(idesc);
+    [instBuf release];  // MRC: build committed+waited; instance descriptor buffer (+1) done
     _rtSphereHash = h;
     _rtBuiltCount = nSph;
     _rtReady = (_rtInstanceAS != nil);
@@ -1756,7 +1877,12 @@ void RendererMetal::runPostChain()
     std::memcpy(u.lightViewProj, _lightViewProjEye, 16 * sizeof(float));
 
     // Pass A: trace AO -> _rtAO (R16Float).
-    MTLRenderPassDescriptor* pa = [[MTLRenderPassDescriptor alloc] init];
+    // MRC: all per-frame render-pass descriptors in runPostChain use the
+    // autoreleased +renderPassDescriptor ctor (NOT [[alloc] init], which is +1
+    // and would leak every frame — runPostChain runs once per presented frame).
+    // The per-pass encoders below are likewise autoreleased and have never
+    // leaked, confirming the per-frame main-thread autorelease pool drains them.
+    MTLRenderPassDescriptor* pa = [MTLRenderPassDescriptor renderPassDescriptor];
     pa.colorAttachments[0].texture = _rtAO;
     pa.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pa.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1787,7 +1913,7 @@ void RendererMetal::runPostChain()
       bool reset = !_rtAOHistoryValid || camMoved || (_rtSphereHash != _rtAOHashPrev);
       struct { float alpha; float reset; float p0; float p1; } au;
       au.alpha = 0.1f; au.reset = reset ? 1.0f : 0.0f; au.p0 = au.p1 = 0.0f;
-      MTLRenderPassDescriptor* pacc = [[MTLRenderPassDescriptor alloc] init];
+      MTLRenderPassDescriptor* pacc = [MTLRenderPassDescriptor renderPassDescriptor];
       pacc.colorAttachments[0].texture = _rtAOAccum;
       pacc.colorAttachments[0].loadAction = MTLLoadActionDontCare;
       pacc.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1811,7 +1937,7 @@ void RendererMetal::runPostChain()
     }
 
     // Pass B: depth-aware-blur the AO + shadow/fog composite -> _postColor.
-    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = _postColor;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pd.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1852,7 +1978,7 @@ void RendererMetal::runPostChain()
     u._pad = 0.0f;
     std::memcpy(u.lightViewProj, _lightViewProjEye, 16 * sizeof(float));
 
-    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = _postColor;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pd.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1874,7 +2000,7 @@ void RendererMetal::runPostChain()
   // (post-processed) color. Ping-pongs to whichever target isn't the source.
   if (_oitHasContent && _oitResolvePipeline && _oitAccum) {
     id<MTLTexture> dst = (sceneSrc == _sceneColor) ? _postColor : _sceneColor;
-    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = dst;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pd.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1906,7 +2032,7 @@ void RendererMetal::runPostChain()
     u.focusRange = (_dofRange > 0.01f) ? _dofRange : 14.0f;
     u.maxRadiusPx = (_dofAperture > 0.0f) ? _dofAperture : 14.0f;
     u._pad = 0.0f;
-    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = dst;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pd.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1934,7 +2060,7 @@ void RendererMetal::runPostChain()
     u.invH = (_rtH > 0) ? 1.0f / (float)_rtH : 0.0f;
     u.colR = _outlineR; u.colG = _outlineG; u.colB = _outlineB;
     u.thickness = _outlineWidth;
-    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = dst;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pd.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1962,7 +2088,7 @@ void RendererMetal::runPostChain()
     u.exposure = _exposure;
     u.tonemap = _tonemapEnabled ? 1.0f : 0.0f;
     u._p0 = u._p1 = 0.0f;
-    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = dst;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pd.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1985,7 +2111,7 @@ void RendererMetal::runPostChain()
   // takes this path — its layer is opaque.
   if (_offscreen && _clearA < 0.5f && _exportAlphaPipeline && _sceneDepth) {
     id<MTLTexture> dst = (sceneSrc == _sceneColor) ? _postColor : _sceneColor;
-    MTLRenderPassDescriptor* pd = [[MTLRenderPassDescriptor alloc] init];
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = dst;
     pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pd.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -2066,6 +2192,10 @@ void RendererMetal::runPostChain()
                                        width:cw height:ch mipmapped:NO];
       d.usage = MTLTextureUsageShaderRead;
       d.storageMode = MTLStorageModeShared;
+      // MRC: release the previous-size capture copy before reallocating. The
+      // completion handler below captures the old texture into `capTex`, and the
+      // copied block holds its own retain, so this release is safe.
+      [_captureTex release];
       _captureTex = [_device newTextureWithDescriptor:d];
     }
     id<MTLBlitCommandEncoder> be = [_cmdBuffer blitCommandEncoder];
@@ -2081,6 +2211,35 @@ void RendererMetal::runPostChain()
       rtWriteTextureToPNG(capTex, path);
     }];
   }
+}
+
+id<MTLDepthStencilState> RendererMetal::oitDepthState()
+{
+  // Transparent/OIT draws: depth-test vs opaque (LessEqual), never write depth.
+  // Identical for every transparent draw, so build once and cache (MRC: +1,
+  // released in the destructor).
+  if (!_oitDepthState) {
+    MTLDepthStencilDescriptor* dsd = [[MTLDepthStencilDescriptor alloc] init];
+    dsd.depthCompareFunction = MTLCompareFunctionLessEqual;
+    dsd.depthWriteEnabled = NO;
+    _oitDepthState = [_device newDepthStencilStateWithDescriptor:dsd];
+    [dsd release];
+  }
+  return _oitDepthState;
+}
+
+id<MTLDepthStencilState> RendererMetal::bezierDepthState()
+{
+  // Opaque bezier-tube draws: standard LessEqual + depth write. Cached once
+  // (MRC: +1, released in the destructor).
+  if (!_bezierDepthState) {
+    MTLDepthStencilDescriptor* dsd = [[MTLDepthStencilDescriptor alloc] init];
+    dsd.depthCompareFunction = MTLCompareFunctionLessEqual;
+    dsd.depthWriteEnabled = YES;
+    _bezierDepthState = [_device newDepthStencilStateWithDescriptor:dsd];
+    [dsd release];
+  }
+  return _bezierDepthState;
 }
 
 void RendererMetal::beginTransparentOIT()
@@ -2099,10 +2258,7 @@ void RendererMetal::beginTransparentOIT()
   // Depth-test against opaque depth (LEQUAL), but DO NOT write depth, so
   // transparent fragments occlude/are-occluded by opaque geometry yet never
   // hide each other.
-  MTLDepthStencilDescriptor* dsd = [[MTLDepthStencilDescriptor alloc] init];
-  dsd.depthCompareFunction = MTLCompareFunctionLessEqual;
-  dsd.depthWriteEnabled = NO;
-  [_encoder setDepthStencilState:[_device newDepthStencilStateWithDescriptor:dsd]];
+  [_encoder setDepthStencilState:oitDepthState()];
   [_encoder setCullMode:MTLCullModeNone];
   _oitActive = true;
   _oitHasContent = true;
@@ -2155,6 +2311,7 @@ void RendererMetal::beginShadowPass()
     d.depthCompareFunction = MTLCompareFunctionLess;
     d.depthWriteEnabled = YES;
     _shadowDepthState = [_device newDepthStencilStateWithDescriptor:d];
+    [d release];  // MRC: descriptor (+1) consumed by state creation
   }
   [_encoder setDepthStencilState:_shadowDepthState];
   [_encoder setCullMode:MTLCullModeNone];
@@ -2478,6 +2635,9 @@ void RendererMetal::drawElements(
                           indexType:MTLIndexTypeUInt32
                         indexBuffer:tmpIdx
                   indexBufferOffset:0];
+    // MRC: the encoder retains the buffer until the command buffer completes, so
+    // this +1 transient can be released now (no caching for this client path).
+    [tmpIdx release];
   }
 }
 
@@ -2890,6 +3050,7 @@ void RendererMetal::endBatch()
   NSUInteger byteSize = drawVertices->size() * sizeof(BatchVertex);
   // Reuse a shared batch buffer, growing only when needed
   if (!_batchBuffer || _batchBuffer.length < byteSize) {
+    [_batchBuffer release];  // MRC: release the smaller previous buffer (+1)
     _batchBuffer = [_device newBufferWithLength:std::max(byteSize, (NSUInteger)65536)
                                         options:MTLResourceStorageModeShared];
   }
@@ -3033,6 +3194,32 @@ void RendererMetal::pixelStorei(int /*pname*/, int /*param*/)
 
 void RendererMetal::buildVBOPipelines()
 {
+  // MRC: release the previous build's owned objects before this call rebuilds
+  // them (e.g. on an MSAA sample-count change via setSampleCount). On the first
+  // call (from the ctor) every ivar is nil, so each release is a no-op. The
+  // _vboShadowPipeline* are NOT included — buildShadowPipelines() guards against
+  // a second build, so this function never overwrites them.
+  [_vboVertexFunc release];           _vboVertexFunc = nil;
+  [_vboFragmentFunc release];         _vboFragmentFunc = nil;
+  [_vboVertexUnlitFunc release];      _vboVertexUnlitFunc = nil;
+  [_vboFragmentUnlitFunc release];    _vboFragmentUnlitFunc = nil;
+  [_vboVertexUnlitFlatFunc release];  _vboVertexUnlitFlatFunc = nil;
+  [_vboFragmentShadowFunc release];   _vboFragmentShadowFunc = nil;
+  [_capMarkVtxFunc release];          _capMarkVtxFunc = nil;
+  [_capMarkFragFunc release];         _capMarkFragFunc = nil;
+  [_capFillVtxFunc release];          _capFillVtxFunc = nil;
+  [_capFillFragFunc release];         _capFillFragFunc = nil;
+  [_lineAAVtxFunc release];           _lineAAVtxFunc = nil;
+  [_lineAAFragFunc release];          _lineAAFragFunc = nil;
+  [_vboFragmentOitFunc release];      _vboFragmentOitFunc = nil;
+  [_capMarkDSS release];              _capMarkDSS = nil;
+  [_capFillDSS release];              _capFillDSS = nil;
+  [_capFillPipeline release];         _capFillPipeline = nil;
+  [_vboPipelineUByte release];        _vboPipelineUByte = nil;
+  [_vboPipelineFloat release];        _vboPipelineFloat = nil;
+  [_vboOitPipelineUByte release];     _vboOitPipelineUByte = nil;
+  [_vboOitPipelineFloat release];     _vboOitPipelineFloat = nil;
+
   // Metal shader for VBO-based molecular geometry (cartoons, surfaces, etc.)
   // Supports position + normal + color with basic Lambertian lighting.
   NSString* vboSrc = @R"(
@@ -3289,6 +3476,7 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
   _lineAAFragFunc = [lib newFunctionWithName:@"line_aa_fragment"];
   if (!_vboVertexFunc || !_vboFragmentFunc) {
     NSLog(@"RendererMetal: VBO shader functions not found");
+    [lib release];  // MRC: library (+1) consumed
     return;
   }
 
@@ -3320,6 +3508,8 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
     fd.depthWriteEnabled = YES;
     fd.frontFaceStencil = sf; fd.backFaceStencil = sf;
     _capFillDSS = [_device newDepthStencilStateWithDescriptor:fd];
+    // MRC: the stencil/depth descriptors (+1) are consumed by the states above.
+    [sm release]; [md release]; [sf release]; [fd release];
 
     if (_capFillVtxFunc && _capFillFragFunc) {
       MTLRenderPipelineDescriptor* fp = [[MTLRenderPipelineDescriptor alloc] init];
@@ -3332,6 +3522,7 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
       NSError* ce = nil;
       _capFillPipeline = [_device newRenderPipelineStateWithDescriptor:fp error:&ce];
       if (!_capFillPipeline) NSLog(@"RendererMetal: cap fill pipeline failed: %@", ce);
+      [fp release];  // MRC: descriptor (+1) consumed by pipeline creation
     }
   }
 
@@ -3339,7 +3530,7 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
   // position: Float3 @ offset 0, normal: Float3 @ offset 12, color: UChar4Norm @ offset 24
   // stride = 28
   {
-    MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+    MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
     vd.attributes[0].format = MTLVertexFormatFloat3;
     vd.attributes[0].offset = 0;
     vd.attributes[0].bufferIndex = 0;
@@ -3374,13 +3565,14 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
     if (!_vboPipelineUByte) {
       NSLog(@"RendererMetal: failed to create VBO UByte pipeline: %@", error);
     }
+    [psd release];  // MRC: descriptor (+1) consumed by pipeline creation
   }
 
   // Create pipeline for Float4 color format:
   // position: Float3 @ offset 0, normal: Float3 @ offset 12, color: Float4 @ offset 24
   // stride = 40
   {
-    MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+    MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
     vd.attributes[0].format = MTLVertexFormatFloat3;
     vd.attributes[0].offset = 0;
     vd.attributes[0].bufferIndex = 0;
@@ -3415,6 +3607,7 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
     if (!_vboPipelineFloat) {
       NSLog(@"RendererMetal: failed to create VBO Float pipeline: %@", error);
     }
+    [psd release];  // MRC: descriptor (+1) consumed by pipeline creation
   }
 
   // Weighted-blended OIT variants: same vertex shader + geometry, but the
@@ -3426,7 +3619,7 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
   if (_vboFragmentOitFunc) {
     auto mkvd = [](MTLVertexFormat colorFmt,
                    NSUInteger strideBytes) -> MTLVertexDescriptor* {
-      MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+      MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
       vd.attributes[0].format = MTLVertexFormatFloat3;
       vd.attributes[0].offset = 0;  vd.attributes[0].bufferIndex = 0;
       vd.attributes[1].format = MTLVertexFormatFloat3;
@@ -3441,6 +3634,7 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
         oitPipelineForVD(mkvd(MTLVertexFormatUChar4Normalized, 28));
     _vboOitPipelineFloat = oitPipelineForVD(mkvd(MTLVertexFormatFloat4, 40));
   }
+  [lib release];  // MRC: library (+1) no longer needed once functions are created
 
   // Depth-only shadow pipelines (light-POV pre-pass) for the common layouts.
   buildShadowPipelines();
@@ -3464,6 +3658,7 @@ id<MTLRenderPipelineState> RendererMetal::shadowPipelineForVD(
   id<MTLRenderPipelineState> ps =
       [_device newRenderPipelineStateWithDescriptor:p error:&e];
   if (!ps) NSLog(@"RendererMetal: VBO shadow pipeline failed: %@", e);
+  [p release];  // MRC: descriptor (+1) consumed by pipeline creation
   return ps;
 }
 
@@ -3473,7 +3668,7 @@ void RendererMetal::buildShadowPipelines()
   if (!_vboVertexFunc || !_vboFragmentShadowFunc) return;
   auto mkvd = [](MTLVertexFormat colorFmt,
                  NSUInteger strideBytes) -> MTLVertexDescriptor* {
-    MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+    MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
     vd.attributes[0].format = MTLVertexFormatFloat3;
     vd.attributes[0].offset = 0;  vd.attributes[0].bufferIndex = 0;
     vd.attributes[1].format = MTLVertexFormatFloat3;
@@ -3501,7 +3696,7 @@ void RendererMetal::buildLinePipeline()
   if (_vboLinePipeline) return;
   if (!_lineAAVtxFunc || !_lineAAFragFunc) return;
 
-  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
   vd.attributes[0].format = MTLVertexFormatFloat4;
   vd.attributes[0].offset = 0;  vd.attributes[0].bufferIndex = 0;
   vd.attributes[1].format = MTLVertexFormatFloat4;
@@ -3694,7 +3889,72 @@ id<MTLRenderPipelineState> RendererMetal::oitPipelineForVD(
   id<MTLRenderPipelineState> ps =
       [_device newRenderPipelineStateWithDescriptor:p error:&e];
   if (!ps) NSLog(@"RendererMetal: VBO OIT pipeline failed: %@", e);
+  [p release];  // MRC: descriptor (+1) consumed by pipeline creation
   return ps;
+}
+
+// Build-once cache for one-off VBO pipelines (non-prebuilt vertex layouts, e.g.
+// the molecular-surface stride-44). Returns a BORROWED pipeline owned by
+// _vboPipelineCache; callers must NOT release it. Replaces the former per-draw
+// oitPipelineForVD/shadowPipelineForVD/inline-fallback creations, which leaked a
+// +1 pipeline every frame (and paid full pipeline compilation each time).
+id<MTLRenderPipelineState> RendererMetal::cachedVBOPipeline(
+    VBOPipelineVariant variant, size_t stride, int posOffset, int normalOffset,
+    int colorOffset, int colorType, MTLVertexDescriptor* vd)
+{
+  // Stable FNV-1a key over the layout + variant + sample count.
+  uint64_t key = 1469598103934665603ULL;
+  auto mix = [&](uint64_t x) { key ^= x; key *= 1099511628211ULL; };
+  mix((uint64_t)variant);
+  mix((uint64_t)stride);
+  mix((uint32_t)posOffset);
+  mix((uint32_t)normalOffset);
+  mix((uint32_t)colorOffset);
+  mix((uint64_t)colorType);
+  mix((uint64_t)_sampleCount);
+  auto it = _vboPipelineCache.find(key);
+  if (it != _vboPipelineCache.end()) return it->second;  // borrowed (cache-owned)
+
+  id<MTLRenderPipelineState> ps = nil;
+  if (variant == VBOPipelineVariant::Oit) {
+    ps = oitPipelineForVD(vd);       // +1
+  } else if (variant == VBOPipelineVariant::Shadow) {
+    ps = shadowPipelineForVD(vd);    // +1
+  } else {
+    // Opaque pass fallback for a non-prebuilt layout (mirrors the former inline
+    // fallback): Lit uses the per-fragment shader, Unlit/UnlitFlat the flat ones.
+    id<MTLFunction> vfn = (variant == VBOPipelineVariant::UnlitFlat)
+        ? _vboVertexUnlitFlatFunc
+        : (variant == VBOPipelineVariant::Unlit ? _vboVertexUnlitFunc
+                                                : _vboVertexFunc);
+    id<MTLFunction> ffn = (variant == VBOPipelineVariant::Lit)
+        ? _vboFragmentFunc : _vboFragmentUnlitFunc;
+    if (vfn && ffn) {
+      MTLRenderPipelineDescriptor* psd =
+          [[MTLRenderPipelineDescriptor alloc] init];
+      psd.vertexFunction = vfn;
+      psd.fragmentFunction = ffn;
+      psd.vertexDescriptor = vd;
+      psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+      psd.colorAttachments[0].blendingEnabled = YES;
+      psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+      psd.colorAttachments[0].destinationRGBBlendFactor =
+          MTLBlendFactorOneMinusSourceAlpha;
+      psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+      psd.colorAttachments[0].destinationAlphaBlendFactor =
+          MTLBlendFactorOneMinusSourceAlpha;
+      psd.rasterSampleCount = _sampleCount;
+      psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      NSError* error = nil;
+      ps = [_device newRenderPipelineStateWithDescriptor:psd error:&error];
+      if (!ps)
+        NSLog(@"RendererMetal: fallback VBO pipeline failed: %@", error);
+      [psd release];  // MRC: descriptor (+1) consumed by pipeline creation
+    }
+  }
+  if (ps) _vboPipelineCache[key] = ps;  // cache takes ownership of the +1
+  return ps;                            // borrowed
 }
 
 // ---------------------------------------------------------------------------
@@ -3728,7 +3988,7 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   }
 
   // Build a vertex descriptor matching the VBO layout
-  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
 
   // Position (attribute 0) — always Float3
   if (posOffset >= 0) {
@@ -3787,7 +4047,9 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
       if (colorType == 0 && stride == 28) pipeline = _vboShadowPipelineUByte;
       else if (colorType == 1 && stride == 40) pipeline = _vboShadowPipelineFloat;
     }
-    if (!pipeline) pipeline = shadowPipelineForVD(vd); // e.g. surface stride 44
+    if (!pipeline)  // e.g. surface stride 44 — build-once via the layout cache
+      pipeline = cachedVBOPipeline(VBOPipelineVariant::Shadow, stride,
+          posOffset, normalOffset, colorOffset, colorType, vd);
     if (!pipeline) return;
   }
 
@@ -3809,40 +4071,20 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   // geometry (lines/dots) is skipped in the transparent pass.
   if (_oitActive && !pipeline) {
     if (unlit) return;
-    pipeline = oitPipelineForVD(vd);
+    pipeline = cachedVBOPipeline(VBOPipelineVariant::Oit, stride, posOffset,
+                                 normalOffset, colorOffset, colorType, vd);
     if (!pipeline) return;
   }
 
-  // Fallback: create pipeline on-the-fly (cached by Metal driver). `unlit`
-  // (lines/ribbon without a normal, or Points/dots) uses the flat-color +
-  // point-size shader; `flat` (no per-vertex color) uses the position-only one.
-  id<MTLFunction> vfn = flat ? _vboVertexUnlitFlatFunc
-                             : (unlit ? _vboVertexUnlitFunc : _vboVertexFunc);
-  id<MTLFunction> ffn = unlit ? _vboFragmentUnlitFunc : _vboFragmentFunc;
-  if (!pipeline && vfn && ffn) {
-    MTLRenderPipelineDescriptor* psd =
-        [[MTLRenderPipelineDescriptor alloc] init];
-    psd.vertexFunction = vfn;
-    psd.fragmentFunction = ffn;
-    psd.vertexDescriptor = vd;
-    psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-    psd.colorAttachments[0].blendingEnabled = YES;
-    psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-    psd.colorAttachments[0].destinationRGBBlendFactor =
-        MTLBlendFactorOneMinusSourceAlpha;
-    psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-    psd.colorAttachments[0].destinationAlphaBlendFactor =
-        MTLBlendFactorOneMinusSourceAlpha;
-    psd.rasterSampleCount = _sampleCount;
-    psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
-    psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
-
-    NSError* error = nil;
-    pipeline = [_device newRenderPipelineStateWithDescriptor:psd error:&error];
-    if (!pipeline) {
-      NSLog(@"RendererMetal: VBO drawVBO pipeline creation failed: %@", error);
-      return;
-    }
+  // Fallback for a non-prebuilt opaque layout: build-once via the layout cache.
+  // `flat` (no per-vertex color) → position-only shader; `unlit` (no normal:
+  // lines/ribbon/dots) → flat-color shader; else the lit per-fragment shader.
+  if (!pipeline) {
+    VBOPipelineVariant v = flat ? VBOPipelineVariant::UnlitFlat
+                                : (unlit ? VBOPipelineVariant::Unlit
+                                         : VBOPipelineVariant::Lit);
+    pipeline = cachedVBOPipeline(v, stride, posOffset, normalOffset,
+                                 colorOffset, colorType, vd);
   }
 
   if (!pipeline) return;
@@ -3857,10 +4099,7 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
     // (genuine fold occlusion is preserved). Restored to back/none after.
     [_encoder setCullMode:MTLCullModeFront];
   } else if (_oitActive) {
-    MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
-    d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque, no write
-    d.depthWriteEnabled = NO;
-    [_encoder setDepthStencilState:[_device newDepthStencilStateWithDescriptor:d]];
+    [_encoder setDepthStencilState:oitDepthState()];
   } else {
     applyDepthStencilState();
     if (_depthStencilState) {
@@ -3926,10 +4165,13 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
       mp.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
       mp.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
       NSError* me = nil;
+      [_capMarkPipeline release];  // MRC: release the previous-stride pipeline (+1)
       _capMarkPipeline = [_device newRenderPipelineStateWithDescriptor:mp error:&me];
       _capMarkStride = stride;
       if (!_capMarkPipeline)
         NSLog(@"RendererMetal: cap mark pipeline failed: %@", me);
+      [mvd release];  // MRC: descriptors (+1) consumed by pipeline creation
+      [mp release];
     }
     if (_capMarkPipeline) {
       [_encoder setRenderPipelineState:_capMarkPipeline];
@@ -3996,7 +4238,7 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   if (!vbo || !ibo) return;
 
   // Build vertex descriptor
-  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
   if (posOffset >= 0) {
     vd.attributes[0].format = MTLVertexFormatFloat3;
     vd.attributes[0].offset = static_cast<NSUInteger>(posOffset);
@@ -4027,7 +4269,9 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
       if (colorType == 0 && stride == 28) pipeline = _vboShadowPipelineUByte;
       else if (colorType == 1 && stride == 40) pipeline = _vboShadowPipelineFloat;
     }
-    if (!pipeline) pipeline = shadowPipelineForVD(vd);
+    if (!pipeline)
+      pipeline = cachedVBOPipeline(VBOPipelineVariant::Shadow, stride,
+          posOffset, normalOffset, colorOffset, colorType, vd);
     if (!pipeline) return;
   }
   if (!_shadowMode && !unlit && posOffset == 0 && normalOffset == 12 &&
@@ -4043,36 +4287,17 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   }
   if (_oitActive && !pipeline) {
     if (unlit) return;
-    pipeline = oitPipelineForVD(vd);
+    pipeline = cachedVBOPipeline(VBOPipelineVariant::Oit, stride, posOffset,
+                                 normalOffset, colorOffset, colorType, vd);
     if (!pipeline) return;
   }
-  id<MTLFunction> vfn = flat ? _vboVertexUnlitFlatFunc
-                             : (unlit ? _vboVertexUnlitFunc : _vboVertexFunc);
-  id<MTLFunction> ffn = unlit ? _vboFragmentUnlitFunc : _vboFragmentFunc;
-  if (!pipeline && vfn && ffn) {
-    MTLRenderPipelineDescriptor* psd =
-        [[MTLRenderPipelineDescriptor alloc] init];
-    psd.vertexFunction = vfn;
-    psd.fragmentFunction = ffn;
-    psd.vertexDescriptor = vd;
-    psd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-    psd.colorAttachments[0].blendingEnabled = YES;
-    psd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-    psd.colorAttachments[0].destinationRGBBlendFactor =
-        MTLBlendFactorOneMinusSourceAlpha;
-    psd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-    psd.colorAttachments[0].destinationAlphaBlendFactor =
-        MTLBlendFactorOneMinusSourceAlpha;
-    psd.rasterSampleCount = _sampleCount;
-    psd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
-    psd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
-
-    NSError* error = nil;
-    pipeline = [_device newRenderPipelineStateWithDescriptor:psd error:&error];
-    if (!pipeline) {
-      NSLog(@"RendererMetal: VBO drawVBOIndexed pipeline failed: %@", error);
-      return;
-    }
+  // Fallback for a non-prebuilt opaque layout: build-once via the layout cache.
+  if (!pipeline) {
+    VBOPipelineVariant v = flat ? VBOPipelineVariant::UnlitFlat
+                                : (unlit ? VBOPipelineVariant::Unlit
+                                         : VBOPipelineVariant::Lit);
+    pipeline = cachedVBOPipeline(v, stride, posOffset, normalOffset,
+                                 colorOffset, colorType, vd);
   }
   if (!pipeline) return;
 
@@ -4086,10 +4311,7 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
     // faces and the front-center read as a dark "lit from below" band.
     [_encoder setCullMode:MTLCullModeFront];
   } else if (_oitActive) {
-    MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
-    d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque, no write
-    d.depthWriteEnabled = NO;
-    [_encoder setDepthStencilState:[_device newDepthStencilStateWithDescriptor:d]];
+    [_encoder setDepthStencilState:oitDepthState()];
   } else {
     applyDepthStencilState();
     if (_depthStencilState) {
@@ -4153,10 +4375,13 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
       mp.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
       mp.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
       NSError* me = nil;
+      [_capMarkPipeline release];  // MRC: release the previous-stride pipeline (+1)
       _capMarkPipeline = [_device newRenderPipelineStateWithDescriptor:mp error:&me];
       _capMarkStride = stride;
       if (!_capMarkPipeline)
         NSLog(@"RendererMetal: cap mark pipeline failed: %@", me);
+      [mvd release];  // MRC: descriptors (+1) consumed by pipeline creation
+      [mp release];
     }
     if (_capMarkPipeline) {
       [_encoder setRenderPipelineState:_capMarkPipeline];
@@ -4188,7 +4413,12 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
 
 void RendererMetal::invalidateVBOCache(uint64_t key)
 {
-  // Clear entire cache — key type changed to pointer-based
+  // Clear entire cache — key type changed to pointer-based.
+  // MRC: the map holds +1 MTLBuffers (newBufferWithBytes); STL clear() does not
+  // release them, so drop each ownership first. Any buffer still referenced by an
+  // in-flight command buffer is kept alive by Metal's own retain until that
+  // command buffer completes (same reasoning as ensurePostTargets).
+  for (auto& kv : _vboCache) [kv.second release];
   _vboCache.clear();
 }
 
@@ -4388,7 +4618,7 @@ void RendererMetal::buildImpostorPipelines()
   id<MTLFunction> ffn = [lib newFunctionWithName:@"sphere_impostor_fragment"];
   if (!vfn || !ffn) { NSLog(@"RendererMetal: sphere impostor funcs missing"); return; }
 
-  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
   vd.attributes[0].format = MTLVertexFormatFloat4;           // a_vertex_radius
   vd.attributes[0].offset = 0;  vd.attributes[0].bufferIndex = 0;
   vd.attributes[1].format = MTLVertexFormatUChar4Normalized; // a_Color
@@ -4508,10 +4738,7 @@ void RendererMetal::drawSphereImpostors(const SphereImpostorDrawCall& call)
     [_encoder setCullMode:MTLCullModeNone]; // billboards: don't inherit VBO cull-front
   } else if (_oitActive) {
     [_encoder setRenderPipelineState:_sphereOitPipeline];
-    MTLDepthStencilDescriptor* d = [[MTLDepthStencilDescriptor alloc] init];
-    d.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque
-    d.depthWriteEnabled = NO;
-    [_encoder setDepthStencilState:[_device newDepthStencilStateWithDescriptor:d]];
+    [_encoder setDepthStencilState:oitDepthState()];
   } else {
     [_encoder setRenderPipelineState:_sphereImpostorPipeline];
     applyDepthStencilState();
@@ -4838,7 +5065,7 @@ void RendererMetal::buildCylinderImpostorPipeline(
   id<MTLFunction> ffn = [lib newFunctionWithName:@"cyl_impostor_fragment"];
   if (!vfn || !ffn) { NSLog(@"RendererMetal: cyl impostor funcs missing"); return; }
 
-  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
   vd.attributes[0].format = MTLVertexFormatFloat3;       // attr_vertex1
   vd.attributes[0].offset = call.v1Off;     vd.attributes[0].bufferIndex = 0;
   vd.attributes[1].format = MTLVertexFormatFloat3;       // attr_vertex2
@@ -4964,10 +5191,7 @@ void RendererMetal::drawCylinderImpostors(const CylinderImpostorDrawCall& call)
     [_encoder setCullMode:MTLCullModeNone]; // boxes: don't inherit VBO cull-front
   } else if (_oitActive) {
     [_encoder setRenderPipelineState:_cylinderOitPipeline];
-    MTLDepthStencilDescriptor* dd = [[MTLDepthStencilDescriptor alloc] init];
-    dd.depthCompareFunction = MTLCompareFunctionLessEqual; // test vs opaque
-    dd.depthWriteEnabled = NO;
-    [_encoder setDepthStencilState:[_device newDepthStencilStateWithDescriptor:dd]];
+    [_encoder setDepthStencilState:oitDepthState()];
   } else {
     [_encoder setRenderPipelineState:_cylinderImpostorPipeline];
     applyDepthStencilState();
@@ -5113,7 +5337,7 @@ void RendererMetal::buildBezierTubePipeline()
   id<MTLFunction> ffn = [lib newFunctionWithName:@"bezier_tube_fragment"];
   if (!vfn || !ffn) { NSLog(@"RendererMetal: bezier tube funcs missing"); return; }
 
-  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
   vd.attributes[0].format = MTLVertexFormatFloat3;  // control point position
   vd.attributes[0].offset = 0;
   vd.attributes[0].bufferIndex = 0;
@@ -5191,10 +5415,7 @@ void RendererMetal::drawBezierTubes(const void* cp, size_t dataSize,
 
   [_encoder setRenderPipelineState:_bezierTubePipeline];
   // Opaque geometry: standard depth test + write.
-  MTLDepthStencilDescriptor* dsd = [[MTLDepthStencilDescriptor alloc] init];
-  dsd.depthCompareFunction = MTLCompareFunctionLessEqual;
-  dsd.depthWriteEnabled = YES;
-  [_encoder setDepthStencilState:[_device newDepthStencilStateWithDescriptor:dsd]];
+  [_encoder setDepthStencilState:bezierDepthState()];
   [_encoder setCullMode:MTLCullModeNone];
   [_encoder setVertexBuffer:cpBuf offset:0 atIndex:0];
 
@@ -5351,7 +5572,7 @@ void RendererMetal::buildLabelPipeline()
   // (worldpos F3, targetpos F3, screenoffset F3, texcoords F2,
   //  screenworldoffset F3, relative_mode F1) with 4-byte alignment, which is
   // how CGOConvertToLabelShader lays it out.
-  MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+  MTLVertexDescriptor* vd = [MTLVertexDescriptor vertexDescriptor];
   vd.attributes[0].format = MTLVertexFormatFloat3; vd.attributes[0].offset = 0;
   vd.attributes[1].format = MTLVertexFormatFloat3; vd.attributes[1].offset = 12;
   vd.attributes[2].format = MTLVertexFormatFloat3; vd.attributes[2].offset = 24;
