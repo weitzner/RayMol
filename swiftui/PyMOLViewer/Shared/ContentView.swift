@@ -458,6 +458,8 @@ struct ContentView: View {
     // iPhone: full-screen viewport mode (hides the bottom panel + sequence strip).
     // Replaces the old drag-to-collapse; driven by iosPanelToggle.
     @State private var iosFullScreen = false
+    // Settings tab: in-panel drill into the SCENE card (moved here from Inspector).
+    @State private var settingsSceneOpen = false
     // Panel fraction to restore after the Theme Studio closes (it temporarily
     // opens to ~60% of the screen so the viewport/studio split matches the spec).
     @State private var fracBeforeThemeStudio: CGFloat? = nil
@@ -1090,42 +1092,68 @@ struct ContentView: View {
     // controls here, adds the Show-sequence toggle (drives the strip above the
     // viewport), and links to scene/render settings — all in-panel, consistent
     // with the other tabs (no top-level modal).
+    @ViewBuilder
     private var settingsPane: some View {
-        List {
-            Section("Display") {
-                Toggle(isOn: $engine.sequenceVisible) {
-                    Label("Show sequence", systemImage: "textformat.abc")
+        if settingsSceneOpen {
+            // In-panel drill into the SCENE card (moved here fully from the
+            // Inspector). A back row returns to the Settings root — no modal.
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { settingsSceneOpen = false }
+                    } label: {
+                        Label("Settings", systemImage: "chevron.left")
+                            .font(.system(size: 15, weight: .medium))
+                    }
+                    Spacer()
+                    Text("Scene settings").font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                Divider()
+                ScrollView {
+                    SceneCard().padding(.bottom, 56)
                 }
             }
-            Section("Appearance") {
-                Button {
-                    if !showThemeStudio { panelCollapsed = false }
-                    withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = true }
-                } label: {
-                    settingsRow("Themes", "paintpalette")
+        } else {
+            List {
+                Section("Display") {
+                    Toggle(isOn: $engine.sequenceVisible) {
+                        Label("Show sequence", systemImage: "textformat.abc")
+                    }
+                }
+                Section("Scene & rendering") {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { settingsSceneOpen = true }
+                    } label: {
+                        settingsRow("Scene settings", "slider.horizontal.3")
+                    }
+                }
+                Section("Appearance") {
+                    Button {
+                        if !showThemeStudio { panelCollapsed = false }
+                        withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = true }
+                    } label: {
+                        settingsRow("Themes", "paintpalette")
+                    }
+                }
+                Section("Reset") {
+                    Button { engine.runCommand("reset") } label: {
+                        Label("Reset view", systemImage: "arrow.counterclockwise")
+                    }
+                    Button { engine.resetEffects() } label: {
+                        Label("Reset effects", systemImage: "circle.lefthalf.filled")
+                    }
+                    Button(role: .destructive) { showClearSessionConfirm = true } label: {
+                        Label("Clear session…", systemImage: "trash")
+                    }
                 }
             }
-            Section("Scene & rendering") {
-                Button { showSettingsSheet = true } label: {
-                    settingsRow("Scene settings", "slider.horizontal.3")
-                }
-            }
-            Section("Reset") {
-                Button { engine.runCommand("reset") } label: {
-                    Label("Reset view", systemImage: "arrow.counterclockwise")
-                }
-                Button { engine.resetEffects() } label: {
-                    Label("Reset effects", systemImage: "circle.lefthalf.filled")
-                }
-                Button(role: .destructive) { showClearSessionConfirm = true } label: {
-                    Label("Clear session…", systemImage: "trash")
-                }
-            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            // Clear the floating tab-bar pill so the Reset section stays reachable.
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 56) }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        // Clear the floating tab-bar pill so the Reset section stays reachable.
-        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 56) }
     }
 
     @ViewBuilder

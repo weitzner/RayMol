@@ -263,12 +263,20 @@ final class MovieExporter: ObservableObject {
 
 // MARK: - Reusable controls
 
+// Which portion of the export form to render. The MovieExportSheet shows `.all`
+// (frames + format + render together); the Movie tab's top nav drives `.frames`
+// vs `.export` so the two read/write the SAME instance's state (kept mounted).
+enum MovieExportMode { case all, frames, export }
+
 // The export form, reused by both the MovieExportSheet and the Movie content
 // tab's MoviePane. Self-contained (owns its MovieExporter); each embedding gets
 // its own instance.
 struct MovieExportControls: View {
     @EnvironmentObject var engine: PyMOLEngine
     @StateObject private var exporter = MovieExporter()
+
+    /// Which fields to show (Movie tab splits Frames / Export into nav steps).
+    var mode: MovieExportMode = .all
 
     private struct SizePreset: Identifiable { let id = UUID(); let name: String; let w: Int; let h: Int }
     private let presets = [SizePreset(name: "720p", w: 1280, h: 720),
@@ -281,60 +289,69 @@ struct MovieExportControls: View {
     @State private var last = 1
     @State private var rayMode = false
 
+    private var showFrames: Bool { mode != .export }
+    private var showExport: Bool { mode != .frames }
+    private var total: Int { max(last - first + 1, 1) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            labeled("Format") {
-                Picker("", selection: $format) {
-                    ForEach(MovieExporter.Format.allCases) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented)
-            }
-            labeled("Size") {
-                Picker("", selection: $presetIdx) {
-                    ForEach(presets.indices, id: \.self) { i in
-                        Text("\(presets[i].name)  ·  \(presets[i].w)×\(presets[i].h)").tag(i)
-                    }
-                }.pickerStyle(.segmented)
-            }
-            labeled("Frames") {
-                HStack(spacing: 12) {
-                    Stepper("First: \(first)", value: $first, in: 1...max(engine.playback.frameCount, 1))
-                    Stepper("Last: \(last)", value: $last, in: 1...max(engine.playback.frameCount, 1))
-                }.font(.system(size: 13))
-            }
-            Toggle(isOn: $rayMode) {
-                Label("Ray-traced frames (slow)", systemImage: "sparkles")
-            }.tint(TimelineTheme.accent)
-            if rayMode {
-                Text("Ray-tracing every frame is much slower — use a short range first.")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            if engine.playback.frameCount <= 1 {
-                Text("Nothing to export yet — author an animation above (a camera roll works from a single structure).")
+            if showFrames {
+                labeled("Frame range") {
+                    HStack(spacing: 12) {
+                        Stepper("First: \(first)", value: $first, in: 1...max(engine.playback.frameCount, 1))
+                        Stepper("Last: \(last)", value: $last, in: 1...max(engine.playback.frameCount, 1))
+                    }.font(.system(size: 13))
+                }
+                Text(engine.playback.frameCount <= 1
+                     ? "Nothing to render yet — author an animation in Animate (a camera roll works from a single structure)."
+                     : "\(total) of \(engine.playback.frameCount) frames at \(Int(engine.playback.movieFPS.rounded())) fps.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            if exporter.isExporting {
-                VStack(alignment: .leading, spacing: 6) {
-                    ProgressView(value: exporter.progress)
-                        .tint(TimelineTheme.accent)
-                    Text("Rendering frame \(Int(exporter.progress * Double(max(last - first + 1, 1))))/\(max(last - first + 1, 1))…")
-                        .font(.caption).foregroundStyle(.secondary)
+            if showExport {
+                labeled("Format") {
+                    Picker("", selection: $format) {
+                        ForEach(MovieExporter.Format.allCases) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
                 }
-            }
-            if let err = exporter.errorText {
-                Text(err).font(.caption).foregroundStyle(.red)
-            }
+                labeled("Size") {
+                    Picker("", selection: $presetIdx) {
+                        ForEach(presets.indices, id: \.self) { i in
+                            Text("\(presets[i].name)  ·  \(presets[i].w)×\(presets[i].h)").tag(i)
+                        }
+                    }.pickerStyle(.segmented)
+                }
+                Toggle(isOn: $rayMode) {
+                    Label("Ray-traced frames (slow)", systemImage: "sparkles")
+                }.tint(TimelineTheme.accent)
+                if rayMode {
+                    Text("Ray-tracing every frame is much slower — use a short range first.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
 
-            Button(action: runExport) {
-                Label(exporter.isExporting ? "Rendering…" : "Render & Export",
-                      systemImage: "film")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                if exporter.isExporting {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressView(value: exporter.progress)
+                            .tint(TimelineTheme.accent)
+                        Text("Rendering frame \(Int(exporter.progress * Double(total)))/\(total)…")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if let err = exporter.errorText {
+                    Text(err).font(.caption).foregroundStyle(.red)
+                }
+
+                Button(action: runExport) {
+                    Label(exporter.isExporting ? "Rendering…" : "Render & Export",
+                          systemImage: "film")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(TimelineTheme.accent)
+                .disabled(exporter.isExporting || engine.playback.frameCount <= 1)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(TimelineTheme.accent)
-            .disabled(exporter.isExporting || engine.playback.frameCount <= 1)
         }
         .onAppear { last = max(engine.playback.frameCount, 1); first = 1 }
         .onChange(of: engine.playback.frameCount) { n in
@@ -418,38 +435,42 @@ struct MovieExportSheet: View {
 
 // MARK: - Movie content tab
 
-// The unified Movie flow as an in-panel content tab (iPhone bottom tab bar):
-// "1 · Animate" (author a camera/state/scene movie) flows straight into
-// "2 · Export" (render the resulting timeline to MP4/GIF) — no modal, matching
-// the other content tabs. The transport bar handles playback of what's built.
+// The unified Movie flow as an in-panel content tab (iPhone bottom tab bar),
+// with a segmented top nav between the three steps — Animate (author a
+// camera/state/scene movie) · Frames (pick the range) · Export (render to
+// MP4/GIF). Frames + Export share one MovieExportControls instance (kept
+// mounted) so the chosen range carries into the render. The transport bar
+// handles playback of what's built.
 struct MoviePane: View {
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                stepHeader("1 · Animate", "what moves")
-                MovieBuilderControls()
-
-                Divider().padding(.vertical, 14)
-
-                stepHeader("2 · Export", "save the file")
-                MovieExportControls()
-            }
-            .padding(16)
-            // Clear the floating tab-bar pill so the Export button stays reachable.
-            .padding(.bottom, 56)
-        }
+    enum Step: String, CaseIterable, Identifiable {
+        case animate = "Animate", frames = "Frames", export = "Export"
+        var id: String { rawValue }
     }
+    @State private var step: Step = .animate
 
-    @ViewBuilder
-    private func stepHeader(_ title: String, _ subtitle: String) -> some View {
-        HStack(spacing: 6) {
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(TimelineTheme.accent)
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $step) {
+                ForEach(Step.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if step == .animate {
+                        MovieBuilderControls()
+                    } else {
+                        // Same instance across Frames↔Export so the range persists.
+                        MovieExportControls(mode: step == .frames ? .frames : .export)
+                    }
+                }
+                .padding(16)
+                // Clear the floating tab-bar pill so the action button stays reachable.
+                .padding(.bottom, 56)
+            }
         }
-        .padding(.top, 2)
     }
 }

@@ -650,12 +650,11 @@ struct ObjectPanel: View {
 
     private var panelBody: some View {
         VStack(spacing: 0) {
-            // Panel-wide toolbar: the selection-pick mode and refresh act on the
-            // whole panel, so they live here rather than in any one section header.
+            // Panel-wide toolbar: the selection-pick mode acts on the whole panel,
+            // so it lives here rather than in any one section header. (The former
+            // "Inspector" label was dropped — the bottom tab already names the pane;
+            // SCENE moved fully into the Settings tab.)
             HStack(spacing: 8) {
-                Text("Inspector")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(PanelTheme.headerColor)
                 Spacer()
                 selectionModeMenu
             }
@@ -669,9 +668,8 @@ struct ObjectPanel: View {
                     let objects = engine.objects.filter { !$0.isSelection }
                     let selections = engine.objects.filter { $0.isSelection }
 
-                    // SCENE — global display settings.
-                    sectionHeader("SCENE", id: "scene", tag: "global") { EmptyView() }
-                    if openSections.contains("scene") { SceneCard() }
+                    // SCENE (global display settings) now lives in the Settings tab
+                    // → "Scene settings"; it was removed from the Inspector here.
 
                     // OBJECTS — the loaded molecules + the global "all" row.
                     sectionHeader("OBJECTS", id: "objects",
@@ -1833,7 +1831,9 @@ private struct HelpButton: View {
     }
 }
 
-private struct SceneCard: View {
+// Non-private: also hosted in the Settings tab (ContentView.settingsPane) now
+// that SCENE lives fully under Settings rather than the Inspector.
+struct SceneCard: View {
     @EnvironmentObject var engine: PyMOLEngine
     @State private var showSettings = false
     // Per-sub-group expand state; the heavier groups start collapsed.
