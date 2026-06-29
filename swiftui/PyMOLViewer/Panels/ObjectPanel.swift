@@ -658,13 +658,6 @@ struct ObjectPanel: View {
                     .foregroundColor(PanelTheme.headerColor)
                 Spacer()
                 selectionModeMenu
-                Button(action: { refreshObjects() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                        .foregroundColor(PanelTheme.headerColor)
-                }
-                .buttonStyle(.plain)
-                .help("Refresh")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

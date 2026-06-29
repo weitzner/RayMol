@@ -455,6 +455,9 @@ struct ContentView: View {
     @State private var panelFrac: CGFloat = 0.28
     @State private var committedFrac: CGFloat = 0.28
     @State private var panelCollapsed = false
+    // iPhone: full-screen viewport mode (hides the bottom panel + sequence strip).
+    // Replaces the old drag-to-collapse; driven by iosPanelToggle.
+    @State private var iosFullScreen = false
     // Panel fraction to restore after the Theme Studio closes (it temporarily
     // opens to ~60% of the screen so the viewport/studio split matches the spec).
     @State private var fracBeforeThemeStudio: CGFloat? = nil
@@ -523,7 +526,19 @@ struct ContentView: View {
             // Dynamic Island / nav bar) and insets the viewport while active —
             // NOT a full-bleed overlay, which would slide under the notch.
             .safeAreaInset(edge: .top, spacing: 0) {
-                if engine.measureMode != nil { measureOverlay }
+                VStack(spacing: 0) {
+                    if engine.measureMode != nil { measureOverlay }
+                    // Sequence viewer as a strip below the toolbar / above the
+                    // viewport (desktop-style), toggled from Settings → "Show
+                    // sequence". iPhone portrait only; iPad stacks it in-column.
+                    if hSize == .compact && vSize == .regular
+                        && engine.sequenceVisible && !iosFullScreen {
+                        SequencePanel()
+                            .frame(height: ipadSequenceHeight)
+                            .background(themeChromeBg)
+                        Divider()
+                    }
+                }
             }
             .navigationTitle(hSize == .compact ? "" : "RayMol")
             .navigationBarTitleDisplayMode(.inline)
@@ -564,7 +579,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosThemeToolbar; iosResetMenu; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -659,6 +674,17 @@ struct ContentView: View {
                     panelCollapsed = (p != "open")
                     engine.sequenceVisible = (p == "open")
                 }
+                // Test affordance: preselect a bottom-panel tab for the screenshot
+                // harness (simctl can't tap). PYMOL_AUTOTAB=console|objects|movie|settings.
+                if let t = ProcessInfo.processInfo.environment["PYMOL_AUTOTAB"] {
+                    switch t {
+                    case "console":  selectedTab = 0
+                    case "objects":  selectedTab = 1
+                    case "movie":    selectedTab = 2
+                    case "settings": selectedTab = 4
+                    default: break
+                    }
+                }
             }
             if let s = ProcessInfo.processInfo.environment["PYMOL_AUTOSHEET"] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
@@ -705,16 +731,21 @@ struct ContentView: View {
         let total = geo.size.height
         let panelSize = min(max(total * panelFrac, 200), total * 0.92)
         VStack(spacing: 0) {
+            // The sequence strip (when enabled) docks in the top safe area via
+            // .safeAreaInset(edge: .top) at the layout root — NOT here — so it sits
+            // below the status bar / nav bar instead of bleeding under the notch.
             viewportView
-            if showThemeStudio {
-                // Theme studio takes over the bottom region (force-shown even if
-                // the panel was collapsed); viewport stays live above.
+            if iosFullScreen {
+                // Full-screen viewport: bottom panel + sequence hidden, 3D fills.
+                EmptyView()
+            } else if showThemeStudio {
+                // Theme studio takes over the bottom region; viewport stays live above.
                 resizeDivider(landscape: false, total: geo.size.height)
                 ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
                     .environmentObject(engine)
                     .environmentObject(themeManager)
                     .frame(height: panelSize)
-            } else if !panelCollapsed {
+            } else {
                 resizeDivider(landscape: false, total: geo.size.height)
                 panelContent.frame(height: panelSize)
             }
@@ -882,11 +913,13 @@ struct ContentView: View {
             // landscape + iPad use the mac-style layout with iosPadPanelMenu.
             if hSize == .compact && vSize == .regular {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { panelCollapsed.toggle() }
+                    withAnimation(.easeInOut(duration: 0.2)) { iosFullScreen.toggle() }
                 } label: {
-                    Image(systemName: panelCollapsed ? "square.split.1x2" : "square.split.1x2.fill")
+                    Image(systemName: iosFullScreen
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
                 }
-                .accessibilityLabel(panelCollapsed ? "Show controls" : "Hide controls")
+                .accessibilityLabel(iosFullScreen ? "Exit full screen" : "Full-screen viewport")
             }
         }
     }
@@ -1045,10 +1078,63 @@ struct ContentView: View {
                 .tabItem { Label("Console", systemImage: "terminal") }.tag(0)
             ObjectPanel()
                 .tabItem { Label("Objects", systemImage: "cube") }.tag(1)
-            SequencePanel()
-                .tabItem { Label("Sequence", systemImage: "textformat.abc") }.tag(2)
+            settingsPane
+                .tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
         }
         .background(themeChromeBg)
+    }
+
+    // Settings content tab (iPhone). Relocates the former top-bar Theme + Reset
+    // controls here, adds the Show-sequence toggle (drives the strip above the
+    // viewport), and links to scene/render settings — all in-panel, consistent
+    // with the other tabs (no top-level modal).
+    private var settingsPane: some View {
+        List {
+            Section("Display") {
+                Toggle(isOn: $engine.sequenceVisible) {
+                    Label("Show sequence", systemImage: "textformat.abc")
+                }
+            }
+            Section("Appearance") {
+                Button {
+                    if !showThemeStudio { panelCollapsed = false }
+                    withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = true }
+                } label: {
+                    settingsRow("Themes", "paintpalette")
+                }
+            }
+            Section("Scene & rendering") {
+                Button { showSettingsSheet = true } label: {
+                    settingsRow("Scene settings", "slider.horizontal.3")
+                }
+            }
+            Section("Reset") {
+                Button { engine.runCommand("reset") } label: {
+                    Label("Reset view", systemImage: "arrow.counterclockwise")
+                }
+                Button { engine.resetEffects() } label: {
+                    Label("Reset effects", systemImage: "circle.lefthalf.filled")
+                }
+                Button(role: .destructive) { showClearSessionConfirm = true } label: {
+                    Label("Clear session…", systemImage: "trash")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        // Clear the floating tab-bar pill so the Reset section stays reachable.
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 56) }
+    }
+
+    @ViewBuilder
+    private func settingsRow(_ title: String, _ icon: String) -> some View {
+        HStack {
+            Label(title, systemImage: icon)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
     }
 
     // Draggable splitter between viewport and panel. Drag toward the viewport
