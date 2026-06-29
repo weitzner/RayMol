@@ -454,3 +454,33 @@ def pick_at(ndc_x, ndc_y, aspect):
 
     except Exception as e:
         print('metal_pick error: %s' % e)
+
+
+def pick_info_at(ndc_x, ndc_y, aspect):
+    """Identify the atom/residue under a long-press WITHOUT changing the
+    selection, and write its identity to <tmpdir>/pymol_longpress.json for the
+    iOS long-press context menu to read. Empty space -> {"hit": false}.
+
+    Mirrors pick_at's hit logic (shared _pick_atom) but is read-only: it never
+    touches 'sele', so opening the context menu doesn't perturb the scene."""
+    import json, os, tempfile
+    out = {"hit": False}
+    try:
+        best = _pick_atom(ndc_x, ndc_y, aspect)
+        if best is not None:
+            _, obj, chain, resi, resn, segi, name, _sx, _sy = best
+            # Residue-scoped selection the menu actions operate on (matches the
+            # residue expr pick_at builds for mouse_selection_mode 1).
+            sel = ('%s and chain %s and resi %s' % (obj, chain, resi)) if chain \
+                else ('%s and resi %s' % (obj, resi))
+            out = {"hit": True, "obj": obj, "chain": chain, "resi": resi,
+                   "resn": resn, "name": name, "sel": sel}
+    except Exception as e:
+        print('metal_pick pick_info error: %s' % e)
+        out = {"hit": False}
+    try:
+        path = os.path.join(tempfile.gettempdir(), 'pymol_longpress.json')
+        with open(path, 'w') as f:
+            json.dump(out, f)
+    except Exception:
+        pass

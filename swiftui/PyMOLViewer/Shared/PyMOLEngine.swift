@@ -31,6 +31,21 @@ struct SettingItem: Identifiable, Equatable, Codable {
     var id: String { name }
 }
 
+/// The atom/residue under a long-press, for the iOS context menu. `isEmpty`
+/// means the press landed on background (no atom) → scene-level actions.
+struct LongPressHit: Equatable, Identifiable {
+    let id = UUID()
+    var isEmpty: Bool
+    var obj = "", chain = "", resi = "", resn = "", name = "", sel = ""
+    /// Menu title, e.g. "ALA 42 · chain A" (or "Scene" for empty space).
+    var title: String {
+        if isEmpty { return "Scene" }
+        var t = resn.isEmpty ? resi : "\(resn) \(resi)"
+        if !chain.isEmpty { t += " · chain \(chain)" }
+        return t
+    }
+}
+
 final class PyMOLEngine: ObservableObject {
     static let shared = PyMOLEngine()
 
@@ -39,6 +54,9 @@ final class PyMOLEngine: ObservableObject {
     @Published var objects: [MoleculeObject] = []
     @Published var sequences: [SequenceObject] = []
     @Published var selectedResidueKeys: Set<String> = []
+    // Set when an iOS long-press identifies an atom/residue (or empty space);
+    // ContentView observes this to present the context menu, then clears it.
+    @Published var longPressHit: LongPressHit?
     @Published var isReady = false
     // Long-op ("Calculating…") overlay state. isBusy flips on only after a 2s
     // delay so quick ops never flash it; busyLabel describes the operation.
@@ -215,7 +233,7 @@ final class PyMOLEngine: ObservableObject {
         // cached/stale install) when verifying gesture-direction fixes. Bump the
         // tag whenever gesture behavior changes; it shows at the top of the log.
         DispatchQueue.main.async { [weak self] in
-            self?.feedbackLog.append(" [build] v33  (Movie export renders off the main thread — no UI freeze)")
+            self?.feedbackLog.append(" [build] v35  (Long-press context menu + iOS reset menu)")
         }
 
         // `fetch` downloads into fetch_path. Use the temp directory: it's always
@@ -500,6 +518,18 @@ final class PyMOLEngine: ObservableObject {
         if let url = autosaveURL { try? FileManager.default.removeItem(at: url) }
         if let img = autosaveImageURL { try? FileManager.default.removeItem(at: img) }
         UserDefaults.standard.set(false, forKey: Self.autosaveDefaultsKey)
+    }
+
+    /// Full reset for the iOS "Clear session" action. clearSession() wipes the
+    /// scene + selections + camera and resets every setting to defaults (then
+    /// re-applies the theme); we ALSO delete the autosave here so a force-quit
+    /// immediately after the reset can't restore the cleared (or bad) state on
+    /// the next launch — the autosave otherwise only clears on a later
+    /// background-with-empty-scene cycle. This is the iOS escape hatch from a
+    /// persisted bad state (e.g. a stuck filmic tone-map).
+    func clearSessionAndAutosave() {
+        clearSession()
+        clearAutosave()
     }
 
     /// Snapshot the full session to the autosave .pse. Called when the app is
@@ -915,6 +945,21 @@ final class PyMOLEngine: ObservableObject {
         applyTheme(ThemeManager.shared.active)
     }
 
+    /// Reset the Effects-group post-processing/stylization settings to their
+    /// SettingInfo.h defaults. Shared by the Inspector's "Reset effects" button
+    /// and the iOS toolbar reset menu. Non-destructive — keeps loaded structures.
+    func resetEffects() {
+        let defaults: [(String, String)] = [
+            ("metal_outline", "0"),
+            ("metal_outline_width", "1.4"),
+            ("metal_outline_color", "0x000000"),
+            ("metal_tonemap", "0"),
+            ("metal_exposure", "1.0"),
+            ("depth_cue", "1"),
+        ]
+        for (k, v) in defaults { runCommand("set \(k), \(v)") }
+    }
+
     // MARK: - Theme studio live preview
     //
     // While the Theme studio is open we snapshot the full session in memory and
@@ -1233,6 +1278,28 @@ final class PyMOLEngine: ObservableObject {
     func pick(ndcX: Float, ndcY: Float, aspect: Float) {
         guard let inst = instance else { return }
         PyMOLBridge_Pick(inst, ndcX, ndcY, aspect)
+    }
+
+    /// iOS long-press: identify the atom/residue under the press (read-only —
+    /// does NOT change the selection) and publish it so ContentView can show the
+    /// context menu. pick_info_at writes the hit JSON to the temp dir, which we
+    /// read back synchronously (this runs on the main thread from the gesture).
+    func longPressPick(ndcX: Float, ndcY: Float, aspect: Float) {
+        guard isReady else { return }
+        runPython("from pymol import metal_pick as _mp; _mp.pick_info_at(\(ndcX), \(ndcY), \(aspect))")
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("pymol_longpress.json")
+        guard let data = FileManager.default.contents(atPath: path),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+        let hit = (root["hit"] as? Bool) ?? false
+        longPressHit = LongPressHit(
+            isEmpty: !hit,
+            obj: root["obj"] as? String ?? "",
+            chain: root["chain"] as? String ?? "",
+            resi: root["resi"] as? String ?? "",
+            resn: root["resn"] as? String ?? "",
+            name: root["name"] as? String ?? "",
+            sel: root["sel"] as? String ?? "")
     }
 
     // MARK: - Render loop hooks (called by MetalViewport)
