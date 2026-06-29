@@ -458,8 +458,10 @@ struct ContentView: View {
     // iPhone: full-screen viewport mode (hides the bottom panel + sequence strip).
     // Replaces the old drag-to-collapse; driven by iosPanelToggle.
     @State private var iosFullScreen = false
-    // Settings tab: in-panel drill into the SCENE card (moved here from Inspector).
+    // Settings tab: in-panel drill into the display-settings card.
     @State private var settingsSceneOpen = false
+    // Scenes tab: opt-in glanceable scene buttons overlaid on the viewport.
+    @State private var showSceneButtons = false
     // Panel fraction to restore after the Theme Studio closes (it temporarily
     // opens to ~60% of the screen so the viewport/studio split matches the spec).
     @State private var fracBeforeThemeStudio: CGFloat? = nil
@@ -684,8 +686,13 @@ struct ContentView: View {
                     case "objects":  selectedTab = 1
                     case "movie":    selectedTab = 2
                     case "settings": selectedTab = 4
+                    case "scenes":   selectedTab = 5
                     default: break
                     }
+                }
+                // Test affordance: force the in-viewport scene buttons on.
+                if ProcessInfo.processInfo.environment["PYMOL_AUTOSCENEBTN"] != nil {
+                    showSceneButtons = true
                 }
             }
             if let s = ProcessInfo.processInfo.environment["PYMOL_AUTOSHEET"] {
@@ -903,6 +910,7 @@ struct ContentView: View {
             } label: {
                 Image(systemName: engine.measureMode == nil ? "ruler" : "ruler.fill")
             }
+            .tint(TimelineTheme.accent)
             .accessibilityLabel("Measure")
         }
     }
@@ -921,6 +929,7 @@ struct ContentView: View {
                           ? "arrow.down.right.and.arrow.up.left"
                           : "arrow.up.left.and.arrow.down.right")
                 }
+                .tint(TimelineTheme.accent)
                 .accessibilityLabel(iosFullScreen ? "Exit full screen" : "Full-screen viewport")
             }
         }
@@ -1003,6 +1012,32 @@ struct ContentView: View {
         #endif
     }
 
+    // Floating scene chips over the viewport (teal/global), shown only when the
+    // Scenes tab's "Show scene buttons in viewport" toggle is on. Tap = recall.
+    private var sceneButtonsOverlay: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(engine.sceneNames, id: \.self) { name in
+                    let sel = name == engine.currentScene
+                    Button {
+                        engine.runCommand("scene \(name), recall, animate=1")
+                    } label: {
+                        Text(name)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 9).frame(height: 28)
+                            .background(sel ? TimelineTheme.accent : Color.white.opacity(0.92))
+                            .foregroundColor(sel ? .white : TimelineTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11))
+        .frame(maxWidth: 230)
+    }
+
     private var viewportView: some View {
         MetalViewport()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1026,6 +1061,15 @@ struct ContentView: View {
             // full-width bar on iPad.
             .overlay(alignment: .bottom) {
                 if engine.hasTimeline { transportOverlay }
+            }
+            // Opt-in glanceable scene buttons (Scenes tab → "Show scene buttons
+            // in viewport"). Sits above the transport when a timeline is present.
+            .overlay(alignment: .bottomLeading) {
+                if showSceneButtons && !engine.sceneNames.isEmpty {
+                    sceneButtonsOverlay
+                        .padding(.leading, 12)
+                        .padding(.bottom, engine.hasTimeline ? 56 : 12)
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 Button { showGestureLegend = true } label: {
@@ -1080,6 +1124,9 @@ struct ContentView: View {
                 .tabItem { Label("Console", systemImage: "terminal") }.tag(0)
             ObjectPanel()
                 .tabItem { Label("Objects", systemImage: "cube") }.tag(1)
+            ScenesPane(showViewportButtons: $showSceneButtons,
+                       onOpenMovie: { selectedTab = 2 })
+                .tabItem { Label("Scenes", systemImage: "rectangle.on.rectangle") }.tag(5)
             MoviePane()
                 .tabItem { Label("Movie", systemImage: "film") }.tag(2)
             settingsPane
@@ -1106,7 +1153,7 @@ struct ContentView: View {
                             .font(.system(size: 15, weight: .medium))
                     }
                     Spacer()
-                    Text("Scene settings").font(.system(size: 13, weight: .semibold))
+                    Text("Display settings").font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
@@ -1126,7 +1173,7 @@ struct ContentView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { settingsSceneOpen = true }
                     } label: {
-                        settingsRow("Scene settings", "slider.horizontal.3")
+                        settingsRow("Display settings", "slider.horizontal.3")
                     }
                 }
                 Section("Appearance") {
@@ -1292,6 +1339,7 @@ struct ContentView: View {
             } label: {
                 Label("Open", systemImage: "folder")
             }
+            .tint(TimelineTheme.accent)   // global controls read teal
         }
     }
 
@@ -1443,6 +1491,7 @@ struct ContentView: View {
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
+            .tint(TimelineTheme.accent)
         }
     }
 

@@ -1842,8 +1842,8 @@ struct SceneCard: View {
     // in ObjectPanel (shared with Objects / Selections).
     var body: some View {
         VStack(spacing: 3) {
-            SceneStrip()
-            Divider().background(PanelTheme.disabledColor.opacity(0.3))
+            // Scene management (the strip) now lives in the dedicated Scenes tab;
+            // this card holds the global DISPLAY settings only.
             ForEach(SceneCatalog.groups, id: \.self) { group in
                 sceneGroup(group)
             }
@@ -1997,67 +1997,120 @@ struct SceneCard: View {
 
 // MARK: - Scenes strip (saved camera/representation snapshots)
 
-private struct SceneStrip: View {
+// The Scenes content tab — a full scene manager (PyMOL's Scene menu) in the
+// global/teal language. Scenes recall the whole visualization, so everything
+// here uses TimelineTheme.accent (teal), distinct from the per-object coral
+// A/S/H/L/C. Append wires to the movie; an opt-in toggle shows glanceable scene
+// buttons over the 3D viewport.
+struct ScenesPane: View {
     @EnvironmentObject var engine: PyMOLEngine
-    @State private var showBuilder = false
+    /// Drives the in-viewport scene-button overlay (owned by ContentView).
+    @Binding var showViewportButtons: Bool
+    /// Jump to the Movie tab (set by ContentView).
+    var onOpenMovie: (() -> Void)? = nil
+
+    private let danger = Color(red: 0.75, green: 0.29, blue: 0.23)
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                Text("Scenes")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(PanelTheme.textColor)
-                Spacer(minLength: 0)
-                actionIcon("plus") { engine.runCommand("scene new, store") }
-                    .accessibilityLabel("Store new scene")
-                actionIcon("arrow.clockwise") { engine.runCommand("scene auto, update") }
-                    .accessibilityLabel("Update current scene")
-                actionIcon("xmark") { engine.runCommand("scene auto, delete") }
-                    .accessibilityLabel("Delete current scene")
-                actionIcon("film") { showBuilder = true }
-                    .accessibilityLabel("Make scene-loop movie")
-            }
-            if engine.sceneNames.isEmpty {
-                Text("No scenes — tap + to store the current view.")
-                    .font(.system(size: 9))
-                    .foregroundColor(PanelTheme.disabledColor)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(engine.sceneNames, id: \.self) { name in
-                            let sel = name == engine.currentScene
-                            Button {
-                                engine.runCommand("scene \(name), recall, animate=1")
-                            } label: {
-                                Text(name)
-                                    .font(.system(size: 9, weight: sel ? .bold : .regular))
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(sel ? TimelineTheme.accent : PanelTheme.buttonBackground)
-                                    .foregroundColor(sel ? Color.black : PanelTheme.buttonText)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if engine.sceneNames.isEmpty {
+                    Text("No scenes yet. Append the current view to store your first scene.")
+                        .font(.system(size: 13))
+                        .foregroundColor(PanelTheme.disabledColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 10)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(engine.sceneNames, id: \.self) { name in sceneChip(name) }
                         }
+                        .padding(.vertical, 6)
                     }
                 }
+
+                Button { engine.runCommand("scene new, store") } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "plus").font(.system(size: 17, weight: .bold))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Append current view").font(.system(size: 15, weight: .semibold))
+                            Text("Saves a new scene + a movie segment").font(.system(size: 11)).opacity(0.85)
+                        }
+                        Spacer()
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(TimelineTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 6)
+
+                Toggle(isOn: $showViewportButtons) {
+                    Label("Show scene buttons in viewport", systemImage: "rectangle.grid.1x2")
+                        .font(.system(size: 14))
+                }
+                .tint(TimelineTheme.accent)
+                .padding(.vertical, 4)
+
+                groupHeader(engine.currentScene.isEmpty ? "Selected" : "Selected · \(engine.currentScene)")
+                actionRow("Update from current view", "arrow.clockwise") { engine.runCommand("scene auto, update") }
+                actionRow("Next scene", "chevron.right") { engine.runCommand("scene auto, next") }
+                actionRow("Previous scene", "chevron.left") { engine.runCommand("scene auto, previous") }
+                actionRow("Delete current scene", "trash", destructive: true) { engine.runCommand("scene auto, delete") }
+
+                groupHeader("All scenes")
+                actionRow("Build movie from scenes", "film") { onOpenMovie?() }
+                actionRow("Clear all scenes", "xmark", destructive: true) { engine.runCommand("scene *, clear") }
             }
-        }
-        .sheet(isPresented: $showBuilder) {
-            MovieBuilderSheet(initialTab: .scenes)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 56)   // clear the floating tab-bar pill
         }
     }
 
-    private func actionIcon(_ systemName: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(PanelTheme.buttonText)
-                .frame(width: 24, height: 22)
-                .background(PanelTheme.buttonBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+    private func sceneChip(_ name: String) -> some View {
+        let sel = name == engine.currentScene
+        return Button {
+            engine.runCommand("scene \(name), recall, animate=1")
+        } label: {
+            Text(name)
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 14).frame(height: 38)
+                .background(sel ? TimelineTheme.accent : Color.white)
+                .foregroundColor(sel ? .white : TimelineTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(TimelineTheme.accent.opacity(sel ? 0 : 0.5), lineWidth: 1.5)
+                )
         }
         .buttonStyle(.plain)
+    }
+
+    private func groupHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .foregroundColor(PanelTheme.disabledColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 14).padding(.bottom, 2)
+    }
+
+    private func actionRow(_ title: String, _ icon: String,
+                           destructive: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon).frame(width: 22)
+                    .foregroundColor(destructive ? danger : TimelineTheme.accent)
+                Text(title).font(.system(size: 15))
+                    .foregroundColor(destructive ? danger : PanelTheme.textColor)
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { Divider() }
     }
 }
 
