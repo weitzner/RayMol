@@ -419,6 +419,9 @@ struct ContentView: View {
     @State private var fetchID = ""
     // Confirmation for the destructive "Clear session" reset action.
     @State private var showClearSessionConfirm = false
+    // Long-press context menu: the color sub-sheet + the residue sel it colors.
+    @State private var showLongPressColor = false
+    @State private var longPressColorSel: String?
     // iPhone: the transport floats as a 1-line peek over the viewport and
     // expands in place to the full multi-row control. (Ignored on regular-width
     // iPad, where the bar is always full.)
@@ -580,6 +583,24 @@ struct ContentView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Removes all loaded structures and resets the view, effects, and settings to defaults. This can’t be undone.")
+            }
+            // Long-press context menu: a native action sheet for the atom/residue
+            // under the press (or scene-level actions on empty space). Presented
+            // when handleLongPress → engine.longPressPick sets engine.longPressHit.
+            .confirmationDialog(
+                engine.longPressHit?.title ?? "",
+                isPresented: Binding(get: { engine.longPressHit != nil },
+                                     set: { if !$0 { engine.longPressHit = nil } }),
+                titleVisibility: .visible,
+                presenting: engine.longPressHit
+            ) { hit in
+                longPressActions(hit)
+            }
+            // Color sub-sheet (confirmationDialog buttons can't nest, so "Color…"
+            // opens this second sheet for the residue captured in longPressColorSel).
+            .confirmationDialog("Color residue", isPresented: $showLongPressColor,
+                                titleVisibility: .visible) {
+                longPressColorActions()
             }
             .sheet(isPresented: $showGestureLegend) {
                 VStack(spacing: 16) {
@@ -1194,6 +1215,35 @@ struct ContentView: View {
             }
             .accessibilityLabel("Reset")
         }
+    }
+
+    // Buttons for the long-press context menu. Empty space → scene-level actions;
+    // a hit → residue-scoped actions on hit.sel (an obj/chain/resi selector).
+    @ViewBuilder
+    private func longPressActions(_ hit: LongPressHit) -> some View {
+        if hit.isEmpty {
+            Button("Reset view") { engine.runCommand("reset") }
+            Button("Deselect all") { engine.runCommand("deselect") }
+        } else {
+            Button("Zoom to residue") { engine.runCommand("zoom (\(hit.sel)), animate=1") }
+            Button("Select residue") { engine.runCommand("select sele, (?sele) or (\(hit.sel))\nenable sele") }
+            Button("Label residue") { engine.runCommand("label first (\(hit.sel)), '\(hit.resn)\(hit.resi)'") }
+            Button("Hide residue") { engine.runCommand("hide everything, (\(hit.sel))") }
+            Button("Center here") { engine.runCommand("center (\(hit.sel))") }
+            Button("Color…") { longPressColorSel = hit.sel; showLongPressColor = true }
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    // Color choices for the long-press "Color…" sub-sheet (a few presets + by-element).
+    @ViewBuilder
+    private func longPressColorActions() -> some View {
+        let sel = longPressColorSel ?? ""
+        ForEach(["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white"], id: \.self) { c in
+            Button(c.capitalized) { engine.runCommand("color \(c), (\(sel))") }
+        }
+        Button("By element") { engine.runCommand("python\nfrom pymol import util; util.cnc('(\(sel))')\npython end") }
+        Button("Cancel", role: .cancel) {}
     }
 
     private func iosHandleImport(_ result: Result<[URL], Error>) {

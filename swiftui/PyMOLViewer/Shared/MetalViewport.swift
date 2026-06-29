@@ -802,16 +802,18 @@ extension MetalViewport {
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-            guard let view = mtkView else { return }
-            let location = gesture.location(in: view)
-            let pt = pymolPoint(in: view, at: location)
-
-            if gesture.state == .began {
-                // Long press = right click (context menu / translate)
-                engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_DOWN, x: pt.0, y: pt.1, modifiers: 0)
-            } else if gesture.state == .ended || gesture.state == .cancelled {
-                engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: 0)
-            }
+            guard gesture.state == .began, let engine = engine, let view = mtkView else { return }
+            // Identify the atom/residue under the press and let ContentView show
+            // a native context menu. NDC in point space with Y flipped (same as
+            // handleTap). This replaces the old right-click, which fired a PyMOL
+            // pop-up menu that this Metal backend never renders (internal_gui=0)
+            // — so long-press used to do nothing visible.
+            let p = gesture.location(in: view)
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return }
+            let ndcX = Float(p.x / w) * 2 - 1
+            let ndcY = 1 - Float(p.y / h) * 2
+            engine.longPressPick(ndcX: ndcX, ndcY: ndcY, aspect: Float(w / h))
         }
         #endif
     }
