@@ -1090,9 +1090,9 @@ final class PyMOLEngine: ObservableObject {
     // Author a movie via the high-level builders (appkit_movie.make_movie).
     // kind: roll | rock | nutate | state_loop | state_sweep | scenes.
     func buildMovie(kind: String, duration: Double = 12, angle: Double = 30,
-                    loop: Bool = true, factor: Int = 1, pause: Double = 2,
+                    axis: String = "y", loop: Bool = true, factor: Int = 1, pause: Double = 2,
                     scenes: [String]? = nil) {
-        var args = "kind='\(kind)', duration=\(duration), angle=\(angle), "
+        var args = "kind='\(kind)', duration=\(duration), angle=\(angle), axis='\(axis)', "
             + "loop=\(loop ? 1 : 0), factor=\(factor), pause=\(pause)"
         if let s = scenes {
             let list = s.map { "'\($0.replacingOccurrences(of: "'", with: ""))'" }

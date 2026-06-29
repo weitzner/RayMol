@@ -32,6 +32,7 @@ struct MovieBuilderControls: View {
         var needsAngle: Bool { self != .roll }
     }
     @State private var motion: CameraMotion = .roll
+    @State private var axis: String = "y"
     @State private var duration: Double = 8
     @State private var angle: Double = 30
     @State private var cameraLoop = true
@@ -88,17 +89,19 @@ struct MovieBuilderControls: View {
     // MARK: Tabs
 
     private var cameraTab: some View {
+        // 2×2 grid: Motion · Axis / Duration · Angle — roomy enough that values
+        // don't wrap, and still fits the pinned content height.
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 menuPicker("Motion", $motion, CameraMotion.allCases.map { ($0.rawValue, $0) })
+                menuPicker("Axis", $axis, [("X", "x"), ("Y", "y"), ("Z", "z")])
+            }
+            HStack(alignment: .top, spacing: 12) {
                 menuPicker("Duration", $duration, [("4 s", 4), ("8 s", 8), ("16 s", 16), ("32 s", 32)])
-                // Always shown (rock/nutate use it; roll ignores it) so the row
-                // is consistent across motions.
+                // Angle always shown (rock/nutate use it; roll ignores it).
                 menuPicker("Angle", $angle, [("30°", 30), ("60°", 60), ("90°", 90), ("120°", 120)])
             }
             Toggle("Seamless loop", isOn: $cameraLoop).tint(TimelineTheme.accent)
-            Text("A 360° camera \(motion.rawValue.lowercased()) authored as interpolated keyframes.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -158,7 +161,7 @@ struct MovieBuilderControls: View {
     private func build() {
         switch tab {
         case .camera:
-            engine.buildMovie(kind: motion.kind, duration: duration, angle: angle, loop: cameraLoop)
+            engine.buildMovie(kind: motion.kind, duration: duration, angle: angle, axis: axis, loop: cameraLoop)
         case .states:
             engine.buildMovie(kind: stateMode == .loop ? "state_loop" : "state_sweep",
                               loop: stateLoop, factor: speedFactor, pause: statePause)
