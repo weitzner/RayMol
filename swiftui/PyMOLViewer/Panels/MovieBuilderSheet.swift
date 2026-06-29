@@ -82,18 +82,12 @@ struct MovieBuilderControls: View {
     // MARK: Tabs
 
     private var cameraTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            labeled("Motion") {
-                Picker("", selection: $motion) {
-                    ForEach(CameraMotion.allCases) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented)
-            }
-            labeled("Duration") {
-                presetPicker($duration, [("4 s", 4), ("8 s", 8), ("16 s", 16), ("32 s", 32)])
-            }
-            if motion.needsAngle {
-                labeled("Angle") {
-                    presetPicker($angle, [("30°", 30), ("60°", 60), ("90°", 90), ("120°", 120)])
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                menuPicker("Motion", $motion, CameraMotion.allCases.map { ($0.rawValue, $0) })
+                menuPicker("Duration", $duration, [("4 s", 4), ("8 s", 8), ("16 s", 16), ("32 s", 32)])
+                if motion.needsAngle {
+                    menuPicker("Angle", $angle, [("30°", 30), ("60°", 60), ("90°", 90), ("120°", 120)])
                 }
             }
             Toggle("Seamless loop", isOn: $cameraLoop).tint(TimelineTheme.accent)
@@ -103,23 +97,15 @@ struct MovieBuilderControls: View {
     }
 
     private var statesTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             if engine.playback.frameCount <= 1 && stateMaxStates <= 1 {
                 Text("Load a multi-state object (NMR ensemble or trajectory) to animate states.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            labeled("Mode") {
-                Picker("", selection: $stateMode) {
-                    ForEach(StateMode.allCases) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented)
-            }
-            labeled("Speed") {
-                presetPicker(Binding(get: { Double(speedFactor) },
-                                     set: { speedFactor = Int($0) }),
-                             [("1×", 1), ("½×", 2), ("¼×", 4), ("⅛×", 8)])
-            }
-            labeled("Pause") {
-                presetPicker($statePause, [("0 s", 0), ("1 s", 1), ("2 s", 2), ("4 s", 4)])
+            HStack(alignment: .top, spacing: 12) {
+                menuPicker("Mode", $stateMode, StateMode.allCases.map { ($0.rawValue, $0) })
+                menuPicker("Speed", $speedFactor, [("1×", 1), ("½×", 2), ("¼×", 4), ("⅛×", 8)])
+                menuPicker("Pause", $statePause, [("0 s", 0), ("1 s", 1), ("2 s", 2), ("4 s", 4)])
             }
             Toggle("Seamless loop", isOn: $stateLoop).tint(TimelineTheme.accent)
             Text(stateMode == .loop
@@ -130,9 +116,9 @@ struct MovieBuilderControls: View {
     }
 
     private var scenesTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             if engine.sceneNames.isEmpty {
-                Text("No scenes saved. Store scenes from the SCENE card first.")
+                Text("No scenes saved. Store scenes in the Scenes tab first.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Text("Scenes (tap to include; none = all)")
@@ -142,8 +128,8 @@ struct MovieBuilderControls: View {
                     else { selectedScenes.insert(name) }
                 }
             }
-            labeled("Seconds / scene") {
-                presetPicker($sceneSeconds, [("2 s", 2), ("4 s", 4), ("8 s", 8), ("12 s", 12)])
+            HStack(alignment: .top, spacing: 12) {
+                menuPicker("Seconds / scene", $sceneSeconds, [("2 s", 2), ("4 s", 4), ("8 s", 8), ("12 s", 12)])
             }
             Toggle("Loop", isOn: $sceneLoop).tint(TimelineTheme.accent)
             Text("Strings scenes into a movie with interpolated camera transitions.")
@@ -192,19 +178,25 @@ struct MovieBuilderControls: View {
 
     // MARK: Helpers
 
+    // Compact labelled dropdown — several sit side-by-side in a row to save
+    // vertical space (vs full-width segmented controls stacked one per row).
     @ViewBuilder
-    private func labeled<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            content()
+    private func menuPicker<T: Hashable>(_ title: String, _ value: Binding<T>,
+                                         _ opts: [(String, T)]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Picker(title, selection: value) {
+                ForEach(opts, id: \.1) { Text($0.0).tag($0.1) }
+            }
+            .pickerStyle(.menu)
+            .tint(TimelineTheme.accent)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.13)))
         }
-    }
-
-    private func presetPicker(_ value: Binding<Double>, _ opts: [(String, Double)]) -> some View {
-        Picker("", selection: value) {
-            ForEach(opts, id: \.1) { Text($0.0).tag($0.1) }
-        }
-        .pickerStyle(.segmented)
+        .frame(maxWidth: .infinity)
     }
 }
 

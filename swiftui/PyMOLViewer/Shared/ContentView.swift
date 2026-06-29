@@ -442,6 +442,8 @@ struct ContentView: View {
     // sheet so the screenshot harness can capture it (simctl can't tap).
     @State private var showBuilderSheet = false
     @State private var showExportSheet = false
+    // Explainer when "Export Movie" is tapped with no animation built yet.
+    @State private var showNoMovieAlert = false
     @State private var showSettingsSheet = false
     // The panel + viewport FRAME resize live while dragging the divider, but the
     // Metal DRAWABLE is frozen during the drag (engine.suppressDrawableResize) so
@@ -1053,6 +1055,13 @@ struct ContentView: View {
     private var viewportView: some View {
         MetalViewport()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Attached here (not the giant body chain) to keep that expression
+            // under the Swift type-checker's complexity limit.
+            .alert("No movie to export", isPresented: $showNoMovieAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("There’s no animation yet. Open the Movie tab, pick a motion (e.g. Camera → Roll) and tap Build & Play — then Export Movie will render it.")
+            }
             .overlay { if engine.objects.isEmpty && !showThemeStudio && !hasRestoreSnapshot { emptyStateView } }
             // Cold-launch restore: cover the viewport with the last-scene snapshot
             // until the reloaded session has rendered (see restoreAutosaveIfAvailable).
@@ -1463,14 +1472,15 @@ struct ContentView: View {
                 } label: {
                     Label("Copy Image", systemImage: "doc.on.clipboard")
                 }
-                // Export the authored movie (Movie tab). Disabled until there's
-                // a timeline to render.
+                // Export the authored movie (Movie tab). Stays tappable even with
+                // no movie so it can explain what's missing rather than silently
+                // doing nothing.
                 Button {
-                    showExportSheet = true
+                    if engine.playback.frameCount <= 1 { showNoMovieAlert = true }
+                    else { showExportSheet = true }
                 } label: {
                     Label("Export Movie…", systemImage: "film")
                 }
-                .disabled(engine.playback.frameCount <= 1)
                 // Render options in a submenu whose toggles DON'T dismiss the
                 // menu (flip both before exporting). dismiss-disabled is iOS-only.
                 #if os(iOS)
