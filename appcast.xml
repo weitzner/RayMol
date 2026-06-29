@@ -6,33 +6,35 @@
     <description>RayMol macOS updates</description>
     <language>en</language>
     <item>
-      <title>RayMol 1.4.0</title>
+      <title>RayMol 1.4.1</title>
       <description xml:lang="en" sparkle:format="markdown"><![CDATA[
-## RayMol 1.4.0
+## RayMol 1.4.1
 
-New Metal rendering effects and a redesigned settings panel.
+A stability and polish release on top of 1.4.0 — fewer crashes, lighter memory use, and smoother editing.
 
-### Rendering
-- **Depth of field.** Photographic focus blur (bokeh) with adjustable focus distance, range, and aperture — *Scene ▸ Camera*.
-- **Subsurface wrap.** Soft light-wrap past the terminator for a waxier, more lifelike surface — *Scene ▸ Lighting*.
-- **Temporal ambient occlusion.** Ray-traced AO that accumulates to a clean result while the view is still — *Scene ▸ Shadows & AO* (needs Ray tracing).
-- **Reduced-resolution upscale.** MetalFX upscaling to keep things smooth on slower GPUs — *Scene ▸ Quality*.
+### Stability
+- **Fixed several crashes and a data-loss case.** Three issues found in review that could crash the app or lose unsaved work are resolved.
+- **Plugged Metal memory & resource leaks.** The renderer no longer accumulates GPU memory and resources over a long session, so RayMol stays lighter the longer it runs.
 
-### Redesigned inspector panel
-- Scene settings are reorganized into clear, collapsible groups — **Canvas, Camera, Lighting, Shadows & AO, Effects, Quality** — with dependent options tucked under their toggle and a **(?)** explainer on every control.
-- **Scene, Objects, and Selections** are now consistent collapsible sections with aligned rows.
+### Rendering & export
+- **Accurate high-resolution export.** Depth-of-field blur and outline width now scale with the output resolution, so a hi-res render looks like what you see on screen (WYSIWYG).
+- **Cleaner tone mapping.** Tone-map and exposure no longer subtly muddy the render.
 
-### Also
-- Session save / ⌘S improvements.
-- The macOS app is now fully self-contained (no external library dependencies).
+### Performance
+- **Smoother movie export.** Movie rendering now runs off the main thread, so the interface stays responsive while a movie is being written.
+- **Snappier color editing.** The inspector color pickers are debounced, so dragging a color no longer stutters the view.
+
+### Under the hood
+- AI/MCP control is now thread-safe — automated commands are marshaled onto the main thread, fixing intermittent failures.
+- Packaging scripts now fail loudly rather than ever shipping a broken bundle.
 
 Built on the open-source PyMOL engine. Updates install automatically via the in-app updater (**Check for Updates…** in the app menu).
 ]]></description>
-      <pubDate>Sat, 27 Jun 2026 06:27:56 +0000</pubDate>
-      <sparkle:version>12</sparkle:version>
-      <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
+      <pubDate>Mon, 29 Jun 2026 22:09:19 +0000</pubDate>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>1.4.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.4.0/RayMol-1.4.0.dmg" type="application/octet-stream" sparkle:edSignature="1JoY2iE9recsApBeU9ihVtMlILbpj7XY/gNxb9fdtlg/J40lmnACRTVOAXmLMzNMhNvNtTQJt6do4+6rPRrVCA==" length="59247802" />
+      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.4.1/RayMol-1.4.1.dmg" type="application/octet-stream" sparkle:edSignature="AV3SiilQFdSsRPYSV4T3lO0gj0+95TaN3JtxmPDs2loCNXerGyTpB2WoG5dl7eGZM1K5PViK14rz/Ajtl37fAg==" length="55799037" />
     </item>
   </channel>
 </rss>
