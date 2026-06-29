@@ -412,13 +412,23 @@ struct MoviePane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                MovieBuilderControls()
+                MovieBuilderControls(initialTab: Self.initialTabFromEnv)
                 Text("Build & Play to preview on the transport. To save a file, use the Export menu (top-right) → Export Movie.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(16)
             // Clear the floating tab-bar pill so the controls stay reachable.
             .padding(.bottom, 56)
+        }
+    }
+
+    // Test affordance: preselect the builder tab for the screenshot harness
+    // (simctl can't tap). PYMOL_AUTOMOVIETAB=camera|states|scenes.
+    private static var initialTabFromEnv: MovieBuilderControls.Tab {
+        switch ProcessInfo.processInfo.environment["PYMOL_AUTOMOVIETAB"] {
+        case "states": return .states
+        case "scenes": return .scenes
+        default: return .camera
         }
     }
 }

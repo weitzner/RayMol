@@ -59,7 +59,8 @@ struct MovieBuilderControls: View {
             .pickerStyle(.segmented)
 
             // Fixed-height content area so Build & Play sits at the SAME spot
-            // for every tab (Camera / States / Scenes), not jumping by content.
+            // for every tab (Camera / States / Scenes). Pinned to the Camera
+            // tab's natural height; the other tabs are sized to fit within it.
             Group {
                 switch tab {
                 case .camera: cameraTab
@@ -67,7 +68,7 @@ struct MovieBuilderControls: View {
                 case .scenes: scenesTab
                 }
             }
-            .frame(minHeight: 156, alignment: .top)
+            .frame(height: 156, alignment: .top)
 
             Divider()
             commonActions
@@ -103,40 +104,33 @@ struct MovieBuilderControls: View {
 
     private var statesTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if engine.playback.frameCount <= 1 && stateMaxStates <= 1 {
-                Text("Load a multi-state object (NMR ensemble or trajectory) to animate states.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             HStack(alignment: .top, spacing: 12) {
                 menuPicker("Mode", $stateMode, StateMode.allCases.map { ($0.rawValue, $0) })
                 menuPicker("Speed", $speedFactor, [("1×", 1), ("½×", 2), ("¼×", 4), ("⅛×", 8)])
                 menuPicker("Pause", $statePause, [("0 s", 0), ("1 s", 1), ("2 s", 2), ("4 s", 4)])
             }
             Toggle("Seamless loop", isOn: $stateLoop).tint(TimelineTheme.accent)
-            Text(stateMode == .loop
-                 ? "Steps through all states once per cycle."
-                 : "Sweeps forward and back through all states.")
+            // Single caption (no extra top note) so the height matches Camera.
+            Text(engine.playback.frameCount <= 1 && stateMaxStates <= 1
+                 ? "Needs a multi-state object (NMR / trajectory)."
+                 : (stateMode == .loop ? "Steps through all states once per cycle."
+                                       : "Sweeps forward and back through all states."))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
     private var scenesTab: some View {
+        // Same 3-row shape as Camera/States (dropdown · toggle · caption) so the
+        // height matches. Uses all saved scenes; manage them in the Scenes tab.
         VStack(alignment: .leading, spacing: 12) {
-            if engine.sceneNames.isEmpty {
-                Text("No scenes saved. Store scenes in the Scenes tab first.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                FlowChips(items: engine.sceneNames, selected: selectedScenes) { name in
-                    if selectedScenes.contains(name) { selectedScenes.remove(name) }
-                    else { selectedScenes.insert(name) }
-                }
-            }
             HStack(alignment: .top, spacing: 12) {
                 menuPicker("Seconds / scene", $sceneSeconds, [("2 s", 2), ("4 s", 4), ("8 s", 8), ("12 s", 12)])
             }
-            Toggle("Loop  ·  tap scenes to include (none = all)", isOn: $sceneLoop)
-                .font(.system(size: 15))
-                .tint(TimelineTheme.accent)
+            Toggle("Loop", isOn: $sceneLoop).tint(TimelineTheme.accent)
+            Text(engine.sceneNames.isEmpty
+                 ? "No scenes saved — store scenes in the Scenes tab first."
+                 : "Strings all \(engine.sceneNames.count) saved scenes into a movie.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
