@@ -524,6 +524,7 @@ struct ContentView: View {
     // safeAreaInsetsDidChange — reliable across a landscapeLeft<->Right flip,
     // unlike geo.safeAreaInsets (which reports the island inset regardless of side).
     @State private var windowTrailingInset: CGFloat = 0
+    @State private var windowLeadingInset: CGFloat = 0   // debug
 
     // iPhone landscape == compact width + compact height (iPad is regular height in
     // both orientations; iPhone portrait is compact width + regular height).
@@ -578,6 +579,7 @@ struct ContentView: View {
             .background {
                 SafeAreaReader { insets in
                     if windowTrailingInset != insets.right { windowTrailingInset = insets.right }
+                    if windowLeadingInset != insets.left { windowLeadingInset = insets.left }
                 }
             }
             #endif
@@ -850,6 +852,15 @@ struct ContentView: View {
                 }
                 .padding(.top, 8)
                 .padding(.horizontal, 8)
+            }
+            // TEMP diagnostic — exact inset values so we can see why the panel insets.
+            .overlay(alignment: .bottomLeading) {
+                Text(verbatim: "geoL \(Int(geo.safeAreaInsets.leading))  geoT \(Int(geo.safeAreaInsets.trailing))  winL \(Int(windowLeadingInset))  winR \(Int(windowTrailingInset))  panelW \(Int(panelW))")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .padding(6)
+                    .background(.black.opacity(0.7))
+                    .foregroundStyle(.green)
+                    .padding(10)
             }
 
             if !iosFullScreen {
