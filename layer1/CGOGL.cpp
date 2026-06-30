@@ -65,9 +65,14 @@ static void metalApplyRepClip(CCGORenderer* I)
 {
   auto* G = I->G;
   if (!G->Renderer) return;
-  if (I->metalIsSurfaceShader) {
-    CSetting* s1 = (I->rep && I->rep->cs) ? I->rep->cs->Setting.get() : nullptr;
-    CSetting* s2 = (I->rep && I->rep->obj) ? I->rep->obj->Setting.get() : nullptr;
+  // Gate on the ACTUAL rep type, not the metalIsSurfaceShader flag. That flag was
+  // (historically) set on GL_SURFACE_SHADER enable but not reset on its disable,
+  // so it could stay sticky and leak the surface clip onto a rep drawn afterward
+  // (e.g. cartoon). Rep::type() is unambiguous and render-order independent. (The
+  // disable handler now also resets the flag; this gate is the robust guarantee.)
+  if (I->rep && I->rep->type() == cRepSurface) {
+    CSetting* s1 = I->rep->cs ? I->rep->cs->Setting.get() : nullptr;
+    CSetting* s2 = I->rep->obj ? I->rep->obj->Setting.get() : nullptr;
     float fOff = SettingGet_f(G, s1, s2, cSetting_surface_clip_front);
     float bOff = SettingGet_f(G, s1, s2, cSetting_surface_clip_back);
     if (fOff != 0.0f || bOff != 0.0f) {
@@ -2087,6 +2092,11 @@ static void CGO_gl_disable(CCGORenderer* I, CGO_op_data pc)
     case GL_TRILINES_SHADER:
     case GL_OIT_COPY_SHADER:
     case GL_LINE_SHADER:
+      // Reset the Metal surface-shader flag on disable so it can't stay sticky
+      // and leak surface-only behavior (per-rep clip, metal_interior_cap) onto a
+      // rep drawn later in the frame. The enable handler sets it for SURFACE.
+      if (mode == GL_SURFACE_SHADER && I->G->Renderer)
+        I->metalIsSurfaceShader = false;
       I->G->ShaderMgr->Disable_Current_Shader();
       break;
     case GL_LABEL_FLOAT_TEXT: {
