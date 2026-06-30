@@ -228,6 +228,12 @@ struct ContentView: View {
                         .layoutPriority(1)
                         .overlay(alignment: .top) {
                             if engine.measureMode != nil { measureOverlay }
+                            else if engine.interactionMode == .move { moveOverlay }
+                        }
+                        // Move-mode manipulation gizmo (visual only; input handled
+                        // in MetalViewport).
+                        .overlay {
+                            if engine.interactionMode == .move { GizmoOverlay() }
                         }
                         // Pick-debug crosshair: marks exactly where the last click
                         // landed, so a screenshot shows click-vs-selection offset.
@@ -294,6 +300,7 @@ struct ContentView: View {
             macThemeToolbar
             exportMenu
             macMeasureToolbar
+            macMoveToolbar
             panelToggles
             #if !RAYMOL_MAS_RESTRICTED
             ToolbarItem(placement: .automatic) {
@@ -524,6 +531,7 @@ struct ContentView: View {
             // NOT a full-bleed overlay, which would slide under the notch.
             .safeAreaInset(edge: .top, spacing: 0) {
                 if engine.measureMode != nil { measureOverlay }
+                else if engine.interactionMode == .move { moveOverlay }
             }
             .navigationTitle(hSize == .compact ? "" : "RayMol")
             .navigationBarTitleDisplayMode(.inline)
@@ -564,7 +572,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosThemeToolbar; iosResetMenu; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosMoveToolbar; iosThemeToolbar; iosResetMenu; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -874,6 +882,19 @@ struct ContentView: View {
         }
     }
 
+    // Move-mode toggle (iOS). Mirrors the measure ruler toggle.
+    private var iosMoveToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+                engine.setInteractionMode(engine.interactionMode == .move ? .viewing : .move)
+            } label: {
+                Image(systemName: "move.3d")
+                    .foregroundColor(engine.interactionMode == .move ? themeManager.active.accent.color : nil)
+            }
+            .accessibilityLabel("Move objects")
+        }
+    }
+
     private var iosPanelToggle: some ToolbarContent {
         // iPhone (compact) only: collapse/expand the single bottom control panel.
         // The iPad mac-style layout uses iosPadPanelMenu (per-pane toggles) instead.
@@ -989,6 +1010,9 @@ struct ContentView: View {
             // Timeline transport: floats over the bottom of the viewport when
             // there's more than one frame. A collapsing peek on iPhone; a pinned
             // full-width bar on iPad.
+            .overlay {
+                if engine.interactionMode == .move { GizmoOverlay() }
+            }
             .overlay(alignment: .bottom) {
                 if engine.hasTimeline { transportOverlay }
             }
@@ -1464,6 +1488,19 @@ struct ContentView: View {
         }
     }
 
+    // Move-mode toggle (macOS). ⌃M also toggles it (see PyMOLApp commands).
+    private var macMoveToolbar: some ToolbarContent {
+        ToolbarItem {
+            Button {
+                engine.setInteractionMode(engine.interactionMode == .move ? .viewing : .move)
+            } label: {
+                Label("Move", systemImage: "move.3d")
+                    .foregroundColor(engine.interactionMode == .move ? themeManager.active.accent.color : nil)
+            }
+            .help("Move objects: drag the gizmo to translate / rotate the active object")
+        }
+    }
+
     private var panelToggles: some ToolbarContent {
         ToolbarItemGroup {
             Toggle(isOn: $engine.sequenceVisible) {
@@ -1742,6 +1779,72 @@ struct ContentView: View {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(themeManager.active.panelText.color.opacity(0.6))
             }.buttonStyle(.plain).accessibilityLabel("Exit measure mode")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(themeManager.active.panelBackground.color)
+        .tint(themeManager.active.accent.color)
+    }
+
+    // Move-mode overlay bar (mirrors measureOverlay): Move/Rotate tool toggle,
+    // active-object dropdown, live readout, reset, exit.
+    private var moveOverlay: some View {
+        HStack(spacing: 10) {
+            Picker("", selection: Binding(
+                get: { engine.moveTool },
+                set: { engine.setMoveTool($0) })) {
+                Text("Move").tag(MoveTool.translate)
+                Text("Rotate").tag(MoveTool.rotate)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 150)
+
+            Menu {
+                let names = engine.objects.filter { !$0.isSelection }.map { $0.name }
+                if names.isEmpty {
+                    Text("No objects loaded")
+                } else {
+                    ForEach(names, id: \.self) { n in
+                        Button {
+                            engine.setActiveMoveObject(n)
+                        } label: {
+                            if engine.activeMoveObject == n {
+                                Label(n, systemImage: "checkmark")
+                            } else {
+                                Text(n)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "scope")
+                    Text(engine.activeMoveObject ?? "Tap an object")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 9))
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(themeManager.active.panelText.color)
+            }
+
+            Text(engine.gizmo?.readout ?? "")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(themeManager.active.accent.color)
+                .lineLimit(1).minimumScaleFactor(0.7)
+
+            Spacer(minLength: 0)
+
+            Button { engine.resetActiveMovePosition() } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .foregroundColor(themeManager.active.panelText.color)
+            }
+            .buttonStyle(.plain)
+            .disabled(engine.activeMoveObject == nil)
+            .help("Reset this object's position")
+
+            Button { engine.setInteractionMode(.viewing) } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(themeManager.active.panelText.color.opacity(0.6))
+            }.buttonStyle(.plain).accessibilityLabel("Exit move mode")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(themeManager.active.panelBackground.color)

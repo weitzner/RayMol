@@ -129,6 +129,15 @@ final class PyMOLEngine: ObservableObject {
     // distance/angle/dihedral. measureStatus is the prompt/result shown in the UI.
     @Published var measureMode: MeasureKind? = nil
     @Published var measureStatus: String = ""
+    // Move mode: rigid-body object manipulation via an on-screen gizmo (driven by
+    // metal_move.py / TTT matrix). interactionMode gates gesture routing in
+    // MetalViewport; gizmo holds the projected handle geometry the overlay draws
+    // and the handlers hit-test; armedAxis is the iOS tap-to-arm state.
+    @Published var interactionMode: InteractionMode = .viewing
+    @Published var moveTool: MoveTool = .translate
+    @Published var activeMoveObject: String? = nil
+    @Published var armedAxis: GizmoHandle? = nil
+    @Published var gizmo: GizmoGeometry? = nil
     // Full settings catalog for the searchable Settings panel (loaded on demand).
     @Published var settingsCatalog: [SettingItem] = []
     // The single detail view that is currently open (accordion: at most one).
@@ -1170,6 +1179,97 @@ final class PyMOLEngine: ObservableObject {
 
     func clearMeasurements() {
         runPython("from pymol import appkit_measure as _am\n_am.clear_all()")
+    }
+
+    // MARK: - Move mode (rigid-body object gizmo)
+
+    /// Viewport aspect (width / height) for the gizmo projection. Falls back to
+    /// 1.0 before the first reshape.
+    var gizmoAspect: Float {
+        let s = viewportPixelSize
+        return s.height > 0 ? Float(s.width / s.height) : 1.0
+    }
+
+    func setInteractionMode(_ mode: InteractionMode) {
+        interactionMode = mode
+        if mode == .move {
+            if measureMode != nil { setMeasureMode(nil) }   // mutually exclusive
+            refreshGizmo()
+        } else {
+            armedAxis = nil
+            activeMoveObject = nil
+            gizmo = nil
+            runPython("from pymol import metal_move as _mm\n_mm.clear_active()")
+        }
+    }
+
+    func setMoveTool(_ tool: MoveTool) {
+        moveTool = tool
+        armedAxis = nil
+        runPython("from pymol import metal_move as _mm\n_mm.set_tool('\(tool.rawValue)', \(gizmoAspect))")
+        readGizmo()
+    }
+
+    /// Grab-what-you-touch: set the active object to whatever is under the point.
+    func moveSetActiveAt(ndcX: Float, ndcY: Float, aspect: Float) {
+        runPython("from pymol import metal_move as _mm\n_mm.pick_object(\(ndcX), \(ndcY), \(aspect))")
+        readGizmo()
+    }
+
+    /// Explicitly set the active object (overlay dropdown).
+    func setActiveMoveObject(_ name: String) {
+        let nb = Data(name.utf8).base64EncodedString()
+        runPython("import base64 as _b64\nfrom pymol import metal_move as _mm\n"
+            + "_mm.set_active(_b64.b64decode('\(nb)').decode('utf-8'), '\(moveTool.rawValue)', \(gizmoAspect))")
+        readGizmo()
+    }
+
+    /// Re-emit the gizmo geometry (after the camera changed).
+    func refreshGizmo(aspect: Float? = nil) {
+        guard interactionMode == .move else { return }
+        runPython("from pymol import metal_move as _mm\n_mm.refresh(\(aspect ?? gizmoAspect))")
+        readGizmo()
+    }
+
+    func toggleArmedAxis(_ h: GizmoHandle) {
+        armedAxis = (armedAxis == h) ? nil : h
+    }
+
+    func gizmoBeginDrag(_ handle: GizmoHandle, ndcX: Float, ndcY: Float, aspect: Float) {
+        runPython("from pymol import metal_move as _mm\n_mm.begin_drag('\(handle.pyName)', \(ndcX), \(ndcY), \(aspect))")
+        readGizmo()
+    }
+
+    func gizmoUpdateDrag(ndcX: Float, ndcY: Float, aspect: Float) {
+        runPython("from pymol import metal_move as _mm\n_mm.update_drag(\(ndcX), \(ndcY), \(aspect))")
+        readGizmo()
+    }
+
+    func gizmoEndDrag() {
+        runPython("from pymol import metal_move as _mm\n_mm.end_drag()")
+        readGizmo()
+    }
+
+    func resetActiveMovePosition() {
+        runPython("from pymol import metal_move as _mm\n_mm.reset_active()")
+        readGizmo()
+    }
+
+    // Read the gizmo geometry metal_move wrote to the temp dir (same-process
+    // TMPDIR), synchronously — called right after each metal_move call (the
+    // longPressPick pattern). Updates the published gizmo + active object.
+    private func readGizmo() {
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("pymol_gizmo.json")
+        guard let data = FileManager.default.contents(atPath: path),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+        if (root["active"] as? Bool) == true, let g = GizmoGeometry(json: root) {
+            gizmo = g
+            activeMoveObject = g.obj
+        } else {
+            gizmo = nil
+            activeMoveObject = nil
+        }
     }
 
     // MARK: - Settings panel

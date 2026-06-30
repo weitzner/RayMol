@@ -161,6 +161,12 @@ struct PyMOLApp: App {
                     NotificationCenter.default.post(name: .raymolClearSession, object: nil)
                 }
             }
+            // Mouse menu: toggle Move mode (rigid-body object gizmo). ⌃M.
+            CommandMenu("Mouse") {
+                Button(engine.interactionMode == .move ? "Stop Moving Objects" : "Move Objects") {
+                    engine.setInteractionMode(engine.interactionMode == .move ? .viewing : .move)
+                }.keyboardShortcut("m", modifiers: .control)
+            }
             #if os(macOS) && !RAYMOL_MAS_RESTRICTED
             CommandMenu("Connect") {
                 Toggle("Enable AI control", isOn: Binding(
