@@ -601,7 +601,11 @@ struct ContentView: View {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
         if let io = scene?.interfaceOrientation {
-            islandOnRight = (io == .landscapeRight)
+            // Verified on-device (iPhone 15 Pro, yellow bg) AND on-sim (cutout visible
+            // inside a debug-colored stripe): the Dynamic Island sits on the physical
+            // RIGHT when interfaceOrientation == .landscapeLeft. (The naming is
+            // counter-intuitive; trust the empirical mapping, not the enum label.)
+            islandOnRight = (io == .landscapeLeft)
         }
         #endif
     }
