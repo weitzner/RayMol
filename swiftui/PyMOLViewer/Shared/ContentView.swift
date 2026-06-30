@@ -856,9 +856,16 @@ struct ContentView: View {
         // control content lays out identically in both orientations. (Full-screen
         // hides it; the nav bar is hidden in landscape so the panel starts at top.)
         let panelW = iosFullScreen ? 0 : geo.size.height
+        // The Dynamic-Island inset (≈59pt in landscape; 0 on notch-less devices).
+        // The window reports it symmetrically, so which physical side it's on comes
+        // from islandOnRight (interface orientation).
+        let notch = windowTrailingInset
         HStack(spacing: 0) {
             // Left: the molecular viewer (+ optional sequence strip), with the
-            // toolbar buttons floating over its top edge.
+            // toolbar buttons floating over its top edge. The 3D viewport bleeds
+            // full to the left screen edge — including UNDER the island when it's on
+            // the left — but the floating control pill is nudged inward by the island
+            // width so it isn't hidden behind the cutout.
             VStack(spacing: 0) {
                 if engine.sequenceVisible {
                     SequencePanel().frame(height: ipadSequenceHeight)
@@ -873,7 +880,8 @@ struct ContentView: View {
                     landscapeViewerControls(leading: false)  // Full-screen · Export
                 }
                 .padding(.top, 8)
-                .padding(.horizontal, 8)
+                .padding(.leading, 8 + (islandOnRight ? 0 : notch))
+                .padding(.trailing, 8)
             }
 
             if !iosFullScreen {
@@ -884,16 +892,23 @@ struct ContentView: View {
                         .environmentObject(themeManager)
                         .frame(width: panelW)
                 } else {
-                    // Panel background is flush to the screen's right edge; the tab
-                    // CONTENT is inset from the right only by the actual trailing
-                    // safe-area (the Dynamic Island), read reactively from geo so it
-                    // updates on a landscapeLeft<->Right flip. Island on the LEFT
-                    // (trailing ≈ 0) → flush; on the RIGHT → clears the island.
+                    // The panel sits flush against whatever its right neighbour is:
+                    // the true screen edge when the island is on the LEFT, or the
+                    // black notch-stripe when the island is on the RIGHT. No inset —
+                    // the stripe (below) is what keeps the island off the panel.
                     panelTabs
                         .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                        .padding(.trailing, islandOnRight ? windowTrailingInset : 0)
                         .frame(width: panelW, alignment: .leading)
                         .background(themeChromeBg)
+                }
+
+                // Island on the RIGHT: letterbox it away with a solid black stripe at
+                // the far-right edge so the cutout never overlaps the panel. The panel
+                // butts flush against this stripe; the viewer fills everything left.
+                if islandOnRight && notch > 0 {
+                    Color.black
+                        .frame(width: notch)
+                        .ignoresSafeArea(.container, edges: .all)
                 }
             }
         }
