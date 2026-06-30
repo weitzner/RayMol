@@ -83,6 +83,24 @@ static void metalApplyRepClip(CCGORenderer* I)
       cs->getNIndex() > 0) {
     CSetting* s1 = cs->Setting.get();
     CSetting* s2 = obj->Setting.get();
+    // Outer-contour outline: arm capture for this surface draw when enabled.
+    if (SettingGet_b(G, s1, s2, cSetting_surface_contour)) {
+      float width = SettingGet_f(G, s1, s2, cSetting_surface_contour_width);
+      int ci = SettingGet_color(G, s1, s2, cSetting_surface_contour_color);
+      if (ci < 0) ci = SettingGet_color(G, s1, s2, cSetting_surface_color);
+      float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f}; // default black, opaque
+      if (ci >= 0) {
+        const float* c = ColorGet(G, ci);
+        rgba[0] = c[0]; rgba[1] = c[1]; rgba[2] = c[2];
+      }
+      if (!SettingGet_b(G, s1, s2, cSetting_surface_contour_opaque)) {
+        float tr = SettingGet_f(G, s1, s2, cSetting_transparency);
+        rgba[3] = 1.0f - (tr < 0.0f ? 0.0f : (tr > 1.0f ? 1.0f : tr));
+      }
+      G->Renderer->setRepContour(true, rgba, width);
+    } else {
+      G->Renderer->setRepContour(false, nullptr, 0.0f);
+    }
     float fFrac = SettingGet_f(G, s1, s2, cSetting_surface_clip_front);
     float bFrac = SettingGet_f(G, s1, s2, cSetting_surface_clip_back);
     if (fFrac != 0.0f || bFrac != 0.0f) {
@@ -114,8 +132,12 @@ static void metalApplyRepClip(CCGORenderer* I)
       G->Renderer->setRepClip(front, back);
       return;
     }
+    // Surface, no per-rep clip: keep the contour state set above, slab disabled.
+    G->Renderer->setRepClip(-1.0f, 1e6f);
+    return;
   }
-  G->Renderer->setRepClip(-1.0f, 1e6f); // disabled: global slab only
+  G->Renderer->setRepContour(false, nullptr, 0.0f); // non-surface: no contour
+  G->Renderer->setRepClip(-1.0f, 1e6f);             // disabled: global slab only
 }
 
 static bool drawVBOViaMetal(CCGORenderer* I, VertexBufferGL* vbo,

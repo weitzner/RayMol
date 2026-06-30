@@ -204,6 +204,12 @@ public:
   // member persists, so callers must set it before every draw. Default: no-op.
   virtual void setRepClip(float front, float back) {}
 
+  // Arm the surface outer-contour outline for the NEXT surface draw: enabled=true
+  // stashes that draw to be outlined (coverage-boundary) after the scene; rgba is
+  // the line color (alpha folds in the opaque/transparency choice), widthPx the
+  // on-screen thickness. enabled=false disarms (for non-surface reps). Default no-op.
+  virtual void setRepContour(bool enabled, const float* rgba, float widthPx) {}
+
   // RGB of the 3D selection indicator squares (SceneRenderMetalSelections).
   // Driven by the active RayMol theme's selection color; defaults to pink.
   float selColor[3] = {1.0f, 0.2f, 0.6f};

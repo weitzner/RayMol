@@ -104,6 +104,9 @@ enum RepCatalog {
                 RepProperty(setting: "surface_clip_front", label: "Clip front", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2),
                 RepProperty(setting: "surface_clip_back", label: "Clip back", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2),
                 RepProperty(setting: "metal_interior_cap", label: "Solid interior", kind: .toggle),
+                RepProperty(setting: "surface_contour", label: "Contour", kind: .toggle),
+                RepProperty(setting: "surface_contour_width", label: "Contour width", kind: .slider, min: 0.5, max: 6, step: 0.5, decimals: 1),
+                RepProperty(setting: "surface_contour_opaque", label: "Contour opaque", kind: .toggle),
             ]),
         "sticks": RepSpec(rep: "sticks", display: "Sticks",
             colorSetting: "stick_color", defaultColor: -1, properties: [
