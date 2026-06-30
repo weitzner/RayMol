@@ -183,7 +183,7 @@ struct MovieBuilderControls: View {
     @ViewBuilder
     private func menuPicker<T: Hashable>(_ title: String, _ value: Binding<T>,
                                          _ opts: [(String, T)]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(title.uppercased())
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -192,7 +192,7 @@ struct MovieBuilderControls: View {
             }
             .pickerStyle(.menu)
             .tint(TimelineTheme.accent)
-            .padding(.horizontal, 10).padding(.vertical, 7)
+            .padding(.horizontal, 10).padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.13)))
         }
