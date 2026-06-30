@@ -708,6 +708,10 @@ struct ObjectPanel: View {
                     }
                 }
                 .padding(.vertical, 2)
+                // Report natural list height so the portrait panel can hug Objects
+                // (capped at 1/3). Harmless in landscape/iPad (no listener there).
+                .reportPaneHeight(1)
+                .padding(.bottom, 56)   // clearance when capped + scrolling (portrait)
             }
         }
         .background(PanelTheme.background)
@@ -2073,6 +2077,7 @@ struct ScenesPane: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
+            .reportPaneHeight(5)    // natural height (before tab-bar clearance)
             .padding(.bottom, 56)   // clear the floating tab-bar pill
         }
     }

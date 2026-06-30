@@ -415,6 +415,7 @@ struct MoviePane: View {
                 MovieBuilderControls(initialTab: Self.initialTabFromEnv)
             }
             .padding(16)
+            .reportPaneHeight(2)    // natural height (before tab-bar clearance)
             // Clear the floating tab-bar pill so the controls stay reachable.
             .padding(.bottom, 56)
         }

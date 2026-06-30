@@ -139,6 +139,29 @@ private struct LandscapeTabBar: View {
     }
 }
 
+// MARK: - Per-tab natural-height measurement (portrait "hug content" sizing)
+//
+// Each portrait pane reports the NATURAL height of its content (measured from
+// INSIDE its own scroll/stack, so it's the true content height — not the
+// constrained panel frame) keyed by its tab tag. The portrait layout reads the
+// active tab's reported height and sizes the bottom panel to hug it (capped).
+struct PaneHeightKey: PreferenceKey {
+    static let defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue()) { max($0, $1) }
+    }
+}
+
+extension View {
+    /// Report this view's measured height for `tag` up the preference chain
+    /// (used by the portrait panel to hug each tab's natural content height).
+    func reportPaneHeight(_ tag: Int) -> some View {
+        background(GeometryReader { g in
+            Color.clear.preference(key: PaneHeightKey.self, value: [tag: g.size.height])
+        })
+    }
+}
+
 private extension View {
     /// Tighten inter-section spacing on grouped lists (iOS 17+); no-op elsewhere.
     @ViewBuilder func compactListSections() -> some View {
@@ -573,6 +596,10 @@ struct ContentView: View {
     // (SCENE or an object card) is expanded the panel auto-grows to its max so
     // the options are visible; collapsing restores this remembered size.
     @State private var collapsedFrac: CGFloat = 0.53
+    // Portrait per-tab "hug content" sizing: natural content height per tab tag,
+    // reported via PaneHeightKey. The portrait panel sizes to the active tab's
+    // content (capped). (panelFrac/committedFrac above are now iPad-only.)
+    @State private var paneHeights: [Int: CGFloat] = [:]
     @State private var didConfigForCompact = false
     @AppStorage("ipadGestureCoachSeen") private var gestureCoachSeen = false
     @State private var showGestureLegend = false
@@ -888,10 +915,39 @@ struct ContentView: View {
     // single resizable/collapsible control panel (TabView of Console / Objects /
     // Sequence / Raymond) docks at the bottom. Selecting a tab and dragging the
     // divider behave exactly as before.
+    // Bottom-panel chrome that must fit ABOVE the reported pure content height:
+    // the floating tab bar's footprint + a little breathing room. Tuned on-device.
+    private let portraitPanelChrome: CGFloat = 84
+
+    /// Portrait bottom-panel height, per active tab (no drag — heights are policy
+    /// driven). Console is a fixed tall pane; Objects/Scenes/Movie HUG their content
+    /// up to a per-tab cap (then scroll); Settings is compact at its root and grows
+    /// to 3/4 when a detail editor (Display settings / Themes) is open.
+    private func portraitPanelHeight(total: CGFloat) -> CGFloat {
+        let floor: CGFloat = 150
+        // A detail editor open in Settings → 3/4 of the screen.
+        if showThemeStudio || (selectedTab == 4 && settingsSceneOpen) {
+            return total * 0.75
+        }
+        // Measured content + chrome, for the hug tabs.
+        func hug(_ tag: Int, cap: CGFloat, extra: CGFloat = 0) -> CGFloat {
+            let content = paneHeights[tag].map { $0 + extra + portraitPanelChrome }
+            return min(max(content ?? cap, floor), cap)
+        }
+        switch selectedTab {
+        case 0:  return total * 0.5                              // Console — fixed tall
+        case 1:  return hug(1, cap: total / 3, extra: 44)        // Objects — +toolbar; cap 1/3
+        case 5:  return hug(5, cap: total * 0.5)                 // Scenes
+        case 2:  return hug(2, cap: total * 0.5)                 // Movie
+        case 4:  return total * 0.42                             // Settings root — compact
+        default: return total * 0.45
+        }
+    }
+
     @ViewBuilder
     private func iPhoneLayout(geo: GeometryProxy) -> some View {
         let total = geo.size.height
-        let panelSize = min(max(total * panelFrac, 200), total * 0.92)
+        let panelSize = portraitPanelHeight(total: total)
         VStack(spacing: 0) {
             // The sequence strip (when enabled) docks in the top safe area via
             // .safeAreaInset(edge: .top) at the layout root — NOT here — so it sits
@@ -902,16 +958,20 @@ struct ContentView: View {
                 EmptyView()
             } else if showThemeStudio {
                 // Theme studio takes over the bottom region; viewport stays live above.
-                resizeDivider(landscape: false, total: geo.size.height)
                 ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
                     .environmentObject(engine)
                     .environmentObject(themeManager)
                     .frame(height: panelSize)
             } else {
-                resizeDivider(landscape: false, total: geo.size.height)
-                panelContent.frame(height: panelSize)
+                // Per-tab policy height (drag handle removed). The panes report their
+                // natural content height via PaneHeightKey; the height animates on tab
+                // switch / content change / Settings drill-in.
+                panelContent
+                    .frame(height: panelSize)
+                    .onPreferenceChange(PaneHeightKey.self) { paneHeights = $0 }
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: panelSize)
     }
 
     // MARK: iPhone landscape — portrait UX, panel docked on the RIGHT
