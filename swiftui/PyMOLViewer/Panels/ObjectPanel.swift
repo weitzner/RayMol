@@ -650,21 +650,13 @@ struct ObjectPanel: View {
 
     private var panelBody: some View {
         VStack(spacing: 0) {
-            // Panel-wide toolbar: the selection-pick mode and refresh act on the
-            // whole panel, so they live here rather than in any one section header.
+            // Panel-wide toolbar: the selection-pick mode acts on the whole panel,
+            // so it lives here rather than in any one section header. (The former
+            // "Inspector" label was dropped — the bottom tab already names the pane;
+            // SCENE moved fully into the Settings tab.)
             HStack(spacing: 8) {
-                Text("Inspector")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(PanelTheme.headerColor)
                 Spacer()
                 selectionModeMenu
-                Button(action: { refreshObjects() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                        .foregroundColor(PanelTheme.headerColor)
-                }
-                .buttonStyle(.plain)
-                .help("Refresh")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -676,9 +668,8 @@ struct ObjectPanel: View {
                     let objects = engine.objects.filter { !$0.isSelection }
                     let selections = engine.objects.filter { $0.isSelection }
 
-                    // SCENE — global display settings.
-                    sectionHeader("SCENE", id: "scene", tag: "global") { EmptyView() }
-                    if openSections.contains("scene") { SceneCard() }
+                    // SCENE (global display settings) now lives in the Settings tab
+                    // → "Scene settings"; it was removed from the Inspector here.
 
                     // OBJECTS — the loaded molecules + the global "all" row.
                     sectionHeader("OBJECTS", id: "objects",
@@ -717,6 +708,10 @@ struct ObjectPanel: View {
                     }
                 }
                 .padding(.vertical, 2)
+                // Report natural list height so the portrait panel can hug Objects
+                // (capped at 1/3). Harmless in landscape/iPad (no listener there).
+                .reportPaneHeight(1)
+                .padding(.bottom, 56)   // clearance when capped + scrolling (portrait)
             }
         }
         .background(PanelTheme.background)
@@ -1840,7 +1835,9 @@ private struct HelpButton: View {
     }
 }
 
-private struct SceneCard: View {
+// Non-private: also hosted in the Settings tab (ContentView.settingsPane) now
+// that SCENE lives fully under Settings rather than the Inspector.
+struct SceneCard: View {
     @EnvironmentObject var engine: PyMOLEngine
     @State private var showSettings = false
     // Per-sub-group expand state; the heavier groups start collapsed.
@@ -1849,8 +1846,8 @@ private struct SceneCard: View {
     // in ObjectPanel (shared with Objects / Selections).
     var body: some View {
         VStack(spacing: 3) {
-            SceneStrip()
-            Divider().background(PanelTheme.disabledColor.opacity(0.3))
+            // Scene management (the strip) now lives in the dedicated Scenes tab;
+            // this card holds the global DISPLAY settings only.
             ForEach(SceneCatalog.groups, id: \.self) { group in
                 sceneGroup(group)
             }
@@ -2004,67 +2001,184 @@ private struct SceneCard: View {
 
 // MARK: - Scenes strip (saved camera/representation snapshots)
 
-private struct SceneStrip: View {
+// The Scenes content tab — a full scene manager (PyMOL's Scene menu) in the
+// global/teal language. Scenes recall the whole visualization, so everything
+// here uses TimelineTheme.accent (teal), distinct from the per-object coral
+// A/S/H/L/C. Append wires to the movie; an opt-in toggle shows glanceable scene
+// buttons over the 3D viewport.
+struct ScenesPane: View {
     @EnvironmentObject var engine: PyMOLEngine
-    @State private var showBuilder = false
+    /// Drives the in-viewport scene-button overlay (owned by ContentView).
+    @Binding var showViewportButtons: Bool
+    /// Jump to the Movie tab (set by ContentView).
+    var onOpenMovie: (() -> Void)? = nil
+
+    private let danger = Color(red: 0.75, green: 0.29, blue: 0.23)
+
+    // Local order mirror so chips can be reordered by hold+drag; persisted to
+    // PyMOL via `scene_order`. Synced from engine.sceneNames on add/remove.
+    @State private var sceneOrder: [String] = []
+    @State private var draggingScene: String?
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                Text("Scenes")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(PanelTheme.textColor)
-                Spacer(minLength: 0)
-                actionIcon("plus") { engine.runCommand("scene new, store") }
-                    .accessibilityLabel("Store new scene")
-                actionIcon("arrow.clockwise") { engine.runCommand("scene auto, update") }
-                    .accessibilityLabel("Update current scene")
-                actionIcon("xmark") { engine.runCommand("scene auto, delete") }
-                    .accessibilityLabel("Delete current scene")
-                actionIcon("film") { showBuilder = true }
-                    .accessibilityLabel("Make scene-loop movie")
-            }
-            if engine.sceneNames.isEmpty {
-                Text("No scenes — tap + to store the current view.")
-                    .font(.system(size: 9))
-                    .foregroundColor(PanelTheme.disabledColor)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                // Scene chips with an inline "+" chip that stores the current
+                // view as a new scene (in line with the existing scenes).
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(engine.sceneNames, id: \.self) { name in
-                            let sel = name == engine.currentScene
-                            Button {
-                                engine.runCommand("scene \(name), recall, animate=1")
-                            } label: {
-                                Text(name)
-                                    .font(.system(size: 9, weight: sel ? .bold : .regular))
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(sel ? TimelineTheme.accent : PanelTheme.buttonBackground)
-                                    .foregroundColor(sel ? Color.black : PanelTheme.buttonText)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
+                    HStack(spacing: 8) {
+                        ForEach(sceneOrder, id: \.self) { name in
+                            sceneChip(name)
+                                .opacity(draggingScene == name ? 0.35 : 1)
+                                .onDrag {
+                                    draggingScene = name
+                                    return NSItemProvider(object: name as NSString)
+                                }
+                                .onDrop(of: ["public.text"],
+                                        delegate: SceneDropDelegate(item: name, order: $sceneOrder,
+                                                                    dragging: $draggingScene,
+                                                                    onReorder: applySceneOrder))
                         }
+                        addChip
+                    }
+                    .padding(.vertical, 4)
+                }
+                .onAppear { sceneOrder = engine.sceneNames }
+                .onChange(of: engine.sceneNames) { newNames in
+                    // Resync only when the SET changes (scene added/removed); a
+                    // pure reorder (same set) keeps the user's dragged order.
+                    if Set(newNames) != Set(sceneOrder) { sceneOrder = newNames }
+                }
+
+                if engine.sceneNames.isEmpty {
+                    Text("Tap + to store the current view as your first scene.")
+                        .font(.system(size: 12))
+                        .foregroundColor(PanelTheme.disabledColor)
+                } else {
+                    // Per-scene actions, all on one row for vertical efficiency.
+                    HStack(spacing: 8) {
+                        sceneActionButton("Update", "arrow.clockwise") { engine.runCommand("scene auto, update") }
+                        sceneActionButton("Prev", "chevron.left") { engine.runCommand("scene auto, previous") }
+                        sceneActionButton("Next", "chevron.right") { engine.runCommand("scene auto, next") }
+                        sceneActionButton("Delete", "trash", danger: true) { engine.runCommand("scene auto, delete") }
                     }
                 }
+
+                Toggle(isOn: $showViewportButtons) {
+                    Label("Show scene buttons in viewport", systemImage: "rectangle.grid.1x2")
+                        .font(.system(size: 14))
+                }
+                .tint(TimelineTheme.accent)
+                .padding(.top, 2)
+
+                Divider().padding(.vertical, 2)
+                actionRow("Build movie from scenes", "film") { onOpenMovie?() }
+                actionRow("Clear all scenes", "xmark", destructive: true) { engine.runCommand("scene *, clear") }
             }
-        }
-        .sheet(isPresented: $showBuilder) {
-            MovieBuilderSheet(initialTab: .scenes)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .reportPaneHeight(5)    // natural height (before tab-bar clearance)
+            .padding(.bottom, 56)   // clear the floating tab-bar pill
         }
     }
 
-    private func actionIcon(_ systemName: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(PanelTheme.buttonText)
-                .frame(width: 24, height: 22)
-                .background(PanelTheme.buttonBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+    private func sceneChip(_ name: String) -> some View {
+        let sel = name == engine.currentScene
+        return Button {
+            engine.runCommand("scene \(name), recall, animate=1")
+        } label: {
+            Text(name)
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 14).frame(height: 38)
+                .background(sel ? TimelineTheme.accent : Color.white)
+                .foregroundColor(sel ? .white : TimelineTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(TimelineTheme.accent.opacity(sel ? 0 : 0.5), lineWidth: 1.5)
+                )
         }
         .buttonStyle(.plain)
+    }
+
+    // Trailing "+" chip in the scene row — stores the current view as a new scene.
+    private var addChip: some View {
+        Button { engine.runCommand("scene new, store") } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .bold))
+                .frame(width: 44, height: 38)
+                .foregroundColor(TimelineTheme.accent)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(TimelineTheme.accent.opacity(0.5),
+                                      style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("New scene from current view")
+    }
+
+    // Persist the dragged chip order to PyMOL.
+    private func applySceneOrder() {
+        guard !sceneOrder.isEmpty else { return }
+        engine.runCommand("scene_order " + sceneOrder.joined(separator: " "))
+    }
+
+    // Compact icon+label button; several sit on one row (Update/Prev/Next/Delete).
+    private func sceneActionButton(_ title: String, _ icon: String,
+                                   danger: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: 15, weight: .medium))
+                Text(title).font(.system(size: 10, weight: .medium))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .foregroundColor(danger ? self.danger : TimelineTheme.accent)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.gray.opacity(0.13)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func actionRow(_ title: String, _ icon: String,
+                           destructive: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon).frame(width: 22)
+                    .foregroundColor(destructive ? danger : TimelineTheme.accent)
+                Text(title).font(.system(size: 15))
+                    .foregroundColor(destructive ? danger : PanelTheme.textColor)
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+// Reorders scene chips live as one is dragged over another (hold + move).
+private struct SceneDropDelegate: DropDelegate {
+    let item: String
+    @Binding var order: [String]
+    @Binding var dragging: String?
+    let onReorder: () -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = dragging, dragging != item,
+              let from = order.firstIndex(of: dragging),
+              let to = order.firstIndex(of: item) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            order.move(fromOffsets: IndexSet(integer: from),
+                       toOffset: to > from ? to + 1 : to)
+        }
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        onReorder()
+        return true
     }
 }
 

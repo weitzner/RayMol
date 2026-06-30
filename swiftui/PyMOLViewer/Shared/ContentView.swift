@@ -50,6 +50,130 @@ extension Notification.Name {
     static let mcpOpenConnectSheet = Notification.Name("raymol.mcp.openConnectSheet")
 }
 
+#if os(iOS)
+// Reports the key window's safe-area insets via UIKit's safeAreaInsetsDidChange,
+// which fires at the correct time on rotation (including a landscapeLeft<->Right
+// flip, where the size doesn't change but the Dynamic Island moves sides).
+private struct SafeAreaReader: UIViewRepresentable {
+    var onChange: (UIEdgeInsets) -> Void
+    func makeUIView(context: Context) -> Reader { Reader(onChange) }
+    func updateUIView(_ uiView: Reader, context: Context) { uiView.onChange = onChange; uiView.report() }
+    final class Reader: UIView {
+        var onChange: (UIEdgeInsets) -> Void
+        init(_ onChange: @escaping (UIEdgeInsets) -> Void) {
+            self.onChange = onChange
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); report() }
+        override func didMoveToWindow() { super.didMoveToWindow(); report() }
+        func report() { onChange(window?.safeAreaInsets ?? .zero) }
+    }
+}
+#endif
+
+// MARK: - iPhone-landscape custom panel bar
+//
+// In iPhone landscape we render the control panel WITHOUT a TabView, because a TabView is
+// the only thing that spawns the iOS-26 floating capsule tab bar, and that capsule anchors
+// to the WINDOW safe area — it cannot be inset by any SwiftUI frame/padding/safeAreaPadding
+// (verified on-device). A plain HStack of buttons is ordinary content: it obeys its parent
+// column's frame, so when the column is narrowed by the notch every tab (incl. Settings)
+// stays LEFT of the black notch-stripe. Portrait / iPad keep the real TabView (panelTabs).
+
+/// The 5 control tabs in display order, matching `panelTabs` EXACTLY (same tags / icons /
+/// labels). Tag 3 is intentionally absent (the "poison" tag handled by the panel-grow onChange).
+private struct PanelTabSpec: Identifiable {
+    let tag: Int
+    let title: String
+    let systemImage: String
+    var id: Int { tag }
+}
+
+private let landscapePanelTabSpecs: [PanelTabSpec] = [
+    .init(tag: 0, title: "Console",  systemImage: "terminal"),
+    .init(tag: 1, title: "Objects",  systemImage: "cube"),
+    .init(tag: 5, title: "Scenes",   systemImage: "rectangle.on.rectangle"),
+    .init(tag: 2, title: "Movie",    systemImage: "film"),
+    .init(tag: 4, title: "Settings", systemImage: "gearshape"),
+]
+
+/// Custom bottom tab bar for iPhone landscape. Writes the same `$selectedTab` the TabView
+/// would, so the tag-3 poison-grow onChange and every deep-link keep working; it never
+/// emits tag 3.
+private struct LandscapeTabBar: View {
+    @Binding var selection: Int
+    let tint: Color
+    let chrome: Color
+    let inactive: Color
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(landscapePanelTabSpecs) { spec in
+                let isSel = selection == spec.tag
+                Button {
+                    selection = spec.tag
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: spec.systemImage)
+                            .font(.system(size: 17, weight: isSel ? .semibold : .regular))
+                        Text(spec.title)
+                            .font(.system(size: 10, weight: isSel ? .semibold : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .foregroundStyle(isSel ? tint : inactive.opacity(0.55))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(spec.title)
+                .accessibilityAddTraits(isSel ? [.isSelected, .isButton] : [.isButton])
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .background(chrome.overlay(alignment: .top) { Divider().opacity(0.6) })
+    }
+}
+
+// MARK: - Per-tab natural-height measurement (portrait "hug content" sizing)
+//
+// Each portrait pane reports the NATURAL height of its content (measured from
+// INSIDE its own scroll/stack, so it's the true content height — not the
+// constrained panel frame) keyed by its tab tag. The portrait layout reads the
+// active tab's reported height and sizes the bottom panel to hug it (capped).
+struct PaneHeightKey: PreferenceKey {
+    static let defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue()) { max($0, $1) }
+    }
+}
+
+extension View {
+    /// Report this view's measured height for `tag` up the preference chain
+    /// (used by the portrait panel to hug each tab's natural content height).
+    func reportPaneHeight(_ tag: Int) -> some View {
+        background(GeometryReader { g in
+            Color.clear.preference(key: PaneHeightKey.self, value: [tag: g.size.height])
+        })
+    }
+}
+
+private extension View {
+    /// Tighten inter-section spacing on grouped lists (iOS 17+); no-op elsewhere.
+    @ViewBuilder func compactListSections() -> some View {
+        #if os(iOS)
+        if #available(iOS 17.0, *) { self.listSectionSpacing(.compact) }
+        else { self }
+        #else
+        self
+        #endif
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager
@@ -430,6 +554,8 @@ struct ContentView: View {
     // sheet so the screenshot harness can capture it (simctl can't tap).
     @State private var showBuilderSheet = false
     @State private var showExportSheet = false
+    // Explainer when "Export Movie" is tapped with no animation built yet.
+    @State private var showNoMovieAlert = false
     @State private var showSettingsSheet = false
     // The panel + viewport FRAME resize live while dragging the divider, but the
     // Metal DRAWABLE is frozen during the drag (engine.suppressDrawableResize) so
@@ -452,9 +578,16 @@ struct ContentView: View {
     // keeps the compact bottom-panel layout; everything else (iPad both
     // orientations, iPhone landscape) uses the mac-style layout.
     @Environment(\.verticalSizeClass) private var vSize
-    @State private var panelFrac: CGFloat = 0.28
-    @State private var committedFrac: CGFloat = 0.28
+    @State private var panelFrac: CGFloat = 0.53
+    @State private var committedFrac: CGFloat = 0.53
     @State private var panelCollapsed = false
+    // iPhone: full-screen viewport mode (hides the bottom panel + sequence strip).
+    // Replaces the old drag-to-collapse; driven by iosPanelToggle.
+    @State private var iosFullScreen = false
+    // Settings tab: in-panel drill into the display-settings card.
+    @State private var settingsSceneOpen = false
+    // Scenes tab: opt-in glanceable scene buttons overlaid on the viewport.
+    @State private var showSceneButtons = false
     // Panel fraction to restore after the Theme Studio closes (it temporarily
     // opens to ~60% of the screen so the viewport/studio split matches the spec).
     @State private var fracBeforeThemeStudio: CGFloat? = nil
@@ -462,7 +595,11 @@ struct ContentView: View {
     // Panel share to return to when no detail view is open. While a detail view
     // (SCENE or an object card) is expanded the panel auto-grows to its max so
     // the options are visible; collapsing restores this remembered size.
-    @State private var collapsedFrac: CGFloat = 0.28
+    @State private var collapsedFrac: CGFloat = 0.53
+    // Portrait per-tab "hug content" sizing: natural content height per tab tag,
+    // reported via PaneHeightKey. The portrait panel sizes to the active tab's
+    // content (capped). (panelFrac/committedFrac above are now iPad-only.)
+    @State private var paneHeights: [Int: CGFloat] = [:]
     @State private var didConfigForCompact = false
     @AppStorage("ipadGestureCoachSeen") private var gestureCoachSeen = false
     @State private var showGestureLegend = false
@@ -475,6 +612,30 @@ struct ContentView: View {
     // rotations (so a pane the user turned on stays on). iPad keeps the show* bools.
     @State private var landConsole = false
     @State private var landObjects = false
+    // The actual right-edge window safe-area inset (the Dynamic Island only when
+    // it's on the trailing side). Fed by SafeAreaReader via UIKit's
+    // safeAreaInsetsDidChange — reliable across a landscapeLeft<->Right flip,
+    // unlike geo.safeAreaInsets (which reports the island inset regardless of side).
+    @State private var windowTrailingInset: CGFloat = 0
+    // In landscape the window reports the island inset SYMMETRICALLY on both sides,
+    // so the insets can't tell us which side the island is physically on — the
+    // interface orientation does. Verified on-device (iPhone 15 Pro): when the
+    // island sits on the RIGHT the interface orientation is .landscapeRight.
+    @State private var islandOnRight = false
+
+    private func refreshIslandSide() {
+        #if os(iOS)
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        if let io = scene?.interfaceOrientation {
+            // Verified on-device (iPhone 15 Pro, yellow bg) AND on-sim (cutout visible
+            // inside a debug-colored stripe): the Dynamic Island sits on the physical
+            // RIGHT when interfaceOrientation == .landscapeLeft. (The naming is
+            // counter-intuitive; trust the empirical mapping, not the enum label.)
+            islandOnRight = (io == .landscapeLeft)
+        }
+        #endif
+    }
 
     // iPhone landscape == compact width + compact height (iPad is regular height in
     // both orientations; iPhone portrait is compact width + regular height).
@@ -502,6 +663,10 @@ struct ContentView: View {
                 Group {
                     if phonePortrait {
                         iPhoneLayout(geo: geo)
+                    } else if isPhoneLandscape {
+                        // iPhone landscape mirrors the portrait UX with the same
+                        // 5-tab control panel, docked on the RIGHT instead of bottom.
+                        iPhoneLandscapeLayout(geo: geo)
                     } else {
                         iPadMacStyleLayout(geo: geo)
                     }
@@ -519,15 +684,30 @@ struct ContentView: View {
             // — NOT the keyboard — so keyboard avoidance still pushes the console +
             // command field up above the on-screen keyboard.
             .ignoresSafeArea(.container, edges: (hSize == .regular && vSize == .regular) ? [] : .all)
+            #if os(iOS)
+            // Track the real per-side window safe-area inset (correct across a
+            // landscapeLeft<->Right flip) for the landscape panel's trailing inset.
+            .background {
+                SafeAreaReader { insets in
+                    if windowTrailingInset != insets.right { windowTrailingInset = insets.right }
+                }
+            }
+            #endif
             // Measurement bar docks in the top safe area (below the status bar /
             // Dynamic Island / nav bar) and insets the viewport while active —
             // NOT a full-bleed overlay, which would slide under the notch.
             .safeAreaInset(edge: .top, spacing: 0) {
+                // Measurement bar docks in the top safe area while active. (The
+                // sequence strip moved BELOW the viewport — see iPhoneLayout.)
                 if engine.measureMode != nil { measureOverlay }
             }
             .navigationTitle(hSize == .compact ? "" : "RayMol")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
+            // iPhone landscape hides the nav bar entirely (its toolbar items are
+            // re-floated over the viewer) so the right panel content starts at the
+            // very top with no nav-bar gap.
+            .toolbar(isPhoneLandscape ? .hidden : .visible, for: .navigationBar)
             // Auto-grow the panel when a detail view opens so its options are
             // visible (the panel's ScrollView covers any remaining overflow);
             // restore the user's size when everything collapses.
@@ -564,7 +744,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosThemeToolbar; iosResetMenu; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -636,7 +816,16 @@ struct ContentView: View {
                 }
             }
         }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            refreshIslandSide()   // interface orientation is valid immediately (no settle delay)
+        }
+        #endif
         .onAppear {
+            #if os(iOS)
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            refreshIslandSide()
+            #endif
             initializeEngine()
             maybePresentFirstBootTheme()
             // iPhone (compact): start full-screen with the panel collapsed and
@@ -658,6 +847,22 @@ struct ContentView: View {
                 if let p = ProcessInfo.processInfo.environment["PYMOL_AUTOPANEL"] {
                     panelCollapsed = (p != "open")
                     engine.sequenceVisible = (p == "open")
+                }
+                // Test affordance: preselect a bottom-panel tab for the screenshot
+                // harness (simctl can't tap). PYMOL_AUTOTAB=console|objects|movie|settings.
+                if let t = ProcessInfo.processInfo.environment["PYMOL_AUTOTAB"] {
+                    switch t {
+                    case "console":  selectedTab = 0
+                    case "objects":  selectedTab = 1
+                    case "movie":    selectedTab = 2
+                    case "settings": selectedTab = 4
+                    case "scenes":   selectedTab = 5
+                    default: break
+                    }
+                }
+                // Test affordance: force the in-viewport scene buttons on.
+                if ProcessInfo.processInfo.environment["PYMOL_AUTOSCENEBTN"] != nil {
+                    showSceneButtons = true
                 }
             }
             if let s = ProcessInfo.processInfo.environment["PYMOL_AUTOSHEET"] {
@@ -700,25 +905,181 @@ struct ContentView: View {
     // single resizable/collapsible control panel (TabView of Console / Objects /
     // Sequence / Raymond) docks at the bottom. Selecting a tab and dragging the
     // divider behave exactly as before.
+    // Bottom-panel chrome that must fit ABOVE the reported pure content height:
+    // the floating tab bar's footprint + a little breathing room. Tuned on-device.
+    private let portraitPanelChrome: CGFloat = 84
+
+    /// Portrait bottom-panel height, per active tab (no drag — heights are policy
+    /// driven). Console is a fixed tall pane; Objects/Scenes/Movie HUG their content
+    /// up to a per-tab cap (then scroll); Settings is compact at its root and grows
+    /// to 3/4 when a detail editor (Display settings / Themes) is open.
+    private func portraitPanelHeight(total: CGFloat) -> CGFloat {
+        let floor: CGFloat = 150
+        // A detail editor open in Settings → 3/4 of the screen.
+        if showThemeStudio || (selectedTab == 4 && settingsSceneOpen) {
+            return total * 0.75
+        }
+        // Measured content + chrome, for the hug tabs.
+        func hug(_ tag: Int, cap: CGFloat, extra: CGFloat = 0) -> CGFloat {
+            let content = paneHeights[tag].map { $0 + extra + portraitPanelChrome }
+            return min(max(content ?? cap, floor), cap)
+        }
+        switch selectedTab {
+        case 0:  return total * 0.5                              // Console — fixed tall
+        case 1:  return hug(1, cap: total / 3, extra: 44)        // Objects — +toolbar; cap 1/3
+        case 5:  return hug(5, cap: total * 0.5)                 // Scenes
+        case 2:  return hug(2, cap: total * 0.5)                 // Movie
+        case 4:  return total * 0.42                             // Settings root — compact
+        default: return total * 0.45
+        }
+    }
+
     @ViewBuilder
     private func iPhoneLayout(geo: GeometryProxy) -> some View {
         let total = geo.size.height
-        let panelSize = min(max(total * panelFrac, 200), total * 0.92)
+        let panelSize = portraitPanelHeight(total: total)
         VStack(spacing: 0) {
             viewportView
-            if showThemeStudio {
-                // Theme studio takes over the bottom region (force-shown even if
-                // the panel was collapsed); viewport stays live above.
-                resizeDivider(landscape: false, total: geo.size.height)
+            // Sequence strip: docked BELOW the viewport and ABOVE the bottom panel
+            // (desktop-style), toggled from Settings → "Show sequence". (The
+            // measurement bar still docks in the top safe area.)
+            if engine.sequenceVisible && !iosFullScreen {
+                Divider()
+                SequencePanel()
+                    .frame(height: ipadSequenceHeight)
+                    .background(themeChromeBg)
+            }
+            if iosFullScreen {
+                // Full-screen viewport: bottom panel + sequence hidden, 3D fills.
+                EmptyView()
+            } else if showThemeStudio {
+                // Theme studio takes over the bottom region; viewport stays live above.
                 ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
                     .environmentObject(engine)
                     .environmentObject(themeManager)
                     .frame(height: panelSize)
-            } else if !panelCollapsed {
-                resizeDivider(landscape: false, total: geo.size.height)
-                panelContent.frame(height: panelSize)
+            } else {
+                // Per-tab policy height (drag handle removed). The panes report their
+                // natural content height via PaneHeightKey; the height animates on tab
+                // switch / content change / Settings drill-in.
+                panelContent
+                    .frame(height: panelSize)
+                    .onPreferenceChange(PaneHeightKey.self) { paneHeights = $0 }
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: panelSize)
+    }
+
+    // MARK: iPhone landscape — portrait UX, panel docked on the RIGHT
+
+    // Same components as portrait (sequence strip + viewport + the 5-tab control
+    // panel), but laid out horizontally: viewport on the left, the panel on the
+    // right edge. Full-screen hides the panel; the divider resizes it.
+    @ViewBuilder
+    private func iPhoneLandscapeLayout(geo: GeometryProxy) -> some View {
+        // Right panel uses the SAME width as the portrait panel — i.e. the
+        // device's short edge, which in landscape is geo.size.height — so the
+        // control content lays out identically in both orientations. (Full-screen
+        // hides it; the nav bar is hidden in landscape so the panel starts at top.)
+        let panelW = iosFullScreen ? 0 : geo.size.height
+        // The Dynamic-Island inset (≈59pt in landscape; 0 on notch-less devices).
+        // The window reports it symmetrically, so which physical side it's on comes
+        // from islandOnRight (interface orientation).
+        let notch = windowTrailingInset
+        HStack(spacing: 0) {
+            // Left: the molecular viewer (+ optional sequence strip), with the
+            // toolbar buttons floating over its top edge. The 3D viewport bleeds
+            // full to the left screen edge — including UNDER the island when it's on
+            // the left — but the floating control pill is nudged inward by the island
+            // width so it isn't hidden behind the cutout.
+            VStack(spacing: 0) {
+                if engine.sequenceVisible {
+                    SequencePanel().frame(height: ipadSequenceHeight)
+                    Divider()
+                }
+                viewportView
+            }
+            .overlay(alignment: .top) {
+                HStack(alignment: .top, spacing: 0) {
+                    landscapeViewerControls(leading: true)   // Open · Measure
+                    Spacer(minLength: 0)
+                    landscapeViewerControls(leading: false)  // Full-screen · Export
+                }
+                .padding(.top, 8)
+                .padding(.leading, 8 + (islandOnRight ? 0 : notch))
+                .padding(.trailing, 8)
+            }
+
+            if !iosFullScreen {
+                Divider()
+                // The panel column is narrowed by the notch on the island-on-RIGHT side so
+                // it ends at the black stripe's left edge; flush to the true window edge when
+                // the island is on the left. .clipped() guarantees nothing paints past it.
+                if showThemeStudio {
+                    ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
+                        .environmentObject(engine)
+                        .environmentObject(themeManager)
+                        .frame(width: panelW - (islandOnRight ? notch : 0), alignment: .leading)
+                        .background(themeChromeBg)
+                        .clipped()
+                } else {
+                    // Custom pane + custom bottom bar — NO TabView, so the iOS-26 floating
+                    // capsule cannot exist; plain content obeys the narrowed column frame.
+                    landscapePanelBody
+                        .frame(width: panelW - (islandOnRight ? notch : 0), alignment: .leading)
+                        .background(themeChromeBg)
+                        .clipped()
+                }
+
+                // Island on the RIGHT: solid black letterbox over the cutout, filling the
+                // reserved notch width to the window edge (full height via ignoresSafeArea).
+                if islandOnRight && notch > 0 {
+                    Color.black
+                        .frame(width: notch)
+                        .ignoresSafeArea(.container, edges: .all)
+                }
+            }
+        }
+    }
+
+    // Floating toolbar pills over the viewer in landscape (the nav bar is hidden
+    // there). leading = Open · Measure (top-left); trailing = Full-screen · Export
+    // (top-right, at the viewer/panel boundary).
+    @ViewBuilder
+    private func landscapeViewerControls(leading: Bool) -> some View {
+        HStack(spacing: 2) {
+            if leading {
+                Button { showFileImporter = true } label: {
+                    Image(systemName: "folder").frame(width: 42, height: 34)
+                }
+                .accessibilityLabel("Open")
+                Button {
+                    engine.setMeasureMode(engine.measureMode == nil ? .distance : nil)
+                } label: {
+                    Image(systemName: engine.measureMode == nil ? "ruler" : "ruler.fill")
+                        .frame(width: 42, height: 34)
+                }
+                .accessibilityLabel("Measure")
+            } else {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { iosFullScreen.toggle() }
+                } label: {
+                    Image(systemName: iosFullScreen
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
+                        .frame(width: 42, height: 34)
+                }
+                .accessibilityLabel(iosFullScreen ? "Exit full screen" : "Full-screen viewport")
+                Menu { exportMenuContent } label: {
+                    Image(systemName: "square.and.arrow.up").frame(width: 42, height: 34)
+                }
+                .accessibilityLabel("Export")
+            }
+        }
+        .tint(TimelineTheme.accent)
+        .padding(.horizontal, 4)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
     }
 
     // MARK: iPad (regular size class) layout — mac-style stack
@@ -870,6 +1231,7 @@ struct ContentView: View {
             } label: {
                 Image(systemName: engine.measureMode == nil ? "ruler" : "ruler.fill")
             }
+            .tint(TimelineTheme.accent)
             .accessibilityLabel("Measure")
         }
     }
@@ -878,15 +1240,19 @@ struct ContentView: View {
         // iPhone (compact) only: collapse/expand the single bottom control panel.
         // The iPad mac-style layout uses iosPadPanelMenu (per-pane toggles) instead.
         ToolbarItem(placement: .primaryAction) {
-            // iPhone PORTRAIT only (the compact bottom-panel layout). iPhone
-            // landscape + iPad use the mac-style layout with iosPadPanelMenu.
+            // iPhone PORTRAIT uses the nav-bar full-screen toggle. iPhone landscape
+            // shows it (with Export) in the viewer's top-right overlay; iPad uses
+            // iosPadPanelMenu.
             if hSize == .compact && vSize == .regular {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { panelCollapsed.toggle() }
+                    withAnimation(.easeInOut(duration: 0.2)) { iosFullScreen.toggle() }
                 } label: {
-                    Image(systemName: panelCollapsed ? "square.split.1x2" : "square.split.1x2.fill")
+                    Image(systemName: iosFullScreen
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
                 }
-                .accessibilityLabel(panelCollapsed ? "Show controls" : "Hide controls")
+                .tint(TimelineTheme.accent)
+                .accessibilityLabel(iosFullScreen ? "Exit full screen" : "Full-screen viewport")
             }
         }
     }
@@ -897,10 +1263,9 @@ struct ContentView: View {
     // and show/hide the Objects + Raymond right column — the desktop arrangement.
     private var iosPadPanelMenu: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            // Shown whenever the mac-style layout is active: iPad (both orientations)
-            // and iPhone LANDSCAPE. Hidden only in iPhone portrait (which uses the
-            // compact bottom-panel layout + iosPanelToggle).
-            if !(hSize == .compact && vSize == .regular) {
+            // iPad only (mac-style layout). iPhone — both orientations — uses the
+            // 5-tab control panel + the full-screen toggle (iosPanelToggle).
+            if hSize == .regular {
                 Button {
                     showPanePopover.toggle()
                 } label: {
@@ -968,9 +1333,42 @@ struct ContentView: View {
         #endif
     }
 
+    // Floating scene chips over the viewport (teal/global), shown only when the
+    // Scenes tab's "Show scene buttons in viewport" toggle is on. Tap = recall.
+    private var sceneButtonsOverlay: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(engine.sceneNames, id: \.self) { name in
+                    let sel = name == engine.currentScene
+                    Button {
+                        engine.runCommand("scene \(name), recall, animate=1")
+                    } label: {
+                        Text(name)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 9).frame(height: 28)
+                            .background(sel ? TimelineTheme.accent : Color.white.opacity(0.92))
+                            .foregroundColor(sel ? .white : TimelineTheme.accent)
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11))
+        .frame(maxWidth: 230)
+    }
+
     private var viewportView: some View {
         MetalViewport()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Attached here (not the giant body chain) to keep that expression
+            // under the Swift type-checker's complexity limit.
+            .alert("No movie to export", isPresented: $showNoMovieAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("There’s no animation yet. Open the Movie tab, pick a motion (e.g. Camera → Roll) and tap Build & Play — then Export Movie will render it.")
+            }
             .overlay { if engine.objects.isEmpty && !showThemeStudio && !hasRestoreSnapshot { emptyStateView } }
             // Cold-launch restore: cover the viewport with the last-scene snapshot
             // until the reloaded session has rendered (see restoreAutosaveIfAvailable).
@@ -991,6 +1389,16 @@ struct ContentView: View {
             // full-width bar on iPad.
             .overlay(alignment: .bottom) {
                 if engine.hasTimeline { transportOverlay }
+            }
+            // Opt-in glanceable scene buttons (Scenes tab → "Show scene buttons
+            // in viewport"). Sits above the transport when a timeline is present.
+            .overlay(alignment: .bottomLeading) {
+                if showSceneButtons && !engine.sceneNames.isEmpty {
+                    sceneButtonsOverlay
+                        .padding(.leading, 12)
+                        // Sit clear ABOVE the transport bar (don't overlap it).
+                        .padding(.bottom, engine.hasTimeline ? 96 : 12)
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 Button { showGestureLegend = true } label: {
@@ -1039,16 +1447,152 @@ struct ContentView: View {
 
     // Shared control content: Console / Objects / Sequence as exclusive tabs
     // (Sequence is its own tab now — not a strip and not a toolbar/Export item).
-    private var panelContent: some View {
+    // The 5-tab control panel (no background — callers pick the chrome).
+    private var panelTabs: some View {
         TabView(selection: $selectedTab) {
             CommandPanel(showInput: !RayMolBuild.iosRestricted)
                 .tabItem { Label("Console", systemImage: "terminal") }.tag(0)
             ObjectPanel()
                 .tabItem { Label("Objects", systemImage: "cube") }.tag(1)
-            SequencePanel()
-                .tabItem { Label("Sequence", systemImage: "textformat.abc") }.tag(2)
+            ScenesPane(showViewportButtons: $showSceneButtons,
+                       onOpenMovie: { selectedTab = 2 })
+                .tabItem { Label("Scenes", systemImage: "rectangle.on.rectangle") }.tag(5)
+            MoviePane()
+                .tabItem { Label("Movie", systemImage: "film") }.tag(2)
+            settingsPane
+                .tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
         }
-        .background(themeChromeBg)
+    }
+
+    // Portrait / opaque docked panel.
+    private var panelContent: some View {
+        panelTabs.background(themeChromeBg)
+    }
+
+    // iPhone-landscape ONLY panel body: the selected pane rendered WITHOUT a TabView (so the
+    // iOS-26 floating capsule can't exist), plus the custom LandscapeTabBar. Mirrors
+    // panelTabs' tag→view mapping 1:1. Being plain content, it obeys the narrowed column
+    // frame, keeping every tab — including Settings — left of the notch-stripe.
+    @ViewBuilder
+    private var landscapePanelBody: some View {
+        VStack(spacing: 0) {
+            Group {
+                switch selectedTab {
+                case 1:  ObjectPanel()
+                case 5:  ScenesPane(showViewportButtons: $showSceneButtons,
+                                    onOpenMovie: { selectedTab = 2 })
+                case 2:  MoviePane()
+                case 4:  settingsPane
+                default: CommandPanel(showInput: !RayMolBuild.iosRestricted)   // tag 0 (and any stray)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            LandscapeTabBar(
+                selection: $selectedTab,
+                tint: themeManager.active.tabTint.color,
+                chrome: themeManager.active.panelBackground.color,
+                inactive: themeManager.active.panelText.color
+            )
+        }
+    }
+
+    // Settings content tab (iPhone). Relocates the former top-bar Theme + Reset
+    // controls here, adds the Show-sequence toggle (drives the strip above the
+    // viewport), and links to scene/render settings — all in-panel, consistent
+    // with the other tabs (no top-level modal).
+    @ViewBuilder
+    private var settingsPane: some View {
+        if settingsSceneOpen {
+            // In-panel drill into the SCENE card (moved here fully from the
+            // Inspector). A back row returns to the Settings root — no modal.
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { settingsSceneOpen = false }
+                    } label: {
+                        Label("Settings", systemImage: "chevron.left")
+                            .font(.system(size: 15, weight: .medium))
+                    }
+                    Spacer()
+                    Text("Display settings").font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                Divider()
+                ScrollView {
+                    SceneCard().padding(.bottom, 56)
+                }
+            }
+        } else {
+            List {
+                // Single ungrouped section — no per-item headers for one-row items.
+                Section {
+                    Toggle(isOn: $engine.sequenceVisible) {
+                        Label("Show sequence", systemImage: "textformat.abc")
+                    }
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { settingsSceneOpen = true }
+                    } label: {
+                        settingsRow("Display settings", "slider.horizontal.3")
+                    }
+                    Button {
+                        if !showThemeStudio { panelCollapsed = false }
+                        withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = true }
+                    } label: {
+                        settingsRow("Themes", "paintpalette")
+                    }
+                }
+                // Reset actions — all on one row.
+                Section {
+                    HStack(spacing: 8) {
+                        settingsResetButton("Reset view", "arrow.counterclockwise") {
+                            engine.runCommand("reset")
+                        }
+                        settingsResetButton("Effects", "circle.lefthalf.filled") {
+                            engine.resetEffects()
+                        }
+                        settingsResetButton("Clear", "trash", danger: true) {
+                            showClearSessionConfirm = true
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .compactListSections()
+            .environment(\.defaultMinListRowHeight, 38)
+            // Clear the floating tab-bar pill so the Reset row stays reachable.
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 56) }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsRow(_ title: String, _ icon: String) -> some View {
+        HStack {
+            Label(title, systemImage: icon)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // Compact icon+label button; three sit on one row in the Reset section.
+    private func settingsResetButton(_ title: String, _ icon: String,
+                                     danger: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: 15))
+                Text(title).font(.system(size: 11)).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .foregroundStyle(danger ? Color.red : TimelineTheme.accent)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.gray.opacity(0.13)))
+        }
+        .buttonStyle(.plain)
     }
 
     // Draggable splitter between viewport and panel. Drag toward the viewport
@@ -1176,6 +1720,7 @@ struct ContentView: View {
             } label: {
                 Label("Open", systemImage: "folder")
             }
+            .tint(TimelineTheme.accent)   // global controls read teal
         }
     }
 
@@ -1267,66 +1812,71 @@ struct ContentView: View {
     // hands off to the system share sheet (Save to Files / Mail / AirDrop / …).
     private var iosExportToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu {
-                Menu {
-                    Button("Current View Size") { iosShareImage(scale: 1) }
-                    Button("2× View") { iosShareImage(scale: 2) }
-                    // 4K is memory-heavy (esp. ray-traced); skip it on iPhone
-                    // where the smaller RAM budget makes the export likely to
-                    // be jettisoned. iPad keeps the full-resolution option.
-                    if hSize != .compact {
-                        Button("4K · 3840 × 2160") { iosShareImage(size: CGSize(width: 3840, height: 2160)) }
-                    }
-                } label: {
-                    Label("Share Image", systemImage: "photo")
+            // iPhone landscape shows Export in the viewer's top-right overlay
+            // (landscapeViewerControls) instead of the nav bar.
+            if !isPhoneLandscape {
+                Menu { exportMenuContent } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
-                Button {
-                    iosCopyImage()
-                } label: {
-                    Label("Copy Image", systemImage: "doc.on.clipboard")
-                }
-                // Render options in a submenu whose toggles DON'T dismiss the
-                // menu (flip both before exporting). dismiss-disabled is iOS-only.
-                #if os(iOS)
-                if #available(iOS 16.4, *) {
-                    Menu {
-                        renderOptionToggles
-                    } label: {
-                        Label("Render Options", systemImage: "slider.horizontal.3")
-                    }
-                    .menuActionDismissBehavior(.disabled)
-                } else {
-                    renderOptionToggles
-                }
-                #else
-                renderOptionToggles
-                #endif
-                Divider()
-                // Same format set as the macOS export menu (parity).
-                Menu {
-                    Button("PDB (.pdb)") { iosShareStructure(ext: "pdb") }
-                    Button("mmCIF (.cif)") { iosShareStructure(ext: "cif") }
-                    Button("SDF (.sdf)") { iosShareStructure(ext: "sdf") }
-                    Button("MOL (.mol)") { iosShareStructure(ext: "mol") }
-                    Button("MOL2 (.mol2)") { iosShareStructure(ext: "mol2") }
-                    Button("XYZ (.xyz)") { iosShareStructure(ext: "xyz") }
-                    Button("PQR (.pqr)") { iosShareStructure(ext: "pqr") }
-                    Divider()
-                    // 3D models that work on this NO_OPENGL / libxml-off build
-                    // (CPU-ray export path). glTF/COLLADA/STL are unavailable.
-                    Button("VRML (.wrl)") { iosShareStructure(ext: "wrl") }
-                    Button("POV-Ray (.pov)") { iosShareStructure(ext: "pov") }
-                } label: {
-                    Label("Share Structure", systemImage: "atom")
-                }
-                Button {
-                    iosShareSession()
-                } label: {
-                    Label("Share Session (.pse)", systemImage: "doc.text")
-                }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
+                .tint(TimelineTheme.accent)
             }
+        }
+    }
+
+    // The Export menu's items — reused by the nav-bar toolbar (portrait / iPad)
+    // and the iPhone-landscape viewer overlay.
+    @ViewBuilder private var exportMenuContent: some View {
+        Menu {
+            Button("Current View Size") { iosShareImage(scale: 1) }
+            Button("2× View") { iosShareImage(scale: 2) }
+            // 4K is memory-heavy (esp. ray-traced); skip it on iPhone where the
+            // smaller RAM budget makes the export likely to be jettisoned.
+            if hSize != .compact {
+                Button("4K · 3840 × 2160") { iosShareImage(size: CGSize(width: 3840, height: 2160)) }
+            }
+        } label: {
+            Label("Share Image", systemImage: "photo")
+        }
+        Button { iosCopyImage() } label: {
+            Label("Copy Image", systemImage: "doc.on.clipboard")
+        }
+        // Export the authored movie; stays tappable even with no movie so it can
+        // explain what's missing rather than silently doing nothing.
+        Button {
+            if engine.playback.frameCount <= 1 { showNoMovieAlert = true }
+            else { showExportSheet = true }
+        } label: {
+            Label("Export Movie…", systemImage: "film")
+        }
+        #if os(iOS)
+        if #available(iOS 16.4, *) {
+            Menu { renderOptionToggles } label: {
+                Label("Render Options", systemImage: "slider.horizontal.3")
+            }
+            .menuActionDismissBehavior(.disabled)
+        } else {
+            renderOptionToggles
+        }
+        #else
+        renderOptionToggles
+        #endif
+        Divider()
+        Menu {
+            Button("PDB (.pdb)") { iosShareStructure(ext: "pdb") }
+            Button("mmCIF (.cif)") { iosShareStructure(ext: "cif") }
+            Button("SDF (.sdf)") { iosShareStructure(ext: "sdf") }
+            Button("MOL (.mol)") { iosShareStructure(ext: "mol") }
+            Button("MOL2 (.mol2)") { iosShareStructure(ext: "mol2") }
+            Button("XYZ (.xyz)") { iosShareStructure(ext: "xyz") }
+            Button("PQR (.pqr)") { iosShareStructure(ext: "pqr") }
+            Divider()
+            Button("VRML (.wrl)") { iosShareStructure(ext: "wrl") }
+            Button("POV-Ray (.pov)") { iosShareStructure(ext: "pov") }
+        } label: {
+            Label("Share Structure", systemImage: "atom")
+        }
+        Button { iosShareSession() } label: {
+            Label("Share Session (.pse)", systemImage: "doc.text")
         }
     }
 
