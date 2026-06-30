@@ -790,11 +790,11 @@ struct ContentView: View {
     // right edge. Full-screen hides the panel; the divider resizes it.
     @ViewBuilder
     private func iPhoneLandscapeLayout(geo: GeometryProxy) -> some View {
-        // Viewer takes the left ~62%; the control panel is a solid column on the
-        // right (full-screen hides it and the viewer takes the whole width). The
-        // nav bar is hidden in landscape (see body), so all the chrome floats over
-        // the viewer and the panel content starts at the very top — no gap.
-        let panelW = iosFullScreen ? 0 : geo.size.width * 0.38
+        // Right panel uses the SAME width as the portrait panel — i.e. the
+        // device's short edge, which in landscape is geo.size.height — so the
+        // control content lays out identically in both orientations. (Full-screen
+        // hides it; the nav bar is hidden in landscape so the panel starts at top.)
+        let panelW = iosFullScreen ? 0 : geo.size.height
         HStack(spacing: 0) {
             // Left: the molecular viewer (+ optional sequence strip), with the
             // toolbar buttons floating over its top edge.
