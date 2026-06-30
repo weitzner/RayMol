@@ -3412,21 +3412,36 @@ vertex VBOVertexOutUnlit vbo_vertex_unlit_flat(
 // color/depth write, stencil = INVERT). Each face toggles stencil bit 0, so odd
 // parity == the near (slab) plane is inside the solid the surface encloses.
 struct CapMarkIn { float3 position [[attribute(0)]]; };
-vertex float4 cap_mark_vertex(CapMarkIn in [[stage_in]],
+struct CapMarkOut { float4 position [[position]]; float eyeDist; };
+vertex CapMarkOut cap_mark_vertex(CapMarkIn in [[stage_in]],
     constant VBOUniforms& u [[buffer(1)]]) {
-  float4 p = u.projection * (u.modelview * float4(in.position, 1.0));
+  CapMarkOut o;
+  float4 eye = u.modelview * float4(in.position, 1.0);
+  float4 p = u.projection * eye;
   p.z = 0.5 * (p.z + p.w);   // GL [-1,1] -> Metal [0,1] (match the VBO)
-  return p;
+  o.position = p;
+  o.eyeDist = -eye.z;        // per-rep clip parity (matches vbo_vertex)
+  return o;
 }
-fragment float4 cap_mark_fragment() { return float4(0.0); }  // color discarded
-// FILL: a full-screen triangle at the near-plane sentinel depth; a stencil EQUAL
-// test keeps only the interior pixels, filled with a flat interior color (and the
-// pass clears the stencil bit so multiple capped surfaces don't interfere).
+// Discard the per-rep-clipped-away faces so the stencil parity marks the cut at
+// the per-rep FRONT plane (not just the global near plane). The bound ClipU has
+// back left open so only the viewer-facing cut is capped; when per-rep clip is
+// off (enabled=0) this is a no-op and the global-slab/impostor cap is unchanged.
+fragment float4 cap_mark_fragment(CapMarkOut in [[stage_in]],
+    constant ClipU& clip [[buffer(1)]]) {
+  apply_rep_clip(clip, in.eyeDist);
+  return float4(0.0);  // color masked off (writeMask none)
+}
+// FILL: a full-screen triangle at the cut-plane depth (capDepth; the global near
+// sentinel 1e-5 when per-rep clip is off); a stencil EQUAL test keeps only the
+// interior pixels, filled with a flat interior color (and the pass clears the
+// stencil bit so multiple capped surfaces don't interfere).
 struct CapFillOut { float4 position [[position]]; };
-vertex CapFillOut cap_fill_vertex(uint vid [[vertex_id]]) {
+vertex CapFillOut cap_fill_vertex(uint vid [[vertex_id]],
+    constant float& capDepth [[buffer(0)]]) {
   float2 p = float2(float((vid << 1) & 2), float(vid & 2));   // (0,0)(2,0)(0,2)
   CapFillOut o;
-  o.position = float4(p * 2.0 - 1.0, 1e-5, 1.0);  // cover screen at sentinel depth
+  o.position = float4(p * 2.0 - 1.0, capDepth, 1.0);  // cover screen at cut depth
   return o;
 }
 fragment float4 cap_fill_fragment(constant float4& interiorColor [[buffer(0)]]) {
@@ -4009,6 +4024,24 @@ id<MTLRenderPipelineState> RendererMetal::cachedVBOPipeline(
 #pragma mark - VBO Drawing
 // ---------------------------------------------------------------------------
 
+// Window-space depth ([0,1], matching the VBO's 0.5*(z+w) convention) of the
+// per-rep front cut plane, for placing the interior cap-fill at the cut instead
+// of the global near plane. Returns the near sentinel (1e-5) when per-rep clip
+// is off (repClipFront < 0), preserving the original global-slab/impostor cap.
+// P is the column-major projection matrix; clip.z/clip.w of eye point (0,0,ez)
+// use P[10],P[14] and P[11],P[15].
+static float repCapDepth(const float* P, float repClipFront)
+{
+  if (repClipFront < 0.0f)
+    return 1e-5f;
+  float ez = -repClipFront; // eye-space z of the front cut plane (negative)
+  float cz = P[10] * ez + P[14];
+  float cw = P[11] * ez + P[15];
+  if (std::fabs(cw) < 1e-6f)
+    return 1e-5f;
+  return 0.5f * (cz / cw + 1.0f); // GL NDC [-1,1] -> window [0,1]
+}
+
 void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
     const void* data, size_t dataSize, size_t stride,
     int posOffset, int normalOffset, int colorOffset, int colorType,
@@ -4239,11 +4272,18 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   { struct { float a, d, r, s, sh, w; } _lt = { _lightAmbient, _lightDirect,
       _lightReflect, _lightSpecular, _lightShininess, _sssWrap };
     [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
+      // MARK pass: per-rep clip (front-only) so stencil parity marks the cut at
+      // the per-rep front plane; no-op (enabled=0) when per-rep clip is off.
+      { struct { float front, back, enabled, pad; } _capcl = { _repClipFront, 1e6f,
+          _repClipFront >= 0.0f ? 1.0f : 0.0f, 0.0f };
+        [_encoder setFragmentBytes:&_capcl length:sizeof(_capcl) atIndex:1]; }
       [_encoder drawPrimitives:toMTL(mode)
                    vertexStart:0
                    vertexCount:static_cast<NSUInteger>(vertexCount)];
       [_encoder setRenderPipelineState:_capFillPipeline];
       [_encoder setDepthStencilState:_capFillDSS];
+      { float capDepth = repCapDepth(_projectionMatrix.data(), _repClipFront);
+        [_encoder setVertexBytes:&capDepth length:sizeof(capDepth) atIndex:0]; }
       const float interior[4] = {
           _capColorOverride ? _capColor[0] : 0.32f,
           _capColorOverride ? _capColor[1] : 0.32f,
@@ -4448,6 +4488,11 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
       [_encoder setCullMode:MTLCullModeNone];
       [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
       [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
+      // MARK pass: per-rep clip (front-only) so stencil parity marks the cut at
+      // the per-rep front plane; no-op (enabled=0) when per-rep clip is off.
+      { struct { float front, back, enabled, pad; } _capcl = { _repClipFront, 1e6f,
+          _repClipFront >= 0.0f ? 1.0f : 0.0f, 0.0f };
+        [_encoder setFragmentBytes:&_capcl length:sizeof(_capcl) atIndex:1]; }
       [_encoder drawIndexedPrimitives:toMTL(mode)
                            indexCount:static_cast<NSUInteger>(indexCount)
                             indexType:MTLIndexTypeUInt32
@@ -4455,6 +4500,8 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
                     indexBufferOffset:0];
       [_encoder setRenderPipelineState:_capFillPipeline];
       [_encoder setDepthStencilState:_capFillDSS];
+      { float capDepth = repCapDepth(_projectionMatrix.data(), _repClipFront);
+        [_encoder setVertexBytes:&capDepth length:sizeof(capDepth) atIndex:0]; }
       const float interior[4] = {
           _capColorOverride ? _capColor[0] : 0.32f,
           _capColorOverride ? _capColor[1] : 0.32f,
