@@ -53,15 +53,15 @@ struct MovieBuilderControls: View {
     @State private var sceneLoop = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 11) {
             Picker("", selection: $tab) {
                 ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
 
-            // Fixed-height content area so Build & Play sits at the SAME spot
-            // for every tab (Camera / States / Scenes). Pinned to the Camera
-            // tab's natural height; the other tabs are sized to fit within it.
+            // Fixed-height content area so Build & Play sits at the SAME spot for
+            // every tab. Kept tight (single dropdown row + toggle + caption) so the
+            // whole builder — including Build & Play — fits the short landscape panel.
             Group {
                 switch tab {
                 case .camera: cameraTab
@@ -69,7 +69,7 @@ struct MovieBuilderControls: View {
                 case .scenes: scenesTab
                 }
             }
-            .frame(height: 156, alignment: .top)
+            .frame(height: 116, alignment: .top)
 
             Divider()
             commonActions
@@ -89,16 +89,13 @@ struct MovieBuilderControls: View {
     // MARK: Tabs
 
     private var cameraTab: some View {
-        // 2×2 grid: Motion · Axis / Duration · Angle — roomy enough that values
-        // don't wrap, and still fits the pinned content height.
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
+        // All four controls on one row (compact dropdowns) so the builder stays
+        // short enough that Build & Play fits the landscape panel.
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .top, spacing: 8) {
                 menuPicker("Motion", $motion, CameraMotion.allCases.map { ($0.rawValue, $0) })
                 menuPicker("Axis", $axis, [("X", "x"), ("Y", "y"), ("Z", "z")])
-            }
-            HStack(alignment: .top, spacing: 12) {
                 menuPicker("Duration", $duration, [("4 s", 4), ("8 s", 8), ("16 s", 16), ("32 s", 32)])
-                // Angle always shown (rock/nutate use it; roll ignores it).
                 menuPicker("Angle", $angle, [("30°", 30), ("60°", 60), ("90°", 90), ("120°", 120)])
             }
             Toggle("Seamless loop", isOn: $cameraLoop).tint(TimelineTheme.accent)
@@ -106,34 +103,32 @@ struct MovieBuilderControls: View {
     }
 
     private var statesTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .top, spacing: 8) {
                 menuPicker("Mode", $stateMode, StateMode.allCases.map { ($0.rawValue, $0) })
                 menuPicker("Speed", $speedFactor, [("1×", 1), ("½×", 2), ("⅓×", 3), ("¼×", 4), ("⅛×", 8), ("1⁄16×", 16)])
                 menuPicker("Pause", $statePause, [("0 s", 0), ("1 s", 1), ("2 s", 2), ("4 s", 4)])
             }
             Toggle("Seamless loop", isOn: $stateLoop).tint(TimelineTheme.accent)
-            // Single caption (no extra top note) so the height matches Camera.
-            Text(engine.playback.frameCount <= 1 && stateMaxStates <= 1
-                 ? "Needs a multi-state object (NMR / trajectory)."
-                 : (stateMode == .loop ? "Steps through all states once per cycle."
-                                       : "Sweeps forward and back through all states."))
-                .font(.caption).foregroundStyle(.secondary)
+            if engine.playback.frameCount <= 1 && stateMaxStates <= 1 {
+                Text("Needs a multi-state object (NMR / trajectory).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
     private var scenesTab: some View {
         // Same 3-row shape as Camera/States (dropdown · toggle · caption) so the
         // height matches. Uses all saved scenes; manage them in the Scenes tab.
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .top, spacing: 8) {
                 menuPicker("Seconds / scene", $sceneSeconds, [("2 s", 2), ("4 s", 4), ("8 s", 8), ("12 s", 12)])
             }
             Toggle("Loop", isOn: $sceneLoop).tint(TimelineTheme.accent)
-            Text(engine.sceneNames.isEmpty
-                 ? "No scenes saved — store scenes in the Scenes tab first."
-                 : "Strings all \(engine.sceneNames.count) saved scenes into a movie.")
-                .font(.caption).foregroundStyle(.secondary)
+            if engine.sceneNames.isEmpty {
+                Text("No scenes saved — store scenes in the Scenes tab first.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -191,8 +186,10 @@ struct MovieBuilderControls: View {
                 ForEach(opts, id: \.1) { Text($0.0).tag($0.1) }
             }
             .pickerStyle(.menu)
+            .font(.system(size: 13, weight: .medium))   // compact so 4 fit one row
             .tint(TimelineTheme.accent)
-            .padding(.horizontal, 10).padding(.vertical, 4)
+            .lineLimit(1)
+            .padding(.horizontal, 7).padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.13)))
         }
