@@ -496,21 +496,6 @@ struct ContentView: View {
     // rotations (so a pane the user turned on stays on). iPad keeps the show* bools.
     @State private var landConsole = false
     @State private var landObjects = false
-    // Trailing safe-area inset (the Dynamic Island side in landscape). Read from
-    // the key window + refreshed on rotation, because a landscapeLeft<->Right flip
-    // keeps the same size (no SwiftUI relayout) but moves the island side. Used so
-    // the right panel only reserves island space when the island is on the right.
-    @State private var trailingSafeInset: CGFloat = 0
-
-    private func refreshTrailingSafeInset() {
-        #if os(iOS)
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
-        let window = scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first
-        let inset = window?.safeAreaInsets.right ?? 0
-        if trailingSafeInset != inset { trailingSafeInset = inset }
-        #endif
-    }
 
     // iPhone landscape == compact width + compact height (iPad is regular height in
     // both orientations; iPhone portrait is compact width + regular height).
@@ -692,17 +677,7 @@ struct ContentView: View {
                 }
             }
         }
-        #if os(iOS)
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            // landscapeLeft<->Right keeps the same size; refresh the island inset.
-            DispatchQueue.main.async { refreshTrailingSafeInset() }
-        }
-        #endif
         .onAppear {
-            #if os(iOS)
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            refreshTrailingSafeInset()
-            #endif
             initializeEngine()
             maybePresentFirstBootTheme()
             // iPhone (compact): start full-screen with the panel collapsed and
@@ -850,12 +825,12 @@ struct ContentView: View {
                 } else {
                     // Panel background is flush to the screen's right edge; the tab
                     // CONTENT is inset from the right only by the actual trailing
-                    // safe-area (the Dynamic Island). So when the island is on the
-                    // LEFT (trailingSafeInset ≈ 0) the panel is flush; on the RIGHT
-                    // it reserves just enough space to clear the island.
+                    // safe-area (the Dynamic Island), read reactively from geo so it
+                    // updates on a landscapeLeft<->Right flip. Island on the LEFT
+                    // (trailing ≈ 0) → flush; on the RIGHT → clears the island.
                     panelTabs
                         .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                        .padding(.trailing, trailingSafeInset)
+                        .padding(.trailing, geo.safeAreaInsets.trailing)
                         .frame(width: panelW, alignment: .leading)
                         .background(themeChromeBg)
                 }
