@@ -525,6 +525,20 @@ struct ContentView: View {
     // unlike geo.safeAreaInsets (which reports the island inset regardless of side).
     @State private var windowTrailingInset: CGFloat = 0
     @State private var windowLeadingInset: CGFloat = 0   // debug
+    // In landscape the window reports the island inset SYMMETRICALLY on both sides,
+    // so the insets can't tell us which side the island is physically on — the
+    // interface orientation does. landscapeLeft => island on the RIGHT.
+    @State private var islandOnRight = false
+
+    private func refreshIslandSide() {
+        #if os(iOS)
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        if let io = scene?.interfaceOrientation {
+            islandOnRight = (io == .landscapeLeft)
+        }
+        #endif
+    }
 
     // iPhone landscape == compact width + compact height (iPad is regular height in
     // both orientations; iPhone portrait is compact width + regular height).
@@ -716,7 +730,16 @@ struct ContentView: View {
                 }
             }
         }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            refreshIslandSide()   // interface orientation is valid immediately (no settle delay)
+        }
+        #endif
         .onAppear {
+            #if os(iOS)
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            refreshIslandSide()
+            #endif
             initializeEngine()
             maybePresentFirstBootTheme()
             // iPhone (compact): start full-screen with the panel collapsed and
@@ -855,7 +878,7 @@ struct ContentView: View {
             }
             // TEMP diagnostic — exact inset values so we can see why the panel insets.
             .overlay(alignment: .bottomLeading) {
-                Text(verbatim: "geoL \(Int(geo.safeAreaInsets.leading))  geoT \(Int(geo.safeAreaInsets.trailing))  winL \(Int(windowLeadingInset))  winR \(Int(windowTrailingInset))  panelW \(Int(panelW))")
+                Text(verbatim: "islandR \(islandOnRight ? 1 : 0)  applied \(Int(islandOnRight ? windowTrailingInset : 0))  winL \(Int(windowLeadingInset))  winR \(Int(windowTrailingInset))")
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .padding(6)
                     .background(.black.opacity(0.7))
@@ -878,7 +901,7 @@ struct ContentView: View {
                     // (trailing ≈ 0) → flush; on the RIGHT → clears the island.
                     panelTabs
                         .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                        .padding(.trailing, windowTrailingInset)
+                        .padding(.trailing, islandOnRight ? windowTrailingInset : 0)
                         .frame(width: panelW, alignment: .leading)
                         .background(themeChromeBg)
                 }
