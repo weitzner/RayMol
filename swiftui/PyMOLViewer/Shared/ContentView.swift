@@ -786,17 +786,12 @@ struct ContentView: View {
     // right edge. Full-screen hides the panel; the divider resizes it.
     @ViewBuilder
     private func iPhoneLandscapeLayout(geo: GeometryProxy) -> some View {
-        let panelW = min(max(geo.size.width * 0.38, 300), 420)
-        let topInset: CGFloat = 46                                  // clear the toolbar pills
-        let botInset: CGFloat = engine.hasTimeline ? 64 : 8         // clear the transport
-        // Explicit height (TabView won't reliably fill a maxHeight frame), so the
-        // panel spans full height between the insets and the tab bar sits at the
-        // bottom — not stranded mid-screen.
-        let panelH = max(geo.size.height - topInset - botInset, 120)
-        ZStack(alignment: .topTrailing) {
-            // Full-bleed viewport (+ optional sequence strip): the 3D view spans
-            // the WHOLE width; the control panel is a frosted-glass overlay on the
-            // right so the structure shows through behind it.
+        // Viewer takes the left 2/3; the control panel is a solid column on the
+        // right 1/3 (full-screen hides it and the viewer takes the whole width).
+        let panelW = iosFullScreen ? 0 : geo.size.width / 3
+        HStack(spacing: 0) {
+            // Left 2/3: the molecular viewer (+ optional sequence strip). The
+            // expand/share buttons float in ITS top-right corner.
             VStack(spacing: 0) {
                 if engine.sequenceVisible {
                     SequencePanel().frame(height: ipadSequenceHeight)
@@ -804,27 +799,50 @@ struct ContentView: View {
                 }
                 viewportView
             }
+            .overlay(alignment: .topTrailing) {
+                landscapeViewerControls
+                    .padding(.top, 6)
+                    .padding(.trailing, 8)
+            }
 
             if !iosFullScreen {
+                Divider()
                 Group {
                     if showThemeStudio {
                         ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
                             .environmentObject(engine)
                             .environmentObject(themeManager)
                     } else {
-                        panelTabs
+                        panelContent
                     }
                 }
-                .frame(width: panelW, height: panelH, alignment: .top)
-                .background(.ultraThinMaterial)                     // frosted glass
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18))
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 0.5)
-                }
-                .shadow(color: .black.opacity(0.18), radius: 12, x: -2, y: 1)
-                .padding(.top, topInset)        // flush to the right edge (no trailing pad)
+                .frame(width: panelW)
             }
         }
+    }
+
+    // Expand (full-screen) + Export, floated in the viewer's top-right corner in
+    // landscape (so they sit over the viewer, not the right panel).
+    private var landscapeViewerControls: some View {
+        HStack(spacing: 2) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { iosFullScreen.toggle() }
+            } label: {
+                Image(systemName: iosFullScreen
+                      ? "arrow.down.right.and.arrow.up.left"
+                      : "arrow.up.left.and.arrow.down.right")
+                    .frame(width: 42, height: 34)
+            }
+            .accessibilityLabel(iosFullScreen ? "Exit full screen" : "Full-screen viewport")
+            Menu { exportMenuContent } label: {
+                Image(systemName: "square.and.arrow.up").frame(width: 42, height: 34)
+            }
+            .accessibilityLabel("Export")
+        }
+        .tint(TimelineTheme.accent)
+        .padding(.horizontal, 4)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
     }
 
     // MARK: iPad (regular size class) layout — mac-style stack
@@ -985,9 +1003,10 @@ struct ContentView: View {
         // iPhone (compact) only: collapse/expand the single bottom control panel.
         // The iPad mac-style layout uses iosPadPanelMenu (per-pane toggles) instead.
         ToolbarItem(placement: .primaryAction) {
-            // iPhone (both orientations) — the tab-panel layout uses a full-screen
-            // toggle. iPad uses the mac-style layout with iosPadPanelMenu.
-            if hSize == .compact {
+            // iPhone PORTRAIT uses the nav-bar full-screen toggle. iPhone landscape
+            // shows it (with Export) in the viewer's top-right overlay; iPad uses
+            // iosPadPanelMenu.
+            if hSize == .compact && vSize == .regular {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { iosFullScreen.toggle() }
                 } label: {
@@ -1528,76 +1547,71 @@ struct ContentView: View {
     // hands off to the system share sheet (Save to Files / Mail / AirDrop / …).
     private var iosExportToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu {
-                Menu {
-                    Button("Current View Size") { iosShareImage(scale: 1) }
-                    Button("2× View") { iosShareImage(scale: 2) }
-                    // 4K is memory-heavy (esp. ray-traced); skip it on iPhone
-                    // where the smaller RAM budget makes the export likely to
-                    // be jettisoned. iPad keeps the full-resolution option.
-                    if hSize != .compact {
-                        Button("4K · 3840 × 2160") { iosShareImage(size: CGSize(width: 3840, height: 2160)) }
-                    }
-                } label: {
-                    Label("Share Image", systemImage: "photo")
+            // iPhone landscape shows Export in the viewer's top-right overlay
+            // (landscapeViewerControls) instead of the nav bar.
+            if !isPhoneLandscape {
+                Menu { exportMenuContent } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
-                Button {
-                    iosCopyImage()
-                } label: {
-                    Label("Copy Image", systemImage: "doc.on.clipboard")
-                }
-                // Export the authored movie (Movie tab). Stays tappable even with
-                // no movie so it can explain what's missing rather than silently
-                // doing nothing.
-                Button {
-                    if engine.playback.frameCount <= 1 { showNoMovieAlert = true }
-                    else { showExportSheet = true }
-                } label: {
-                    Label("Export Movie…", systemImage: "film")
-                }
-                // Render options in a submenu whose toggles DON'T dismiss the
-                // menu (flip both before exporting). dismiss-disabled is iOS-only.
-                #if os(iOS)
-                if #available(iOS 16.4, *) {
-                    Menu {
-                        renderOptionToggles
-                    } label: {
-                        Label("Render Options", systemImage: "slider.horizontal.3")
-                    }
-                    .menuActionDismissBehavior(.disabled)
-                } else {
-                    renderOptionToggles
-                }
-                #else
-                renderOptionToggles
-                #endif
-                Divider()
-                // Same format set as the macOS export menu (parity).
-                Menu {
-                    Button("PDB (.pdb)") { iosShareStructure(ext: "pdb") }
-                    Button("mmCIF (.cif)") { iosShareStructure(ext: "cif") }
-                    Button("SDF (.sdf)") { iosShareStructure(ext: "sdf") }
-                    Button("MOL (.mol)") { iosShareStructure(ext: "mol") }
-                    Button("MOL2 (.mol2)") { iosShareStructure(ext: "mol2") }
-                    Button("XYZ (.xyz)") { iosShareStructure(ext: "xyz") }
-                    Button("PQR (.pqr)") { iosShareStructure(ext: "pqr") }
-                    Divider()
-                    // 3D models that work on this NO_OPENGL / libxml-off build
-                    // (CPU-ray export path). glTF/COLLADA/STL are unavailable.
-                    Button("VRML (.wrl)") { iosShareStructure(ext: "wrl") }
-                    Button("POV-Ray (.pov)") { iosShareStructure(ext: "pov") }
-                } label: {
-                    Label("Share Structure", systemImage: "atom")
-                }
-                Button {
-                    iosShareSession()
-                } label: {
-                    Label("Share Session (.pse)", systemImage: "doc.text")
-                }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
+                .tint(TimelineTheme.accent)
             }
-            .tint(TimelineTheme.accent)
+        }
+    }
+
+    // The Export menu's items — reused by the nav-bar toolbar (portrait / iPad)
+    // and the iPhone-landscape viewer overlay.
+    @ViewBuilder private var exportMenuContent: some View {
+        Menu {
+            Button("Current View Size") { iosShareImage(scale: 1) }
+            Button("2× View") { iosShareImage(scale: 2) }
+            // 4K is memory-heavy (esp. ray-traced); skip it on iPhone where the
+            // smaller RAM budget makes the export likely to be jettisoned.
+            if hSize != .compact {
+                Button("4K · 3840 × 2160") { iosShareImage(size: CGSize(width: 3840, height: 2160)) }
+            }
+        } label: {
+            Label("Share Image", systemImage: "photo")
+        }
+        Button { iosCopyImage() } label: {
+            Label("Copy Image", systemImage: "doc.on.clipboard")
+        }
+        // Export the authored movie; stays tappable even with no movie so it can
+        // explain what's missing rather than silently doing nothing.
+        Button {
+            if engine.playback.frameCount <= 1 { showNoMovieAlert = true }
+            else { showExportSheet = true }
+        } label: {
+            Label("Export Movie…", systemImage: "film")
+        }
+        #if os(iOS)
+        if #available(iOS 16.4, *) {
+            Menu { renderOptionToggles } label: {
+                Label("Render Options", systemImage: "slider.horizontal.3")
+            }
+            .menuActionDismissBehavior(.disabled)
+        } else {
+            renderOptionToggles
+        }
+        #else
+        renderOptionToggles
+        #endif
+        Divider()
+        Menu {
+            Button("PDB (.pdb)") { iosShareStructure(ext: "pdb") }
+            Button("mmCIF (.cif)") { iosShareStructure(ext: "cif") }
+            Button("SDF (.sdf)") { iosShareStructure(ext: "sdf") }
+            Button("MOL (.mol)") { iosShareStructure(ext: "mol") }
+            Button("MOL2 (.mol2)") { iosShareStructure(ext: "mol2") }
+            Button("XYZ (.xyz)") { iosShareStructure(ext: "xyz") }
+            Button("PQR (.pqr)") { iosShareStructure(ext: "pqr") }
+            Divider()
+            Button("VRML (.wrl)") { iosShareStructure(ext: "wrl") }
+            Button("POV-Ray (.pov)") { iosShareStructure(ext: "pov") }
+        } label: {
+            Label("Share Structure", systemImage: "atom")
+        }
+        Button { iosShareSession() } label: {
+            Label("Share Session (.pse)", systemImage: "doc.text")
         }
     }
 
