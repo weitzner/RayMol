@@ -953,6 +953,45 @@ static float post_linear_depth(float d, float projA, float projB) {
   return -ez;                         // distance from camera (positive)
 }
 
+// Eye-space position from a window depth at a given screen uv (the inverse of the
+// perspective projection; matches the reconstruction used by the shadow/AO passes).
+static float3 post_eye_pos(float2 uv, float d, float projA, float projB,
+                           float projX, float projY) {
+  float ez = -projB / ((2.0 * d - 1.0) + projA); // eye z (negative)
+  float ndcx = 2.0 * uv.x - 1.0;
+  float ndcy = 1.0 - 2.0 * uv.y;
+  return float3(ndcx * (-ez) / projX, ndcy * (-ez) / projY, ez);
+}
+
+// Robust eye-space surface normal from the depth buffer. Plain
+// cross(dfdx(p), dfdy(p)) uses the 2x2 quad derivative, which at a silhouette
+// straddles the depth discontinuity to the background/behind geometry: the
+// derivative blows up and the normal points sideways/garbage in a 1-2px band along
+// EVERY silhouette. In the screen-space shadow that corrupts the light-facing
+// faceGate, flipping it between ~0 and ~1 pixel-to-pixel along the aliased edge, so
+// the shadow term switches on/off and reads as a serrated lighter border on helices
+// and sticks. Instead, reconstruct the 4 axis-neighbours and, per axis, difference
+// against the neighbour on the CONTINUOUS side (smaller window-depth step) so the
+// stencil never crosses the silhouette. In the smooth interior this equals the old
+// derivative; only the edge band changes.
+static float3 post_eye_normal(depth2d<float> depthTex, sampler s, float2 uv,
+                              float2 invres, float cd, float3 cp, float projA,
+                              float projB, float projX, float projY) {
+  float2 ux = float2(invres.x, 0.0);
+  float2 uy = float2(0.0, invres.y);
+  float dl = depthTex.sample(s, uv - ux), dr = depthTex.sample(s, uv + ux);
+  float dd = depthTex.sample(s, uv - uy), du = depthTex.sample(s, uv + uy);
+  float3 gx = (abs(dl - cd) < abs(dr - cd))
+                  ? (cp - post_eye_pos(uv - ux, dl, projA, projB, projX, projY))
+                  : (post_eye_pos(uv + ux, dr, projA, projB, projX, projY) - cp);
+  float3 gy = (abs(dd - cd) < abs(du - cd))
+                  ? (cp - post_eye_pos(uv - uy, dd, projA, projB, projX, projY))
+                  : (post_eye_pos(uv + uy, du, projA, projB, projX, projY) - cp);
+  float3 n = normalize(cross(gx, gy));
+  if (n.z < 0.0) n = -n; // face toward camera
+  return n;
+}
+
 fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
     texture2d<float> colorTex [[texture(0)]],
     depth2d<float> depthTex [[texture(1)]],
@@ -1027,13 +1066,14 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   //   (2) SEPARATION gate — the occluder must be meaningfully closer to the
   //       light than the receiver (a real gap), not the same/adjacent surface.
   if (u.shadowEnabled > 0.5 && d < 0.99999 && !flatCap) {
-    float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);  // eye z (negative)
-    float ndcx = 2.0 * in.uv.x - 1.0;
-    float ndcy = 1.0 - 2.0 * in.uv.y;
-    float3 p = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-    // Eye-space surface normal from depth-reconstructed position derivatives.
-    float3 nrm = normalize(cross(dfdx(p), dfdy(p)));
-    if (nrm.z < 0.0) nrm = -nrm;                         // face toward camera
+    float3 p = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+    // Eye-space surface normal, reconstructed robustly from the depth buffer so the
+    // stencil never crosses a silhouette (see post_eye_normal). The old
+    // cross(dfdx(p),dfdy(p)) produced garbage normals in a 1-2px band at every
+    // silhouette, giving a noisy faceGate that read as a serrated lighter border.
+    float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
+    float3 nrm = post_eye_normal(depthTex, s, in.uv, invres, d, p,
+                                 u.projA, u.projB, u.projX, u.projY);
     float3 Ldir = normalize(float3(0.4, 0.4, 1.0));      // key light (eye space)
     float faceGate = smoothstep(0.0, 0.35, dot(nrm, Ldir));
     float4 lc = u.lightViewProj * float4(p, 1.0);        // eye -> light clip
@@ -1586,13 +1626,14 @@ fragment float4 rt_ao(PostVOut in [[stage_in]],
   float d = depthTex.sample(s, in.uv);
   if (d >= 0.99999 || d <= 0.0015) return float4(1.0, 1.0, 1.0, 1.0);  // no occlusion
 
-  // Eye-space position + normal (matches post_ssao_fog reconstruction).
-  float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);
-  float ndcx = 2.0 * in.uv.x - 1.0;
-  float ndcy = 1.0 - 2.0 * in.uv.y;
-  float3 pEye = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-  float3 nEye = normalize(cross(dfdx(pEye), dfdy(pEye)));
-  if (nEye.z < 0.0) nEye = -nEye;
+  // Eye-space position + robust normal (matches post_ssao_fog reconstruction).
+  // post_eye_normal avoids the cross-silhouette derivative blow-up that plain
+  // cross(dfdx,dfdy) produces, which otherwise mis-orients the AO hemisphere /
+  // ray-origin bias in a 1-2px band along every silhouette.
+  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+  float2 invres = 1.0 / float2(depthTex.get_width(), depthTex.get_height());
+  float3 nEye = post_eye_normal(depthTex, s, in.uv, invres, d, pEye,
+                                u.projA, u.projB, u.projX, u.projY);
 
   float3 pModel = (u.invModelview * float4(pEye, 1.0)).xyz;
   float3 nModel = normalize((u.invModelview * float4(nEye, 0.0)).xyz);
@@ -1665,13 +1706,13 @@ fragment float4 rt_composite(PostVOut in [[stage_in]],
   if (d >= 0.99999) return float4(col, 1.0);  // background: leave as-is
   if (d <= 0.0015) return float4(col, 1.0);   // interior-cap cross-section: flat
 
-  // Eye-space position (matches post_ssao_fog reconstruction).
-  float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);
-  float ndcx = 2.0 * in.uv.x - 1.0;
-  float ndcy = 1.0 - 2.0 * in.uv.y;
-  float3 pEye = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-  float3 nEye = normalize(cross(dfdx(pEye), dfdy(pEye)));
-  if (nEye.z < 0.0) nEye = -nEye;
+  // Eye-space position + robust normal (matches post_ssao_fog reconstruction).
+  // post_eye_normal avoids the cross-silhouette derivative blow-up that plain
+  // cross(dfdx,dfdy) produces (serrated lighter shadow border on edges).
+  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+  float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
+  float3 nEye = post_eye_normal(depthTex, s, in.uv, invres, d, pEye,
+                                u.projA, u.projB, u.projX, u.projY);
 
   // Depth-aware 5x5 blur of the AO term: weight neighbours by eye-space depth
   // closeness so AO doesn't bleed across object silhouettes.
@@ -1684,7 +1725,7 @@ fragment float4 rt_composite(PostVOut in [[stage_in]],
       float dn = depthTex.sample(s, uv);
       if (dn >= 0.99999) continue;
       float ezn = -u.projB / ((2.0 * dn - 1.0) + u.projA);
-      float w = exp(-abs(ezn - ez) / ztol);
+      float w = exp(-abs(ezn - pEye.z) / ztol);
       float2 rg = aoTex.sample(s, uv).rg;
       aoSum += rg.r * w;
       visSum += rg.g * w;
@@ -1733,7 +1774,7 @@ fragment float4 rt_composite(PostVOut in [[stage_in]],
 
   // Depth-cue fog toward bg (eye distance), matching the SSAO pass.
   if (u.bgFog.w > 0.5) {
-    float dist = -ez;
+    float dist = -pEye.z; // eye distance (pEye.z is the eye-space z, negative)
     float f = clamp((dist - u.fogStart) / max(u.fogEnd - u.fogStart, 1e-3), 0.0, 1.0);
     col = mix(col, u.bgFog.rgb, f);
   }
