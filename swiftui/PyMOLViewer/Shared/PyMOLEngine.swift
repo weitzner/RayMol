@@ -168,6 +168,16 @@ final class PyMOLEngine: ObservableObject {
     // bar. Flips only when a multi-state object appears/disappears, so it does
     // NOT cause per-frame re-renders of views that observe `engine`.
     @Published var hasTimeline: Bool = false
+    // Timeline authoring ("movie studio") mode. UI-level state, mirroring the
+    // pattern of sequenceVisible/measureMode: entering it docks the multi-track
+    // TimelinePanel + always-visible transport so a movie can be authored from a
+    // cold start (before any frames exist). Toggled from the toolbar / menu.
+    @Published var timelineMode: Bool = false
+    // Camera keyframe frames the user has captured this session (1-based, sorted),
+    // used to draw the Timeline's camera track. Manual keyframing only — template
+    // builders (buildMovie) author their own mview keyframes and clear this list.
+    // Session-scoped: not reconstructed from a reloaded .pse (a Phase-2 concern).
+    @Published var cameraKeyframes: [Int] = []
     // While the user drags the scrubber, the poll must NOT overwrite
     // currentFrame (classic two-way-binding fight). Set on drag start, cleared
     // shortly after release so the next poll can re-sync.
@@ -936,6 +946,10 @@ final class PyMOLEngine: ObservableObject {
         guard isReady else { return }
         // No document is open after a clear — the next ⌘S becomes a Save As.
         currentSessionURL = nil
+        // reinitialize wipes the core movie (mset/mview); drop the camera track's
+        // keyframes so the Timeline doesn't show diamonds for frames that no
+        // longer exist.
+        cameraKeyframes.removeAll()
         runCommand("reinitialize")
         // reinitialize also resets engine settings to defaults — restore the
         // fetch_path that initialize() set (the writable temp dir) so a post-clear
@@ -1085,6 +1099,22 @@ final class PyMOLEngine: ObservableObject {
     // Reset the whole movie timeline (clear mset/mview) and rewind.
     func clearMovie() {
         runPython("from pymol import appkit_movie as _am\n_am.reset_movie()")
+        cameraKeyframes.removeAll()
+    }
+
+    // Create a blank movie canvas of `seconds` (at the current fps) so camera
+    // keyframes have a timeline to sit on. mset defines the frame count; every
+    // frame shows state 1 (a camera-only movie). Rewinds and clears any manual
+    // keyframes from a previous composition.
+    func newTimeline(seconds: Double) {
+        let frames = max(2, Int((seconds * max(playback.movieFPS, 1)).rounded()))
+        runPython("from pymol import appkit_movie as _am\n_am.new_timeline(\(frames))")
+        cameraKeyframes.removeAll()
+        // Reflect the new canvas immediately — the ~10/s playback poll would
+        // otherwise lag a beat, leaving the ruler/scrubber (and a following
+        // captureKeyframe, which reads currentFrame) on the old length.
+        playback.frameCount = frames
+        playback.currentFrame = 1
     }
 
     // Author a movie via the high-level builders (appkit_movie.make_movie).
@@ -1100,11 +1130,53 @@ final class PyMOLEngine: ObservableObject {
             args += ", scenes=[\(list)]"
         }
         runPython("from pymol import appkit_movie as _am\n_am.make_movie(\(args))")
+        // The template owns the whole timeline (its own mview keyframes); drop any
+        // manual camera keyframes so the camera track doesn't show stale diamonds.
+        cameraKeyframes.removeAll()
     }
 
     // Store a camera keyframe at the current frame + interpolate (mview).
-    func captureKeyframe() {
-        runPython("from pymol import appkit_movie as _am\n_am.capture_keyframe()")
+    // `linear` picks linear interpolation between keyframes instead of the default
+    // eased (smooth) motion. Tracks the frame in cameraKeyframes for the timeline.
+    func captureKeyframe(linear: Bool = false) {
+        runPython("from pymol import appkit_movie as _am\n_am.capture_keyframe(linear=\(linear ? 1 : 0))")
+        let f = playback.currentFrame
+        if !cameraKeyframes.contains(f) {
+            cameraKeyframes.append(f)
+            cameraKeyframes.sort()
+        }
+    }
+
+    // Remove the camera keyframe stored at `frame` and re-interpolate the rest.
+    func deleteKeyframe(at frame: Int, linear: Bool = false) {
+        runPython("from pymol import appkit_movie as _am\n"
+            + "_am.clear_keyframe(\(frame), linear=\(linear ? 1 : 0))")
+        cameraKeyframes.removeAll { $0 == frame }
+    }
+
+    // Recall a saved scene (camera + reps + visibility). Injection-safe (base64).
+    func recallScene(_ name: String) {
+        guard !name.isEmpty else { return }
+        let b64 = Data(name.utf8).base64EncodedString()
+        runPython("import base64 as _b64\nfrom pymol import cmd as _c\n"
+            + "_c.scene(_b64.b64decode('\(b64)').decode('utf-8'), 'recall')")
+    }
+
+    // Move the playhead to `frame` and commit (for tapping a keyframe/ruler in
+    // the timeline). Wraps the scrub + release pair used by the transport.
+    func seek(to frame: Int) {
+        scrub(to: frame)
+        endScrub()
+    }
+
+    // Re-ease the stored camera keyframes when the timeline's Smooth/Linear
+    // control changes. Uses 'reinterpolate' (redoes every segment) — plain
+    // 'interpolate' only fills un-interpolated gaps, so it wouldn't change the
+    // easing of keyframes already interpolated. power/linear = 1.0 gives
+    // constant-speed straight motion; 0.0 gives eased, curved motion.
+    func setInterpolation(linear: Bool) {
+        let v = linear ? "1.0" : "0.0"
+        movieCmd("mview('reinterpolate', power=\(v), linear=\(v))")
     }
 
     // MARK: - Selection builder support

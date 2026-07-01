@@ -28,12 +28,48 @@ def reset_movie():
         print('MOVIE_ERR:' + str(e))
 
 
-def capture_keyframe():
-    """Store a camera keyframe at the current frame and interpolate between
-    stored keyframes (manual mview authoring)."""
+def new_timeline(frames):
+    """Create a blank camera movie canvas of `frames` frames (mset), so manually
+    stored camera keyframes have a timeline to interpolate across. Every frame
+    shows state 1. Rewinds to the start."""
     try:
+        n = max(2, int(frames))
+        cmd.mview('reset')
+        cmd.mset('1 x%d' % n)
+        cmd.rewind()
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
+def _ease(linear):
+    """(power, linear) mview args for the Smooth/Linear choice. linear=1 →
+    constant-speed straight motion; linear=0 → eased, curved motion (the
+    smooth default)."""
+    v = 1.0 if int(linear) else 0.0
+    return v, v
+
+
+def capture_keyframe(linear=0):
+    """Store a camera keyframe at the current frame and (re)interpolate all
+    stored keyframes with the chosen easing. 'reinterpolate' redoes every
+    segment so the easing is applied consistently — plain 'interpolate' only
+    fills gaps and would ignore a later Smooth/Linear change."""
+    try:
+        power, lin = _ease(linear)
         cmd.mview('store')
-        cmd.mview('interpolate')
+        cmd.mview('reinterpolate', power=power, linear=lin)
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
+def clear_keyframe(frame, linear=0):
+    """Remove the stored camera keyframe at `frame` and re-interpolate the
+    remaining keyframes with the chosen easing."""
+    try:
+        f = int(frame)
+        power, lin = _ease(linear)
+        cmd.mview('clear', first=f, last=f)
+        cmd.mview('reinterpolate', power=power, linear=lin)
     except Exception as e:
         print('MOVIE_ERR:' + str(e))
 

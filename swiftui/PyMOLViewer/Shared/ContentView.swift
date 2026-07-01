@@ -47,6 +47,7 @@ extension Notification.Name {
     static let raymolSaveSession  = Notification.Name("raymol.menu.saveSession")
     static let raymolSaveSessionAs = Notification.Name("raymol.menu.saveSessionAs")
     static let raymolExportImage  = Notification.Name("raymol.menu.exportImage")
+    static let raymolToggleTimeline = Notification.Name("raymol.menu.toggleTimeline")
     static let mcpOpenConnectSheet = Notification.Name("raymol.mcp.openConnectSheet")
 }
 
@@ -237,7 +238,10 @@ struct ContentView: View {
                         // right column is collapsed (where MousePanel used to live).
                         // Minimizable to a small mouse button to free up the view.
                         .overlay(alignment: .bottomTrailing) { mouseLegendCard }
-                    if engine.hasTimeline {
+                    if engine.timelineMode {
+                        Divider()
+                        TimelinePanel()
+                    } else if engine.hasTimeline {
                         Divider()
                         TransportBar()
                     }
@@ -293,6 +297,7 @@ struct ContentView: View {
             macOpenToolbar
             macThemeToolbar
             exportMenu
+            macMovieToolbar
             macMeasureToolbar
             panelToggles
             #if !RAYMOL_MAS_RESTRICTED
@@ -308,6 +313,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .raymolSaveSession)) { _ in saveSession() }
         .onReceive(NotificationCenter.default.publisher(for: .raymolSaveSessionAs)) { _ in saveSessionAs() }
         .onReceive(NotificationCenter.default.publisher(for: .raymolExportImage)) { _ in saveImage(size: exportSize(scale: 2)) }
+        .onReceive(NotificationCenter.default.publisher(for: .raymolToggleTimeline)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() }
+        }
         #if !RAYMOL_MAS_RESTRICTED
         .onReceive(NotificationCenter.default.publisher(for: .mcpOpenConnectSheet)) { _ in
             showConnectSheet = true
@@ -564,7 +572,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosThemeToolbar; iosResetMenu; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosThemeToolbar; iosResetMenu; iosTimelineToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -683,6 +691,13 @@ struct ContentView: View {
                     exportTester.start(engine: engine, format: fmt, width: 640, height: 360,
                                        first: f, last: l, fps: 15, rayTraced: false)
                 }
+            }
+        }
+        // Entering Timeline mode on iPhone (compact): collapse the bottom control
+        // panel so the docked timeline has room over the viewport.
+        .onChange(of: engine.timelineMode) { on in
+            if on && hSize == .compact {
+                withAnimation(.easeInOut(duration: 0.2)) { panelCollapsed = true }
             }
         }
         .onChange(of: exportTester.finishedURL) { url in
@@ -931,6 +946,7 @@ struct ContentView: View {
             paneRow("Console",  "terminal",                       consoleBinding)
             paneRow("Sequence", "textformat.abc",                 $engine.sequenceVisible)
             paneRow("Objects",  "cube",                           objectsBinding)
+            paneRow("Timeline", "clapperboard",                   $engine.timelineMode)
         }
         .padding(6)
         .frame(minWidth: 240)
@@ -990,7 +1006,12 @@ struct ContentView: View {
             // there's more than one frame. A collapsing peek on iPhone; a pinned
             // full-width bar on iPad.
             .overlay(alignment: .bottom) {
-                if engine.hasTimeline { transportOverlay }
+                if engine.timelineMode {
+                    TimelinePanel()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if engine.hasTimeline {
+                    transportOverlay
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 Button { showGestureLegend = true } label: {
@@ -1000,8 +1021,8 @@ struct ContentView: View {
                         .padding(12)
                 }
                 .accessibilityLabel("Gesture help")
-                // Keep the help button clear of the transport bar.
-                .padding(.bottom, engine.hasTimeline ? 56 : 0)
+                // Keep the help button clear of the transport bar / timeline dock.
+                .padding(.bottom, engine.timelineMode ? 220 : (engine.hasTimeline ? 56 : 0))
             }
             // Test-only hook (PYMOL_UITEST=1): surface the live selection size
             // so XCUITest can assert tap-to-select / clear behavior. Invisible
@@ -1265,6 +1286,20 @@ struct ContentView: View {
     // iPadOSLayout has its own NavigationStack toolbar). Renders the Metal frame
     // to a temp PNG/PSE via the shared engine, then copies to the pasteboard or
     // hands off to the system share sheet (Save to Files / Mail / AirDrop / …).
+    // Primary entry into Timeline (movie studio) mode on iOS/iPadOS. Persistent
+    // top-bar toggle, tinted when active; works before any movie exists.
+    private var iosTimelineToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() }
+            } label: {
+                Image(systemName: engine.timelineMode ? "clapperboard.fill" : "clapperboard")
+            }
+            .accessibilityLabel("Movie timeline")
+            .tint(engine.timelineMode ? TimelineTheme.accent : nil)
+        }
+    }
+
     private var iosExportToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
@@ -1461,6 +1496,20 @@ struct ContentView: View {
                 Label("Measure", systemImage: engine.measureMode == nil ? "ruler" : "ruler.fill")
             }
             .help("Measure distance / angle / dihedral by tapping atoms")
+        }
+    }
+
+    // Primary entry into Timeline (movie studio) mode — a persistent toggle that
+    // works from a cold start (no movie yet), unlike the transport, which is
+    // gated behind hasTimeline. The ⌥⌘M shortcut lives on the Movie menu command.
+    private var macMovieToolbar: some ToolbarContent {
+        ToolbarItem {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() }
+            } label: {
+                Label("Timeline", systemImage: engine.timelineMode ? "clapperboard.fill" : "clapperboard")
+            }
+            .help("Movie timeline (⌥⌘M)")
         }
     }
 

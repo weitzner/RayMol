@@ -218,6 +218,14 @@ struct TransportBar: View {
             Button { showExport = true } label: {
                 Label("Export Movie…", systemImage: "square.and.arrow.up")
             }
+            // Accelerator into the full timeline editor (proposal B). Hidden while
+            // already in timeline mode (this bar is embedded there).
+            if !engine.timelineMode {
+                Divider()
+                Button { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = true } } label: {
+                    Label("Edit in Timeline", systemImage: "clapperboard")
+                }
+            }
         } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 17))

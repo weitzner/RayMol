@@ -89,6 +89,19 @@ struct MovieBuilderSheet: View {
 
     private var buildBar: some View {
         HStack {
+            // Bridge into the full timeline editor (proposal C): the preset you
+            // build becomes the starting tracks. Hidden if already in the mode.
+            if !engine.timelineMode {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = true }
+                    dismiss()
+                } label: {
+                    Label("Edit in Timeline", systemImage: "clapperboard")
+                        .font(.system(size: 13))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(TimelineTheme.accent)
+            }
             Spacer()
             Button(action: build) {
                 Label("Build & Play", systemImage: "play.fill")
