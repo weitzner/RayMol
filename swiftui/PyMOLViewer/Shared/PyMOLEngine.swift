@@ -22,6 +22,51 @@ final class PlaybackState: ObservableObject {
 
 enum MeasureKind: String { case distance, angle, dihedral }
 
+/// Pure math for adaptive cartoon level-of-detail + display-aware upscale.
+/// Unit-tested standalone (see docs/superpowers/plans/2026-07-02-adaptive-cartoon-lod.md).
+/// Inlined here (not a new file) to avoid Xcode pbxproj surgery; visible to the
+/// whole app module (MetalViewport uses `autoUpscale`).
+enum CartoonLOD {
+    /// Å per pixel at the structure centre, from camera distance + FOV + viewport height.
+    static func angstromPerPixel(cameraDistance: Float, fovDegrees: Float, viewportHeightPx: Float) -> Float {
+        guard viewportHeightPx >= 1 else { return 1e9 }
+        let halfTan = tan(fovDegrees * 0.5 * .pi / 180)
+        return (2 * abs(cameraDistance) * halfTan) / viewportHeightPx
+    }
+
+    // LOD levels coarse->fine; `bounds[i]` is the Å/px boundary between level i and
+    // i+1 (Å/px decreases as we zoom in / go finer). Level values are clamped to
+    // maxSampling so small structures never exceed their cap.
+    private static let baseLevels = [3, 5, 8, 12, -1 /* -> maxSampling */]
+    private static let bounds: [Float] = [0.50, 0.25, 0.10, 0.05]
+    private static let hysteresis: Float = 0.20
+
+    private static func levels(_ maxSampling: Int) -> [Int] {
+        baseLevels.map { min($0 == -1 ? maxSampling : $0, maxSampling) }
+    }
+    private static func rawLevel(_ a: Float) -> Int {
+        var lvl = 0
+        for b in bounds { if a < b { lvl += 1 } }
+        return lvl
+    }
+
+    /// Target cartoon_sampling for the current Å/px, with hysteresis vs `current`.
+    static func targetSampling(angstromPerPixel a: Float, maxSampling: Int, current: Int) -> Int {
+        let lv = levels(maxSampling)
+        let rl = rawLevel(a)
+        let cur = lv.firstIndex(of: current) ?? rl
+        if rl == cur { return current }
+        if abs(rl - cur) >= 2 { return lv[rl] }        // big jump: no ambiguity
+        if rl > cur {                                   // finer: cross bounds[cur]
+            return a < bounds[cur] * (1 - hysteresis) ? lv[rl] : current
+        } else {                                        // coarser: cross bounds[cur-1]
+            return a > bounds[cur - 1] * (1 + hysteresis) ? lv[rl] : current
+        }
+    }
+
+    static func autoUpscale(backingScale: CGFloat) -> Bool { backingScale >= 2.0 }
+}
+
 /// One PyMOL setting for the Settings panel. type: 1 bool, 2 int, 3 float,
 /// 4 float3, 5 color, 6 string (pymol.setting type codes).
 struct SettingItem: Identifiable, Equatable, Codable {
