@@ -77,40 +77,51 @@ struct TransportBar: View {
         .frame(height: 40)
     }
 
-    // iPhone expanded: compact rows so 44pt targets all fit. In Timeline mode the
-    // ruler is the scrub strip and the panel header owns Templates/Produce, so the
-    // scrubber row and Make/Export are dropped here (they'd be redundant) — leaving
-    // a tight cluster+counter row and a loop/fps row.
+    // iPhone expanded. Two shapes:
+    //  • Timeline mode: the ruler IS the scrubber, so everything — transport, loop,
+    //    fps, counter — packs onto ONE row (Make/Export live in the top toolbar's
+    //    Export menu).
+    //  • Otherwise: cluster+counter row, a scrubber, and a loop/fps + Make/Export row.
     private var compactFull: some View {
-        VStack(spacing: 6) {
-            HStack {
-                transportCluster
-                Spacer(minLength: 0)
-                counter
-                if let toggle = onToggleExpand {
-                    iconButton("chevron.down", size: 16, action: toggle)
-                        .accessibilityLabel("Collapse transport")
+        Group {
+            if engine.timelineMode {
+                HStack(spacing: 6) {
+                    transportCluster
+                    Spacer(minLength: 4)
+                    loopButton
+                    fpsMenuTight
+                    counter
                 }
-            }
-            if !engine.timelineMode {
-                scrubber
-            }
-            HStack(spacing: 16) {
-                loopButton
-                fpsMenu
-                Spacer(minLength: 0)
-                if !engine.timelineMode {
-                    Button { showBuilder = true } label: {
-                        Label("Make", systemImage: "wand.and.stars").font(.system(size: 12))
+                .tint(TimelineTheme.accent)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+            } else {
+                VStack(spacing: 6) {
+                    HStack {
+                        transportCluster
+                        Spacer(minLength: 0)
+                        counter
+                        if let toggle = onToggleExpand {
+                            iconButton("chevron.down", size: 16, action: toggle)
+                                .accessibilityLabel("Collapse transport")
+                        }
                     }
-                    Button { showExport = true } label: {
-                        Label("Export", systemImage: "square.and.arrow.up").font(.system(size: 12))
+                    scrubber
+                    HStack(spacing: 16) {
+                        loopButton
+                        fpsMenu
+                        Spacer(minLength: 0)
+                        Button { showBuilder = true } label: {
+                            Label("Make", systemImage: "wand.and.stars").font(.system(size: 12))
+                        }
+                        Button { showExport = true } label: {
+                            Label("Export", systemImage: "square.and.arrow.up").font(.system(size: 12))
+                        }
                     }
+                    .tint(TimelineTheme.accent)
                 }
+                .padding(.horizontal, 12).padding(.vertical, 8)
             }
-            .tint(TimelineTheme.accent)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
     // iPhone collapsed peek: scrub + play in one line, plus an expand chevron.
@@ -204,6 +215,28 @@ struct TransportBar: View {
                 .font(.system(size: 12))
         }
         .tint(TimelineTheme.accent)
+    }
+
+    // Slim fps control for the packed timeline row (no gauge icon, "30fps").
+    private var fpsMenuTight: some View {
+        Menu {
+            Picker("Frame rate", selection: Binding(
+                get: { playback.movieFPS },
+                set: { engine.setMovieFPS($0) })) {
+                Text("30 fps").tag(30.0)
+                Text("15 fps").tag(15.0)
+                Text("5 fps").tag(5.0)
+                Text("1 fps").tag(1.0)
+                Text("0.3 fps").tag(0.3)
+            }
+        } label: {
+            Text("\(fpsLabel)fps")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(TimelineTheme.accent)
+                .frame(height: 36)
+                .contentShape(Rectangle())
+        }
+        .menuIndicator(.hidden)
     }
 
     private var overflowMenu: some View {

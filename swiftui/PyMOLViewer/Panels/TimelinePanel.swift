@@ -33,7 +33,7 @@ struct TimelinePanel: View {
     /// the Movie tab and the tab bar handles navigation.
     var showsDone: Bool = true
 
-    @State private var showExport = false
+    @State private var showClearConfirm = false
 
     // Horizontal zoom: pixels-per-second = (viewportWidth / 10) * zoom, so zoom
     // 1 fits ~10 s across the lane. +/- steps; the lane scrolls when the movie is
@@ -98,7 +98,10 @@ struct TimelinePanel: View {
             composer
         }
         .background(TimelineTheme.bar)
-        .sheet(isPresented: $showExport) { MovieExportSheet() }
+        .confirmationDialog("Clear the timeline?", isPresented: $showClearConfirm, titleVisibility: .visible) {
+            Button("Clear timeline", role: .destructive) { engine.clearMovieItems() }
+            Button("Cancel", role: .cancel) {}
+        }
         .alert("Rename scene", isPresented: Binding(
             get: { sceneRenameTarget != nil },
             set: { if !$0 { sceneRenameTarget = nil } })) {
@@ -130,47 +133,32 @@ struct TimelinePanel: View {
 
             Spacer(minLength: 4)
 
-            addButton
+            addCameraButton
             zoomControl
-            if !isCompact {
-                textButton("Produce", "film") { showExport = true }
-                    .disabled(engine.timelineItems.isEmpty)
-            } else {
-                iconButton("film", help: "Produce") { showExport = true }
-                    .disabled(engine.timelineItems.isEmpty)
-            }
-            overflowMenu
+            trashButton
             if showsDone { doneButton }
         }
         .padding(.horizontal, isCompact ? 8 : 12)
         .frame(height: 44)
     }
 
-    // Icon-only header button with a tooltip (macOS/pointer) + VoiceOver label.
-    private func iconButton(_ systemName: String, help: String,
-                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 15))
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundColor(TimelineTheme.text)
-        .help(help)
-        .accessibilityLabel(help)
-    }
-
-    private var addButton: some View {
+    // Clearly-buttoned "add a camera keyframe" control (bordered capsule with the
+    // diamond glyph; adds a label where there's room).
+    private var addCameraButton: some View {
         Button(action: { engine.captureCameraItem() }) {
-            Label("Camera keyframe", systemImage: "plus.diamond.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .labelStyle(.iconOnly)
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
+            HStack(spacing: 4) {
+                Image(systemName: "plus.diamond.fill")
+                if !isCompact { Text("Camera") }
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, isCompact ? 10 : 12)
+            .frame(height: 30)
+            .background(Capsule().fill(TimelineTheme.accent.opacity(0.18)))
+            .overlay(Capsule().stroke(TimelineTheme.accent, lineWidth: 1))
+            .foregroundColor(TimelineTheme.accent)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .foregroundColor(TimelineTheme.accent)
         .accessibilityLabel("Add a camera keyframe of the current view")
         .help("Add a camera keyframe of the current view to the end")
     }
@@ -206,25 +194,19 @@ struct TimelinePanel: View {
         }
     }
 
-    private var overflowMenu: some View {
-        Menu {
-            if !engine.timelineItems.isEmpty {
-                Button(role: .destructive) { engine.clearMovieItems() } label: {
-                    Label("Clear timeline", systemImage: "trash")
-                }
-            } else {
-                Text("Timeline is empty")
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
+    // Clear the whole timeline (confirmed). Replaces the old overflow menu.
+    private var trashButton: some View {
+        Button { showClearConfirm = true } label: {
+            Image(systemName: "trash")
                 .font(.system(size: 15))
-                .frame(width: 28, height: 32)
+                .frame(width: 30, height: 32)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .tint(TimelineTheme.text)
-        .help("Timeline options")
+        .buttonStyle(.plain)
+        .foregroundColor(engine.timelineItems.isEmpty ? TimelineTheme.dim : TimelineTheme.text)
+        .disabled(engine.timelineItems.isEmpty)
+        .help("Clear the timeline")
+        .accessibilityLabel("Clear timeline")
     }
 
     // The current movie length, from the sum of transition durations.
@@ -248,14 +230,6 @@ struct TimelinePanel: View {
         .buttonStyle(.plain)
         .help("Exit Timeline mode")
         .accessibilityLabel("Close timeline")
-    }
-
-    private func textButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: icon).font(.system(size: 12))
-        }
-        .buttonStyle(.plain)
-        .foregroundColor(TimelineTheme.text)
     }
 
     // MARK: - The unified lane (fixed-scale, scrollable)
