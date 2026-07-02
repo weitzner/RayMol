@@ -6,21 +6,31 @@
     <description>RayMol macOS updates</description>
     <language>en</language>
     <item>
-      <title>RayMol 1.5.1</title>
+      <title>RayMol 1.5.2</title>
       <description xml:lang="en" sparkle:format="markdown"><![CDATA[
-## RayMol 1.5.1
+## RayMol 1.5.2
 
-A rendering fix for cartoons under shadows.
+A follow-up rendering fix for cartoon shadows at steep angles, plus a cleaner app icon.
 
-- **Fixed: dark triangles on cartoons with shadows on.** With Metal shadows enabled, the coarse cartoon mesh could self-shadow into a faceted, triangulated look. Shadows now use a scale-aware normal-offset bias so cartoons stay clean — while shadows cast *between* elements (helix onto sheet, sticks onto surface) are preserved.
+- **Fixed: striped shadow speckle on flat cartoon strands at grazing angles.**
+  With Metal shadows enabled, near edge-on β-strands could still show a faint
+  striped self-shadow pattern that the 1.5.1 fix didn't fully reach. The default
+  self-shadow bias now ramps up further on the steepest facets, clearing the
+  speckle — while shadows cast *between* elements (helix onto sheet, sticks onto
+  surface) and contact shadows are left untouched.
+- **New: `metal_shadow_bias` setting.** A global multiplier (default 1.0) on the
+  self-shadow bias, for the rare structure where the speckle persists.
+  `set metal_shadow_bias, 2` (up to ~4) from the command line dials it out.
+- **Fixed: app icon showed white square corners.** The macOS app icon now has
+  properly rounded, transparent corners in the Dock and Finder.
 
 Built on the open-source PyMOL engine. Updates install automatically via the in-app updater (**Check for Updates…** in the app menu).
 ]]></description>
-      <pubDate>Thu, 02 Jul 2026 17:28:06 +0000</pubDate>
-      <sparkle:version>15</sparkle:version>
-      <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
+      <pubDate>Thu, 02 Jul 2026 20:45:44 +0000</pubDate>
+      <sparkle:version>16</sparkle:version>
+      <sparkle:shortVersionString>1.5.2</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.5.1/RayMol-1.5.1.dmg" type="application/octet-stream" sparkle:edSignature="80rMI4Qiqnkbza4Sz+6687YGC/b7655R+/ArQWdtVWE+9H/j1gVydzPVftKPUJcN3UqIqUoHjcW+4+0ctHdmCA==" length="55881562" />
+      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.5.2/RayMol-1.5.2.dmg" type="application/octet-stream" sparkle:edSignature="5gq7Xk2A3gEj3QzcL2K3C07oJWXVJrM7bKtesBr6aVRS+vUy82OntX4upYdghL6t2T0vGNe4oUrS+D5bpP7qBA==" length="55902911" />
     </item>
   </channel>
 </rss>
