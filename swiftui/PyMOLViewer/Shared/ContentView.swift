@@ -501,6 +501,11 @@ struct ContentView: View {
             if ProcessInfo.processInfo.environment["PYMOL_AUTOSHEET"] == "theme" {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { showThemeStudio = true }
             }
+            // Test affordance: show the in-viewport scene buttons at launch so the
+            // overlay can be screenshotted. PYMOL_AUTOSCENEBUTTONS=1.
+            if ProcessInfo.processInfo.environment["PYMOL_AUTOSCENEBUTTONS"] != nil {
+                showSceneButtons = true
+            }
         }
     }
 
@@ -575,33 +580,66 @@ struct ContentView: View {
     // Scenes tab: opt-in glanceable scene buttons overlaid on the viewport.
     // Also outside #if os(iOS) since inspectorSwitcher (shared) binds to it.
     @State private var showSceneButtons = false
+    // Scene-chip long-press "Rename…" flow (nil = alert hidden).
+    @State private var sceneRenameTarget: String? = nil
+    @State private var sceneRenameText: String = ""
 
     // Floating scene chips over the viewport (teal/global), shown only when the
     // Scenes tab's "Show scene buttons in viewport" toggle is on. Tap = recall.
     // Declared outside #if os(iOS) so BOTH the iOS viewportView overlay and the
     // macOS macOSLayout viewport overlay can consume it (single source of truth).
     private var sceneButtonsOverlay: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(engine.sceneNames, id: \.self) { name in
-                    let sel = name == engine.currentScene
-                    Button {
-                        engine.runCommand("scene \(name), recall, animate=1")
-                    } label: {
-                        Text(name)
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .padding(.horizontal, 9).frame(height: 28)
-                            .background(sel ? TimelineTheme.accent : Color.white.opacity(0.92))
-                            .foregroundColor(sel ? .white : TimelineTheme.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 7))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(6)
+        // Hug the chips: use the plain row when it fits (background wraps it
+        // tightly); fall back to a scrolling row capped at 230 when there are
+        // too many scenes. (The old fixed maxWidth:230 left dead space.)
+        ViewThatFits(in: .horizontal) {
+            sceneOverlayRow
+            ScrollView(.horizontal, showsIndicators: false) { sceneOverlayRow }
         }
+        .frame(maxWidth: 230, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11))
-        .frame(maxWidth: 230)
+        .alert("Rename scene", isPresented: Binding(
+            get: { sceneRenameTarget != nil },
+            set: { if !$0 { sceneRenameTarget = nil } })) {
+            TextField("Scene name", text: $sceneRenameText)
+            Button("Rename") {
+                if let t = sceneRenameTarget { engine.renameScene(t, to: sceneRenameText) }
+                sceneRenameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { sceneRenameTarget = nil }
+        }
+    }
+
+    private var sceneOverlayRow: some View {
+        HStack(spacing: 6) {
+            ForEach(engine.sceneNames, id: \.self) { name in
+                let sel = name == engine.currentScene
+                Button {
+                    engine.runCommand("scene \(name), recall, animate=1")
+                } label: {
+                    Text(name)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .padding(.horizontal, 9).frame(height: 28)
+                        .background(sel ? TimelineTheme.accent : Color.white.opacity(0.92))
+                        .foregroundColor(sel ? .white : TimelineTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .contextMenu { sceneChipMenu(name) }
+            }
+        }
+        .padding(6)
+    }
+
+    // Shared long-press menu for a scene chip: recall / reset (update to the
+    // current view) / rename / delete.
+    @ViewBuilder
+    private func sceneChipMenu(_ name: String) -> some View {
+        Text(name)
+        Button { engine.recallScene(name) } label: { Label("Recall", systemImage: "eye") }
+        Button { engine.updateScene(name) } label: { Label("Reset to current view", systemImage: "arrow.clockwise") }
+        Button { sceneRenameText = name; sceneRenameTarget = name } label: { Label("Rename…", systemImage: "pencil") }
+        Button(role: .destructive) { engine.deleteScene(name) } label: { Label("Delete", systemImage: "trash") }
     }
 
     #if os(iOS)

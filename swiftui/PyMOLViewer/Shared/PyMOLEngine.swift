@@ -1183,6 +1183,28 @@ final class PyMOLEngine: ObservableObject {
             + "_c.scene(_b64.b64decode('\(b64)').decode('utf-8'), 'recall')")
     }
 
+    // Per-scene management for the scene chips' long-press menu. Injection-safe.
+    // updateScene overwrites the named scene with the CURRENT view/reps.
+    func updateScene(_ name: String) { sceneAction(name, "update") }
+    func deleteScene(_ name: String) { sceneAction(name, "delete") }
+
+    private func sceneAction(_ name: String, _ action: String) {
+        guard !name.isEmpty else { return }
+        let b64 = Data(name.utf8).base64EncodedString()
+        runPython("import base64 as _b64\nfrom pymol import cmd as _c\n"
+            + "_c.scene(_b64.b64decode('\(b64)').decode('utf-8'), '\(action)')")
+    }
+
+    func renameScene(_ name: String, to newName: String) {
+        let n = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !n.isEmpty, n != name else { return }
+        let b = Data(name.utf8).base64EncodedString()
+        let nb = Data(n.utf8).base64EncodedString()
+        runPython("import base64 as _b64\nfrom pymol import cmd as _c\n"
+            + "_c.scene(_b64.b64decode('\(b)').decode('utf-8'), 'rename', "
+            + "new_key=_b64.b64decode('\(nb)').decode('utf-8'))")
+    }
+
     // Move the playhead to `frame` and commit (for tapping a keyframe/ruler in
     // the timeline). Wraps the scrub + release pair used by the transport.
     func seek(to frame: Int) {
