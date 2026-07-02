@@ -41,6 +41,14 @@ struct TimelinePanel: View {
     @State private var sceneRenameTarget: String? = nil
     @State private var sceneRenameText: String = ""
 
+    // Template composer (the preset builders, folded into the dock). Applying a
+    // template APPENDS it to the end of the timeline (engine.appendTemplate).
+    @State private var composerKind = "roll"
+    @State private var composerAxis = "y"
+    @State private var composerDuration: Double = 8
+    @State private var composerAngle: Double = 30
+    @State private var composerSecPerScene: Double = 4
+
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
     private var isCompact: Bool { hSize == .compact }
@@ -61,6 +69,8 @@ struct TimelinePanel: View {
             scenePaletteStrip
             Divider()
             TransportBar()
+            Divider().opacity(0.5)
+            composer
         }
         .background(TimelineTheme.bar)
         .sheet(isPresented: $showBuilder) { MovieBuilderSheet() }
@@ -104,14 +114,12 @@ struct TimelinePanel: View {
                 addButton
                 lengthMenu
                 interpMenu
-                iconButton("wand.and.stars", help: "Templates") { showBuilder = true }
                 iconButton("film", help: "Produce") { showExport = true }
                     .disabled(playback.frameCount <= 1)
             } else {
                 addButton
                 interpControl
                 lengthMenu
-                textButton("Templates", "wand.and.stars") { showBuilder = true }
                 textButton("Produce", "film") { showExport = true }
                     .disabled(playback.frameCount <= 1)
             }
@@ -499,6 +507,94 @@ struct TimelinePanel: View {
     private func dropSceneAtPlayhead(_ name: String) {
         if playback.frameCount <= 1 { engine.newTimeline(seconds: 10) }
         engine.placeScene(name, at: playback.currentFrame, linear: interpLinear)
+    }
+
+    // MARK: - Template composer (folded-in preset builders → Append)
+
+    // Pick a template kind + its params inline; "Append" stacks it onto the end
+    // of the timeline (engine.appendTemplate), decomposing onto the tracks.
+    private var composer: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Button("Camera Roll") { composerKind = "roll" }
+                Button("Camera Rock") { composerKind = "rock" }
+                Button("Scene loop")  { composerKind = "scenes" }
+                Button("State loop")  { composerKind = "state_loop" }
+            } label: { composerChip(composerLabel, composerIcon) }
+
+            if composerKind == "roll" || composerKind == "rock" {
+                Menu {
+                    ForEach(["x", "y", "z"], id: \.self) { a in
+                        Button(a.uppercased()) { composerAxis = a }
+                    }
+                } label: { composerChip(composerAxis.uppercased(), "arrow.triangle.2.circlepath") }
+                Menu {
+                    ForEach([4, 8, 16], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
+                } label: { composerChip("\(Int(composerDuration))s", "clock") }
+                if composerKind == "rock" {
+                    Menu {
+                        ForEach([30, 60, 90], id: \.self) { a in Button("\(a)°") { composerAngle = Double(a) } }
+                    } label: { composerChip("\(Int(composerAngle))°", "angle") }
+                }
+            } else if composerKind == "scenes" {
+                Menu {
+                    ForEach([2, 4, 8], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
+                } label: { composerChip("\(Int(composerSecPerScene))s", "clock") }
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: appendComposer) {
+                Label("Append", systemImage: "plus.rectangle.on.rectangle")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(TimelineTheme.accent)
+            .disabled(composerKind == "scenes" && engine.sceneNames.isEmpty)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    private func composerChip(_ text: String, _ icon: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon).font(.system(size: 10))
+            Text(text)
+            Image(systemName: "chevron.down").font(.system(size: 8))
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(Capsule().fill(Color.white.opacity(0.10)))
+        .foregroundColor(TimelineTheme.text)
+    }
+
+    private var composerLabel: String {
+        switch composerKind {
+        case "rock": return "Camera Rock"
+        case "scenes": return "Scene loop"
+        case "state_loop": return "State loop"
+        default: return "Camera Roll"
+        }
+    }
+
+    private var composerIcon: String {
+        switch composerKind {
+        case "scenes": return "photo.stack"
+        case "state_loop": return "square.stack.3d.up"
+        default: return "video"
+        }
+    }
+
+    private func appendComposer() {
+        switch composerKind {
+        case "roll", "rock":
+            engine.appendTemplate(kind: composerKind, duration: composerDuration,
+                                  axis: composerAxis, angle: composerAngle)
+        case "scenes":
+            engine.appendTemplate(kind: "scenes", secondsPerScene: composerSecPerScene)
+        case "state_loop":
+            engine.appendTemplate(kind: "state_loop")
+        default: break
+        }
     }
 
     private func playhead(width w: CGFloat) -> some View {

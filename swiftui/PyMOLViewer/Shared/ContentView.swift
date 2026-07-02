@@ -783,8 +783,12 @@ struct ContentView: View {
                 // else (iPad both orientations + iPhone LANDSCAPE) uses the mac-style
                 // layout (terminal+sequence above the viewport, Objects+Raymond panel).
                 let phonePortrait = hSize == .compact && vSize == .regular
+                // The Movie tab (tag 2) IS the timeline on iPhone: enter it directly
+                // from the tab selection (not just after onChange sets timelineMode),
+                // so there's no 1-frame flash of the old builder pane.
+                let movieTabActive = (phonePortrait || isPhoneLandscape) && selectedTab == 2
                 Group {
-                    if engine.timelineMode {
+                    if engine.timelineMode || movieTabActive {
                         // Timeline mode takes over the bottom panel (and hides the
                         // tab bar) while keeping the viewer on screen — see
                         // iosTimelineLayout. One layout for all idioms/orientations.
@@ -1018,8 +1022,12 @@ struct ContentView: View {
                 }
             }
         }
-        // (Timeline mode now uses its own layout — iosTimelineLayout — which
-        // replaces the bottom panel outright, so there's no panel to collapse.)
+        // The Movie tab IS the timeline: selecting it enters the immersive
+        // timeline (iosTimelineLayout, tab bar hidden). Leaving is via the
+        // panel's Done, which resets selectedTab (see iosTimelineLayout's onExit).
+        .onChange(of: selectedTab) { tab in
+            if tab == 2 { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = true } }
+        }
         .onChange(of: exportTester.finishedURL) { url in
             guard let url = url else { return }
             let dst = URL(fileURLWithPath: "/tmp/pymol_export_test.\(url.pathExtension)")
@@ -1082,7 +1090,7 @@ struct ContentView: View {
                 Divider()
                 // fixedSize → the panel hugs its content instead of stretching to
                 // fill the column (which would scatter empty gaps); top-aligned.
-                TimelinePanel()
+                TimelinePanel(onExit: exitTimeline)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(width: min(geo.size.height, geo.size.width * 0.5))
                     .frame(maxHeight: .infinity, alignment: .top)
@@ -1095,12 +1103,21 @@ struct ContentView: View {
                 // fixedSize → the panel is exactly as tall as its content (viewer
                 // takes the rest); without it the panel stretched and spread the
                 // slack as empty bands between the header/ruler/palette.
-                TimelinePanel()
+                TimelinePanel(onExit: exitTimeline)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(themeChromeBg)
                     // Clear the home indicator (the body ignores the safe area).
                     .padding(.bottom, geo.safeAreaInsets.bottom > 0 ? geo.safeAreaInsets.bottom : (hSize == .compact ? 12 : 0))
             }
+        }
+    }
+
+    // Leave Timeline mode (the panel's Done) — and step off the Movie tab so the
+    // tab bar returns to a normal pane instead of immediately re-entering it.
+    private func exitTimeline() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            engine.timelineMode = false
+            if selectedTab == 2 { selectedTab = 1 }
         }
     }
 

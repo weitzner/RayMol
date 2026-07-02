@@ -155,6 +155,86 @@ def make_movie(kind, duration=12.0, angle=30.0, axis='y', loop=1,
         print('MOVIE_ERR:' + str(e))
 
 
+def append_template(kind, duration=8.0, axis='y', angle=30.0,
+                    seconds_per_scene=4.0, scenes=None, factor=1):
+    """APPEND a template to the END of the current timeline (never clears), so
+    the movie is composed by stacking templates. Places the keyframes itself at
+    deterministic frames — the Swift TimelinePanel computes the SAME frames to
+    draw the camera diamonds / scene markers (keep the two in sync):
+
+      roll : camera keyframes at [start+1, +n/3, +2n/3, start+n], 360 spin
+      rock : camera keyframes at [start+1, +n/4, +3n/4, start+n], +/-angle
+      scenes : a scene marker (mview store, scene=) every seconds_per_scene
+      state_loop/sweep : cycle object states (no camera/scene markers)
+
+    `start` is the current frame count (0 when there's no movie yet, so the
+    first template starts at frame 1). Uses `madd` to extend without disturbing
+    existing keyframes."""
+    try:
+        fps = cmd.get_setting_float('movie_fps') or 30.0
+        cur = cmd.count_frames()
+        start = 0 if cur <= 1 else cur
+
+        def ensure(nn):
+            if start == 0:
+                cmd.mset('1 x%d' % nn)
+            else:
+                cmd.madd('1 x%d' % nn)
+
+        k = str(kind)
+        if k in ('roll', 'rock'):
+            n = max(2, int(round(duration * fps)))
+            ensure(n)
+            v = cmd.get_view()
+            if k == 'roll':
+                frames = [start + 1, start + 1 + n // 3, start + 1 + (2 * n) // 3, start + n]
+                turns = [0, 120, 240, 360]
+            else:
+                frames = [start + 1, start + 1 + n // 4, start + 1 + (3 * n) // 4, start + n]
+                turns = [0, float(angle), -float(angle), 0]
+            for f, deg in zip(frames, turns):
+                cmd.frame(f)
+                cmd.set_view(v)
+                if deg:
+                    cmd.turn(str(axis), float(deg))
+                cmd.mview('store', first=f)
+            cmd.mview('reinterpolate', power=0.0, linear=0.0)
+
+        elif k == 'scenes':
+            names = [x for x in (scenes if scenes else cmd.get_scene_list()) if x]
+            if names:
+                per = max(2, int(round(float(seconds_per_scene) * fps)))
+                ensure(per * len(names))
+                for i, nm in enumerate(names):
+                    f = start + 1 + i * per
+                    cmd.frame(f)
+                    cmd.scene(nm, 'recall')
+                    cmd.mview('store', first=f, scene=nm)
+                cmd.mview('reinterpolate', power=0.0, linear=0.0)
+
+        elif k in ('state_loop', 'state_sweep'):
+            maxs = 1
+            for o in cmd.get_object_list():
+                try:
+                    maxs = max(maxs, cmd.count_states(o))
+                except Exception:
+                    pass
+            if maxs > 1:
+                fac = max(1, int(factor))
+                seq = list(range(1, maxs + 1))
+                if k == 'state_sweep':
+                    seq = seq + list(range(maxs - 1, 1, -1))
+                spec = ' '.join(str(s) for s in seq for _ in range(fac))
+                if start == 0:
+                    cmd.mset(spec)
+                else:
+                    cmd.madd(spec)
+
+        cmd.rewind()
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
 def poll():
     """Emit the PLAYBACK feedback line (current frame / length / play state)."""
     import json

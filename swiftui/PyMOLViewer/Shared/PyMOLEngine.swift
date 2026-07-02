@@ -300,6 +300,19 @@ final class PyMOLEngine: ObservableObject {
             DispatchQueue.main.async { [weak self] in self?.timelineMode = true }
         }
 
+        // Test affordance: append one or more templates at launch (through the real
+        // appendTemplate path) so the decompose-onto-tracks can be screenshotted.
+        // PYMOL_AUTOAPPEND=roll  or  roll,scenes  (waits for AUTOCMD scenes to load).
+        if let seq = ProcessInfo.processInfo.environment["PYMOL_AUTOAPPEND"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self = self else { return }
+                self.timelineMode = true
+                for kind in seq.split(separator: ",") {
+                    self.appendTemplate(kind: String(kind).trimmingCharacters(in: .whitespaces))
+                }
+            }
+        }
+
         // Test affordance: after the app is idle/rendering (3s), simulate a long
         // heavy op so the "Calculating…" overlay can be screenshotted in a
         // real-usage-like state (init-time AUTOCMD can't — its asyncAfter hop
@@ -1154,6 +1167,49 @@ final class PyMOLEngine: ObservableObject {
         // manual camera keyframes / scene markers so the tracks don't show stale ones.
         cameraKeyframes.removeAll()
         sceneMarkers.removeAll()
+    }
+
+    // Append a template to the END of the timeline (compose by stacking). Mirrors
+    // appkit_movie.append_template's DETERMINISTIC frame placement so the tracks
+    // reflect the appended camera keyframes / scene markers immediately — keep the
+    // two frame formulas in sync. kind: roll | rock | scenes | state_loop | state_sweep.
+    func appendTemplate(kind: String, duration: Double = 8, axis: String = "y",
+                        angle: Double = 30, secondsPerScene: Double = 4,
+                        scenes: [String]? = nil, factor: Int = 1) {
+        let fps = max(playback.movieFPS, 1)
+        let start = playback.frameCount <= 1 ? 0 : playback.frameCount
+        let names = scenes ?? sceneNames
+        var args = "kind='\(kind)', duration=\(duration), axis='\(axis)', angle=\(angle), "
+            + "seconds_per_scene=\(secondsPerScene), factor=\(factor)"
+        if kind == "scenes" {
+            let list = names.map { "'\($0.replacingOccurrences(of: "'", with: ""))'" }
+                .joined(separator: ", ")
+            args += ", scenes=[\(list)]"
+        }
+        runPython("from pymol import appkit_movie as _am\n_am.append_template(\(args))")
+
+        switch kind {
+        case "roll", "rock":
+            let n = max(2, Int((duration * fps).rounded()))
+            let fr = kind == "roll"
+                ? [start + 1, start + 1 + n / 3, start + 1 + 2 * n / 3, start + n]
+                : [start + 1, start + 1 + n / 4, start + 1 + 3 * n / 4, start + n]
+            for f in fr where !cameraKeyframes.contains(f) { cameraKeyframes.append(f) }
+            cameraKeyframes.sort()
+            playback.frameCount = start + n
+        case "scenes":
+            let per = max(2, Int((secondsPerScene * fps).rounded()))
+            for (i, nm) in names.enumerated() {
+                let f = start + 1 + i * per
+                sceneMarkers.removeAll { $0.frame == f }
+                sceneMarkers.append(SceneMarker(frame: f, name: nm))
+            }
+            sceneMarkers.sort { $0.frame < $1.frame }
+            playback.frameCount = start + per * max(names.count, 1)
+        default:
+            break   // state_loop / state_sweep: no markers; the poll syncs frameCount
+        }
+        playback.currentFrame = 1
     }
 
     // Store a camera keyframe at the current frame + interpolate (mview).
