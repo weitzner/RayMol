@@ -359,6 +359,10 @@ public:
   // User multiplier on the self-shadow depth bias (metal_shadow_bias). Default
   // no-op (GL unaffected).
   virtual void setShadowBias(float bias) {}
+  // Whether the window's current display is Retina (backingScale>=2). Set from
+  // the Swift layer; gates metal_upscale=auto. Defaults true (GL unaffected).
+  virtual void setDisplayIsRetina(bool retina) {}
+  virtual bool displayIsRetina() const { return true; }
 
   // GPU-tessellated Bezier tubes ("tube cartoon"). controlPoints is a tightly
   // packed array of cubic Bezier patches: 4 Float3 control points each
