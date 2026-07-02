@@ -594,7 +594,13 @@ struct ContentView: View {
         // too many scenes. (The old fixed maxWidth:230 left dead space.)
         ViewThatFits(in: .horizontal) {
             sceneOverlayRow
-            ScrollView(.horizontal, showsIndicators: false) { sceneOverlayRow }
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) { sceneOverlayRow }
+                    .onAppear { proxy.scrollTo(engine.currentScene, anchor: .center) }
+                    .onChange(of: engine.currentScene) { s in
+                        withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(s, anchor: .center) }
+                    }
+            }
         }
         .frame(maxWidth: 230, alignment: .leading)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11))
@@ -617,29 +623,37 @@ struct ContentView: View {
                 Button {
                     engine.runCommand("scene \(name), recall, animate=1")
                 } label: {
-                    Text(name)
+                    Text(shortSceneName(name))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .lineLimit(1)
                         .padding(.horizontal, 9).frame(height: 28)
                         .background(sel ? TimelineTheme.accent : Color.white.opacity(0.92))
                         .foregroundColor(sel ? .white : TimelineTheme.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
+                .id(name)
                 .contextMenu { sceneChipMenu(name) }
             }
         }
         .padding(6)
     }
 
-    // Shared long-press menu for a scene chip: recall / reset (update to the
-    // current view) / rename / delete.
+    // Shared long-press menu for a scene chip: reset (update to the current
+    // view) / rename / delete. (Tapping the chip already recalls, so no Recall.)
     @ViewBuilder
     private func sceneChipMenu(_ name: String) -> some View {
         Text(name)
-        Button { engine.recallScene(name) } label: { Label("Recall", systemImage: "eye") }
         Button { engine.updateScene(name) } label: { Label("Reset to current view", systemImage: "arrow.clockwise") }
         Button { sceneRenameText = name; sceneRenameTarget = name } label: { Label("Rename…", systemImage: "pencil") }
         Button(role: .destructive) { engine.deleteScene(name) } label: { Label("Delete", systemImage: "trash") }
+    }
+
+    // Overlay chips stay glanceable: cap the displayed name (full name lives in
+    // the Scenes tab + the long-press menu) so one long rename can't blow out
+    // the row / clip the selected chip.
+    private func shortSceneName(_ n: String) -> String {
+        n.count > 8 ? String(n.prefix(7)) + "…" : n
     }
 
     #if os(iOS)

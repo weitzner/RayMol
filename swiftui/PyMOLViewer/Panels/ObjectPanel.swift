@@ -2185,7 +2185,6 @@ struct ScenesPane: View {
         .buttonStyle(.plain)
         .contextMenu {
             Text(name)
-            Button { engine.recallScene(name) } label: { Label("Recall", systemImage: "eye") }
             Button { engine.updateScene(name) } label: { Label("Reset to current view", systemImage: "arrow.clockwise") }
             Button { sceneRenameText = name; sceneRenameTarget = name } label: { Label("Rename…", systemImage: "pencil") }
             Button(role: .destructive) { engine.deleteScene(name) } label: { Label("Delete", systemImage: "trash") }
