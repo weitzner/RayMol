@@ -786,12 +786,13 @@ struct ContentView: View {
                 // The Movie tab (tag 2) IS the timeline on iPhone: enter it directly
                 // from the tab selection (not just after onChange sets timelineMode),
                 // so there's no 1-frame flash of the old builder pane.
-                let movieTabActive = (phonePortrait || isPhoneLandscape) && selectedTab == 2
+                let isPhone = phonePortrait || isPhoneLandscape
                 Group {
-                    if engine.timelineMode || movieTabActive {
-                        // Timeline mode takes over the bottom panel (and hides the
-                        // tab bar) while keeping the viewer on screen — see
-                        // iosTimelineLayout. One layout for all idioms/orientations.
+                    // iPad / desktop: the timeline is an explicit docked mode (no
+                    // tab bar), so it takes over the bottom region. iPhone: the
+                    // Movie tab renders the timeline INSIDE the tab UI (below) so
+                    // the bottom tab bar stays visible — no immersive takeover.
+                    if engine.timelineMode && !isPhone {
                         iosTimelineLayout(geo: geo)
                     } else if phonePortrait {
                         iPhoneLayout(geo: geo)
@@ -1022,11 +1023,20 @@ struct ContentView: View {
                 }
             }
         }
-        // The Movie tab IS the timeline: selecting it enters the immersive
-        // timeline (iosTimelineLayout, tab bar hidden). Leaving is via the
-        // panel's Done, which resets selectedTab (see iosTimelineLayout's onExit).
+        // The Movie tab IS the timeline: on iPhone it renders inside the tab UI
+        // (tab bar stays visible — no Done). Keep timelineMode synced to the tab
+        // so the TransportBar's timeline styling applies, and reset it on leave.
         .onChange(of: selectedTab) { tab in
-            if tab == 2 { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = true } }
+            if hSize == .compact {
+                withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = (tab == 2) }
+            }
+        }
+        // Programmatic entry (test hooks / "Open in movie"): flipping timelineMode
+        // on iPhone jumps to the Movie tab that now HOSTS the timeline.
+        .onChange(of: engine.timelineMode) { on in
+            if hSize == .compact && on && selectedTab != 2 {
+                withAnimation(.easeInOut(duration: 0.2)) { selectedTab = 2 }
+            }
         }
         .onChange(of: exportTester.finishedURL) { url in
             guard let url = url else { return }
@@ -1066,7 +1076,7 @@ struct ContentView: View {
         case 0:  return total * 0.5                              // Console — fixed tall
         case 1:  return hug(1, cap: total / 3, extra: 44)        // Objects — +toolbar; cap 1/3
         case 5:  return hug(5, cap: total * 0.5)                 // Scenes
-        case 2:  return hug(2, cap: total * 0.5)                 // Movie
+        case 2:  return hug(2, cap: total * 0.72)               // Movie — timeline studio
         case 4:  return total * 0.42                             // Settings root — compact
         default: return total * 0.45
         }
@@ -1624,7 +1634,8 @@ struct ContentView: View {
             ScenesPane(showViewportButtons: $showSceneButtons,
                        onOpenMovie: { selectedTab = 2 })
                 .tabItem { Label("Scenes", systemImage: "rectangle.on.rectangle") }.tag(5)
-            MoviePane()
+            TimelinePanel(showsDone: false)
+                .reportPaneHeight(2)
                 .tabItem { Label("Movie", systemImage: "film") }.tag(2)
             settingsPane
                 .tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
@@ -1648,7 +1659,7 @@ struct ContentView: View {
                 case 1:  ObjectPanel()
                 case 5:  ScenesPane(showViewportButtons: $showSceneButtons,
                                     onOpenMovie: { selectedTab = 2 })
-                case 2:  MoviePane()
+                case 2:  TimelinePanel(showsDone: false)
                 case 4:  settingsPane
                 default: CommandPanel(showInput: !RayMolBuild.iosRestricted)   // tag 0 (and any stray)
                 }
@@ -1979,15 +1990,27 @@ struct ContentView: View {
     // hands off to the system share sheet (Save to Files / Mail / AirDrop / …).
     // Primary entry into Timeline (movie studio) mode on iOS/iPadOS. Persistent
     // top-bar toggle, tinted when active; works before any movie exists.
+    // Active when the timeline is showing: iPhone = the Movie tab is selected
+    // (the tab bar navigates); iPad/desktop = the docked timelineMode is on.
+    private var timelineToggleActive: Bool {
+        hSize == .compact ? (selectedTab == 2) : engine.timelineMode
+    }
+
     private var iosTimelineToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if hSize == .compact {
+                        selectedTab = (selectedTab == 2) ? 1 : 2   // Movie tab hosts the timeline
+                    } else {
+                        engine.timelineMode.toggle()               // iPad/desktop docked mode
+                    }
+                }
             } label: {
-                Image(systemName: engine.timelineMode ? "clapperboard.fill" : "clapperboard")
+                Image(systemName: timelineToggleActive ? "clapperboard.fill" : "clapperboard")
             }
             .accessibilityLabel("Movie timeline")
-            .tint(engine.timelineMode ? TimelineTheme.accent : nil)
+            .tint(timelineToggleActive ? TimelineTheme.accent : nil)
         }
     }
 

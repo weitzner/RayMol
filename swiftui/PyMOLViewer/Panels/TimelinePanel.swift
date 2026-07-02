@@ -1,16 +1,20 @@
 // TimelinePanel.swift — the docked "movie studio" (Timeline mode).
 //
 // Promotes RayMol's linear frame transport into a composition editor (the PyMOL
-// Timeline, adapted to touch + pointer). Shown only while engine.timelineMode is
-// on; docks below the viewport on macOS and replaces the bottom panel on iOS.
+// Timeline, adapted to touch + pointer). On iPhone it IS the Movie tab's content
+// (the tab bar stays visible — switch tabs to leave, no Done needed); on iPad /
+// macOS it docks below the viewport as an explicit mode (with a Done button).
 // Reuses TransportBar for playback so the playhead IS the core frame.
 //
 // ONE unified lane holds both object kinds — camera keyframes (diamonds) and
-// scene markers (chips) — laid out proportionally on a time ruler and joined by
-// TRANSITIONS (duration + easing). Editing is item-centric:
+// scene markers (chips) — on a FIXED-SCALE time ruler (default ~10 s across the
+// viewport, zoomable with +/-, and horizontally SCROLLABLE for longer movies).
+// Objects are joined by TRANSITIONS (duration + easing) drawn as labeled
+// connectors. Editing is item-centric:
 //   • ◆ / palette  → append a camera keyframe / scene marker to the end.
-//   • tap an item  → seek to it;  long-press → recall / delete.
-//   • drag an item past a neighbor → reorder (ripples the timing).
+//   • tap the ruler → seek to that time;  tap an item → seek to it.
+//   • long-press an item → recall / delete;  drag an item past a neighbor →
+//     reorder (ripples the timing).
 //   • long-press a transition connector → set its duration (preset) + Smooth/
 //     Linear easing. Duration drives timing: movie length = Σ transitions.
 // Swift owns the ordered list (engine.timelineItems); every edit rebuilds the
@@ -25,12 +29,19 @@ struct TimelinePanel: View {
     /// Called when the user exits the mode (Done / close). Defaults to flipping
     /// engine.timelineMode so the caller can just drop `TimelinePanel()` in.
     var onExit: (() -> Void)? = nil
+    /// Whether to show the Done button. False on iPhone, where the timeline is
+    /// the Movie tab and the tab bar handles navigation.
+    var showsDone: Bool = true
 
     @State private var showExport = false
 
+    // Horizontal zoom: pixels-per-second = (viewportWidth / 10) * zoom, so zoom
+    // 1 fits ~10 s across the lane. +/- steps; the lane scrolls when the movie is
+    // longer than the viewport.
+    @State private var zoom: CGFloat = 1.0
+
     // Drag-to-reorder: while dragging an item we render it at `dragX` (live) and
-    // commit the reorder on release. A small minimumDistance keeps a stationary
-    // tap (seek) from starting a drag.
+    // commit the reorder on release.
     @State private var dragItemID: UUID? = nil
     @State private var dragX: CGFloat = 0
 
@@ -38,8 +49,7 @@ struct TimelinePanel: View {
     @State private var sceneRenameTarget: String? = nil
     @State private var sceneRenameText: String = ""
 
-    // Template composer (preset builders, folded into the dock). Applying a
-    // template APPENDS its items to the end of the lane.
+    // Template composer (preset builders, folded into the dock).
     @State private var composerKind = "roll"
     @State private var composerAxis = "y"
     @State private var composerDuration: Double = 8
@@ -54,9 +64,11 @@ struct TimelinePanel: View {
     #endif
 
     private let laneH: CGFloat = 44
-    private let rulerH: CGFloat = 22
+    private let rulerH: CGFloat = 24
     private var labelW: CGFloat { isCompact ? 34 : 72 }
-    private let laneSpace = "timelineLane"   // coord space for drag→x mapping
+    private let laneSpace = "timelineLane"   // coord space for drag/tap -> frame
+    private let minZoom: CGFloat = 0.05
+    private let maxZoom: CGFloat = 8.0
 
     static let durationPresets: [Double] = [0.5, 1, 2, 5, 8]
 
@@ -102,7 +114,7 @@ struct TimelinePanel: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: isCompact ? 6 : 10) {
+        HStack(spacing: isCompact ? 5 : 10) {
             Image(systemName: "clapperboard.fill")
                 .font(.system(size: 14))
                 .foregroundColor(TimelineTheme.accent)
@@ -119,6 +131,7 @@ struct TimelinePanel: View {
             Spacer(minLength: 4)
 
             addButton
+            zoomControl
             if !isCompact {
                 textButton("Produce", "film") { showExport = true }
                     .disabled(engine.timelineItems.isEmpty)
@@ -127,7 +140,7 @@ struct TimelinePanel: View {
                     .disabled(engine.timelineItems.isEmpty)
             }
             overflowMenu
-            doneButton
+            if showsDone { doneButton }
         }
         .padding(.horizontal, isCompact ? 8 : 12)
         .frame(height: 44)
@@ -139,7 +152,7 @@ struct TimelinePanel: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 15))
-                .frame(width: 34, height: 32)
+                .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -153,13 +166,44 @@ struct TimelinePanel: View {
             Label("Camera keyframe", systemImage: "plus.diamond.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .labelStyle(.iconOnly)
-                .frame(width: 34, height: 32)
+                .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundColor(TimelineTheme.accent)
         .accessibilityLabel("Add a camera keyframe of the current view")
         .help("Add a camera keyframe of the current view to the end")
+    }
+
+    // Joined -/+ zoom stepper for the time ruler.
+    private var zoomControl: some View {
+        HStack(spacing: 0) {
+            Button { setZoom(zoom / 1.6) } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .bold))
+                    .frame(width: 28, height: 30).contentShape(Rectangle())
+            }
+            .disabled(zoom <= minZoom * 1.001)
+            Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 18)
+            Button { setZoom(zoom * 1.6) } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .frame(width: 28, height: 30).contentShape(Rectangle())
+            }
+            .disabled(zoom >= maxZoom * 0.999)
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(TimelineTheme.text)
+        .background(Capsule().fill(Color.white.opacity(0.10)))
+        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        .accessibilityLabel("Zoom timeline")
+        .help("Zoom the time ruler in / out")
+    }
+
+    private func setZoom(_ z: CGFloat) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            zoom = min(max(z, minZoom), maxZoom)
+        }
     }
 
     private var overflowMenu: some View {
@@ -174,7 +218,7 @@ struct TimelinePanel: View {
         } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 15))
-                .frame(width: 30, height: 32)
+                .frame(width: 28, height: 32)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -214,11 +258,10 @@ struct TimelinePanel: View {
         .foregroundColor(TimelineTheme.text)
     }
 
-    // MARK: - The unified lane
+    // MARK: - The unified lane (fixed-scale, scrollable)
 
     private var tracksSection: some View {
         HStack(spacing: 0) {
-            // Slim left gutter (icon), aligned to the lane; ruler sits above it.
             VStack(spacing: 0) {
                 Color.clear.frame(height: rulerH)
                 HStack(spacing: 6) {
@@ -239,67 +282,95 @@ struct TimelinePanel: View {
 
             GeometryReader { geo in
                 let w = geo.size.width
-                ZStack(alignment: .topLeading) {
-                    VStack(spacing: 0) {
-                        ruler(width: w)
-                        itemLane(width: w)
+                let pps = ppsFor(w)
+                let cW = contentWidth(w, pps: pps)
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        ZStack(alignment: .topLeading) {
+                            VStack(spacing: 0) {
+                                ruler(contentW: cW, pps: pps)
+                                itemLane(contentW: cW, pps: pps)
+                            }
+                            playhead(pps: pps)
+                            // Invisible follow-anchor centered on the playhead.
+                            Color.clear
+                                .frame(width: 1, height: rulerH + laneH)
+                                .position(x: xFor(playback.currentFrame, pps: pps), y: (rulerH + laneH) / 2)
+                                .id("playhead")
+                        }
+                        .frame(width: cW, height: rulerH + laneH, alignment: .topLeading)
+                        .coordinateSpace(name: laneSpace)
                     }
-                    playhead(width: w)
+                    // Bound the scroll view's own height — a horizontal ScrollView is
+                    // otherwise vertically greedy and would absorb the panel's slack,
+                    // opening gaps above the ruler / below the lane.
+                    .frame(height: rulerH + laneH)
+                    // Follow the playhead during playback (don't fight manual scroll).
+                    .onChange(of: playback.currentFrame) { _ in
+                        if playback.isPlaying {
+                            withAnimation(.linear(duration: 0.1)) { proxy.scrollTo("playhead", anchor: .center) }
+                        }
+                    }
                 }
-                .coordinateSpace(name: laneSpace)
             }
             .frame(height: rulerH + laneH)
         }
     }
 
-    // Ruler doubles as the scrub strip: drag anywhere on it to move the playhead.
-    private func ruler(width w: CGFloat) -> some View {
-        ZStack(alignment: .bottomLeading) {
+    // Tick ruler across the whole (scrollable) content width. Tap to seek.
+    private func ruler(contentW: CGFloat, pps: CGFloat) -> some View {
+        let step = tickStep(pps: pps)
+        let count = max(1, Int((Double(contentW / pps) / step).rounded(.up)))
+        return ZStack(alignment: .bottomLeading) {
             Rectangle().fill(Color.white.opacity(0.03))
-            ForEach(0..<5) { i in
-                let frac = CGFloat(i) / 4
-                Text(timeLabel(frac))
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(TimelineTheme.dim)
-                    .offset(x: min(frac * w + 3, w - 26), y: -4)
+            ForEach(0...count, id: \.self) { i in
+                let t = Double(i) * step
+                let x = CGFloat(t) * pps
+                if x <= contentW + 1 {
+                    Rectangle().fill(TimelineTheme.dim.opacity(0.5))
+                        .frame(width: 1, height: 5)
+                        .position(x: x, y: rulerH - 3)
+                    Text(tickLabel(t))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(TimelineTheme.dim)
+                        .fixedSize()
+                        .position(x: x + (i == 0 ? 12 : 0), y: rulerH - 14)
+                }
             }
         }
-        .frame(height: rulerH)
+        .frame(width: contentW, height: rulerH)
         .overlay(alignment: .bottom) { Divider() }
         .contentShape(Rectangle())
         .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { g in engine.scrub(to: frame(atX: g.location.x, width: w)) }
-                .onEnded { _ in engine.endScrub() }
+            SpatialTapGesture(coordinateSpace: .named(laneSpace))
+                .onEnded { e in engine.seek(to: frame(atX: e.location.x, pps: pps)) }
         )
     }
 
     @ViewBuilder
-    private func itemLane(width w: CGFloat) -> some View {
+    private func itemLane(contentW: CGFloat, pps: CGFloat) -> some View {
         let items = laidOut
         ZStack(alignment: .topLeading) {
             Rectangle().fill(TimelineTheme.accent.opacity(0.05))
             if items.isEmpty {
-                Text("Tap ◆ to add a camera keyframe, or a scene below — then set the gaps between them")
+                Text("Tap ◆ to add a camera keyframe, or a scene below")
                     .font(.system(size: 10))
                     .foregroundColor(TimelineTheme.dim)
                     .padding(.leading, 10)
                     .frame(height: laneH, alignment: .leading)
             } else {
-                // Connectors first (behind the item nodes).
                 ForEach(items.dropFirst()) { laid in
                     connector(laid,
-                              prevX: clampX(xFor(items[laid.index - 1].frame, width: w), width: w),
-                              curX: clampX(xFor(laid.frame, width: w), width: w))
+                              prevX: xFor(items[laid.index - 1].frame, pps: pps),
+                              curX: xFor(laid.frame, pps: pps))
                 }
                 ForEach(items) { laid in
-                    itemNode(laid, width: w)
+                    itemNode(laid, pps: pps)
                 }
             }
         }
-        .frame(height: laneH)
+        .frame(width: contentW, height: laneH)
         .overlay(alignment: .bottom) { Divider().opacity(0.4) }
-        .clipped()
     }
 
     // The transition INTO `laid.item` (the gap from the previous item), shown as
@@ -349,9 +420,9 @@ struct TimelinePanel: View {
     }
 
     // A camera keyframe (diamond) or scene marker (chip) at its timeline frame.
-    private func itemNode(_ laid: Laid, width w: CGFloat) -> some View {
+    private func itemNode(_ laid: Laid, pps: CGFloat) -> some View {
         let dragging = dragItemID == laid.item.id
-        let x = dragging ? clampX(dragX, width: w) : clampX(xFor(laid.frame, width: w), width: w)
+        let x = dragging ? dragX : xFor(laid.frame, pps: pps)
         return Group {
             switch laid.item.kind {
             case .camera:
@@ -363,8 +434,9 @@ struct TimelinePanel: View {
         .scaleEffect(dragging ? 1.25 : 1)
         .frame(width: nodeHitWidth(laid), height: laneH)
         .contentShape(Rectangle())
-        .position(x: x, y: laneH / 2)
-        .gesture(reorderDrag(laid, width: w))
+        .position(x: max(x, 7), y: laneH / 2)
+        // highPriority so a drag on an item reorders instead of scrolling the lane.
+        .highPriorityGesture(reorderDrag(laid, pps: pps))
         .onTapGesture { engine.seekToItem(laid.item.id) }
         .contextMenu { itemMenu(laid) }
     }
@@ -390,7 +462,6 @@ struct TimelinePanel: View {
         .accessibilityLabel("Scene marker \(name)")
     }
 
-    // Wider hit target for scene chips (variable width) than for diamonds.
     private func nodeHitWidth(_ laid: Laid) -> CGFloat {
         if case .scene = laid.item.kind { return 88 }
         return 30
@@ -417,8 +488,8 @@ struct TimelinePanel: View {
 
     // Drag an item past a neighbor to reorder. Live x tracked in the lane space;
     // on release the target index = # of other items sitting left of the drop.
-    private func reorderDrag(_ laid: Laid, width w: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .named(laneSpace))
+    private func reorderDrag(_ laid: Laid, pps: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .named(laneSpace))
             .onChanged { g in
                 if dragItemID == nil { dragItemID = laid.item.id }
                 dragX = g.location.x
@@ -426,16 +497,14 @@ struct TimelinePanel: View {
             .onEnded { _ in
                 let dropX = dragX
                 dragItemID = nil
-                let others = engine.itemFrames().enumerated()
-                    .filter { $0.offset != laid.index }
-                let target = others.filter { xFor($0.element, width: w) < dropX }.count
+                let others = engine.itemFrames().enumerated().filter { $0.offset != laid.index }
+                let target = others.filter { xFor($0.element, pps: pps) < dropX }.count
                 engine.moveItem(from: laid.index, to: target)
             }
     }
 
     // MARK: - Scene palette (source)
 
-    // Saved scenes. Tap (or "Add") appends a scene marker to the end of the lane.
     @ViewBuilder private var scenePaletteStrip: some View {
         if !engine.sceneNames.isEmpty {
             HStack(spacing: 0) {
@@ -488,40 +557,48 @@ struct TimelinePanel: View {
     }
 
     // MARK: - Template composer (folded-in preset builders → Append)
+    //
+    // The parameter chips scroll horizontally so their labels never wrap; Append
+    // stays pinned on the right.
 
     private var composer: some View {
         HStack(spacing: 8) {
-            Menu {
-                Button("Camera Roll") { composerKind = "roll" }
-                Button("Camera Rock") { composerKind = "rock" }
-                Button("Scene loop")  { composerKind = "scenes" }
-            } label: { composerChip(composerLabel, composerIcon) }
-
-            if composerKind == "roll" || composerKind == "rock" {
-                Menu {
-                    ForEach(["x", "y", "z"], id: \.self) { a in
-                        Button(a.uppercased()) { composerAxis = a }
-                    }
-                } label: { composerChip(composerAxis.uppercased(), "arrow.triangle.2.circlepath") }
-                Menu {
-                    ForEach([4, 8, 16], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
-                } label: { composerChip("\(Int(composerDuration))s", "clock") }
-                if composerKind == "rock" {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
                     Menu {
-                        ForEach([30, 60, 90], id: \.self) { a in Button("\(a)°") { composerAngle = Double(a) } }
-                    } label: { composerChip("\(Int(composerAngle))°", "angle") }
-                }
-            } else if composerKind == "scenes" {
-                Menu {
-                    ForEach([2, 3, 5], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
-                } label: { composerChip("\(Int(composerSecPerScene))s", "clock") }
-            }
+                        Button("Camera Roll") { composerKind = "roll" }
+                        Button("Camera Rock") { composerKind = "rock" }
+                        Button("Scene loop")  { composerKind = "scenes" }
+                    } label: { composerChip(composerLabel, composerIcon) }
 
-            Spacer(minLength: 0)
+                    if composerKind == "roll" || composerKind == "rock" {
+                        Menu {
+                            ForEach(["x", "y", "z"], id: \.self) { a in
+                                Button(a.uppercased()) { composerAxis = a }
+                            }
+                        } label: { composerChip(composerAxis.uppercased(), "arrow.triangle.2.circlepath") }
+                        Menu {
+                            ForEach([4, 8, 16], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
+                        } label: { composerChip("\(Int(composerDuration))s", "clock") }
+                        if composerKind == "rock" {
+                            Menu {
+                                ForEach([30, 60, 90], id: \.self) { a in Button("\(a)°") { composerAngle = Double(a) } }
+                            } label: { composerChip("\(Int(composerAngle))°", "angle") }
+                        }
+                    } else if composerKind == "scenes" {
+                        Menu {
+                            ForEach([2, 3, 5], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
+                        } label: { composerChip("\(Int(composerSecPerScene))s", "clock") }
+                    }
+                }
+                .padding(.vertical, 1)
+            }
 
             Button(action: appendComposer) {
                 Label("Append", systemImage: "plus.rectangle.on.rectangle")
                     .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .buttonStyle(.borderedProminent)
             .tint(TimelineTheme.accent)
@@ -533,10 +610,11 @@ struct TimelinePanel: View {
     private func composerChip(_ text: String, _ icon: String) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon).font(.system(size: 10))
-            Text(text)
+            Text(text).lineLimit(1)
             Image(systemName: "chevron.down").font(.system(size: 8))
         }
         .font(.system(size: 12))
+        .fixedSize()
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(Capsule().fill(Color.white.opacity(0.10)))
         .foregroundColor(TimelineTheme.text)
@@ -570,44 +648,52 @@ struct TimelinePanel: View {
 
     // MARK: - Playhead / geometry helpers
 
-    private func playhead(width w: CGFloat) -> some View {
-        let x = clampX(xFor(playback.currentFrame, width: w), width: w)
+    private func playhead(pps: CGFloat) -> some View {
+        let x = xFor(playback.currentFrame, pps: pps)
         return ZStack(alignment: .top) {
-            Rectangle()
-                .fill(TimelineTheme.accent)
-                .frame(width: 2)
-            Triangle()
-                .fill(TimelineTheme.accent)
-                .frame(width: 10, height: 7)
-                .offset(y: -1)
+            Rectangle().fill(TimelineTheme.accent).frame(width: 2)
+            Triangle().fill(TimelineTheme.accent).frame(width: 10, height: 7).offset(y: -1)
         }
         .frame(width: 10, height: rulerH + laneH, alignment: .top)
-        .offset(x: x - 5)
+        .position(x: max(x, 1), y: (rulerH + laneH) / 2)
         .allowsHitTesting(false)
     }
 
-    private func xFor(_ frame: Int, width w: CGFloat) -> CGFloat {
-        let count = max(playback.frameCount, 1)
-        guard count > 1 else { return 0 }
-        let f = min(max(frame, 1), count)
-        return CGFloat(f - 1) / CGFloat(count - 1) * w
+    // pixels-per-second: zoom 1 fits ~10 s across the viewport.
+    private func ppsFor(_ w: CGFloat) -> CGFloat { max(w, 1) / 10 * zoom }
+
+    private var durationSeconds: Double {
+        Double(max(engine.timelineTotalFrames - 1, 0)) / max(playback.movieFPS, 1)
     }
 
-    private func frame(atX x: CGFloat, width w: CGFloat) -> Int {
-        let count = max(playback.frameCount, 1)
-        guard w > 0, count > 1 else { return 1 }
-        let frac = min(max(x / w, 0), 1)
-        return Int((frac * CGFloat(count - 1)).rounded()) + 1
+    // Content spans the movie, but never less than the viewport (so a short movie
+    // still shows a full ruler); a little end pad keeps the last item off the edge.
+    private func contentWidth(_ w: CGFloat, pps: CGFloat) -> CGFloat {
+        max(w, CGFloat(durationSeconds) * pps + 24)
     }
 
-    private func clampX(_ x: CGFloat, width w: CGFloat) -> CGFloat {
-        min(max(x, 7), max(w - 7, 7))
+    private func xFor(_ frame: Int, pps: CGFloat) -> CGFloat {
+        let fps = max(playback.movieFPS, 1)
+        return CGFloat(max(frame - 1, 0)) / CGFloat(fps) * pps
     }
 
-    private func timeLabel(_ frac: CGFloat) -> String {
-        let fps = max(playback.movieFPS, 0.1)
-        let secs = Double(max(playback.frameCount, 1) - 1) / fps * Double(frac)
-        return secs >= 10 ? String(format: "%.0fs", secs) : String(format: "%.1fs", secs)
+    private func frame(atX x: CGFloat, pps: CGFloat) -> Int {
+        let fps = max(playback.movieFPS, 1)
+        let total = max(playback.frameCount, 1)
+        let f = 1 + Int((max(x, 0) / pps * CGFloat(fps)).rounded())
+        return min(max(f, 1), total)
+    }
+
+    // Tick spacing: smallest "nice" step whose on-screen width is >= ~55pt.
+    private func tickStep(pps: CGFloat) -> Double {
+        let candidates: [Double] = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+        for c in candidates where CGFloat(c) * pps >= 55 { return c }
+        return candidates.last!
+    }
+
+    private func tickLabel(_ t: Double) -> String {
+        if t < 1 && t > 0 { return String(format: "%.1fs", t) }
+        return "\(Int(t))s"
     }
 
     private func fmtSeconds(_ s: Double) -> String {
