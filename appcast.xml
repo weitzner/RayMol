@@ -6,38 +6,21 @@
     <description>RayMol macOS updates</description>
     <language>en</language>
     <item>
-      <title>RayMol 1.5.0</title>
+      <title>RayMol 1.5.1</title>
       <description xml:lang="en" sparkle:format="markdown"><![CDATA[
-## RayMol 1.5.0
+## RayMol 1.5.1
 
-A feature release: richer surface rendering, a reorganized inspector, and a batch of Metal fidelity fixes that bring cartoons, surfaces, and shadows closer to desktop PyMOL.
+A rendering fix for cartoons under shadows.
 
-### Surfaces
-- **Outer-contour outline.** Draw a crisp silhouette around surfaces — and it holds up on transparent and clipped surfaces, not just opaque ones — *Scene / Surface card*.
-- **Contour color control.** Pick the outline color directly on the Surface card.
-- **Per-representation clipping.** Clip a surface independently of the global slab, with the solid-interior cap following the per-rep clip.
-
-### Inspector
-- **Segmented section switcher on macOS & iPad**, mirroring the iPhone tabs — a faster way to move between Scene, Objects, and Selections.
-- **Per-object "Flat sheets" toggle** on the Cartoon card.
-- **Camera rotation-axis (X/Y/Z) selector.**
-
-### Rendering fidelity (Metal)
-- **Flat β-sheets now render flat**, matching desktop PyMOL's cartoon sheets.
-- **Per-representation line width** is honored by the Metal renderer.
-- **Ambient occlusion no longer draws contour lines on cartoons**, and **shadows no longer draw a serrated lighter border** along helix and stick silhouettes.
-- **Surfaces return to opaque when recolored** (the transparency flag is reset), and a surface's per-rep clip no longer leaks onto the cartoon.
-
-### Command line
-- **Clicking the viewport no longer steals focus** from the command line, and **up/down history** works again — type, manipulate, keep typing.
+- **Fixed: dark triangles on cartoons with shadows on.** With Metal shadows enabled, the coarse cartoon mesh could self-shadow into a faceted, triangulated look. Shadows now use a scale-aware normal-offset bias so cartoons stay clean — while shadows cast *between* elements (helix onto sheet, sticks onto surface) are preserved.
 
 Built on the open-source PyMOL engine. Updates install automatically via the in-app updater (**Check for Updates…** in the app menu).
 ]]></description>
-      <pubDate>Wed, 01 Jul 2026 23:16:49 +0000</pubDate>
-      <sparkle:version>14</sparkle:version>
-      <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
+      <pubDate>Thu, 02 Jul 2026 17:28:06 +0000</pubDate>
+      <sparkle:version>15</sparkle:version>
+      <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.5.0/RayMol-1.5.0.dmg" type="application/octet-stream" sparkle:edSignature="tA0TqoxLw5EI4bFq1fCQtJbqU+hjhyUJMbzmOUhcNdbpYNP/YKZqnIKY5rDK2PaUQwf5ygC9uWiRT5ng3r4XDQ==" length="55877806" />
+      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.5.1/RayMol-1.5.1.dmg" type="application/octet-stream" sparkle:edSignature="80rMI4Qiqnkbza4Sz+6687YGC/b7655R+/ArQWdtVWE+9H/j1gVydzPVftKPUJcN3UqIqUoHjcW+4+0ctHdmCA==" length="55881562" />
     </item>
   </channel>
 </rss>
