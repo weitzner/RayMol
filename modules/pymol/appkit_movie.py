@@ -74,6 +74,55 @@ def clear_keyframe(frame, linear=0):
         print('MOVIE_ERR:' + str(e))
 
 
+def place_scene(frame, name, linear=0):
+    """Place scene `name` as a timeline marker at `frame`. Moves the playhead
+    there, recalls the scene (so the live camera == the scene's camera), then
+    stores an mview keyframe TAGGED with the scene and reinterpolates. Because
+    it is an mview keyframe the camera interpolates into/out of it; because it
+    carries scene= the scene's reps/colors cut in at playback (PyMOL's native
+    scene-movie behaviour)."""
+    try:
+        n = int(frame)
+        power, lin = _ease(linear)
+        cmd.frame(n)                 # playhead to n first (applies interpolation)
+        cmd.scene(name, 'recall')    # now the live view+reps ARE the scene
+        cmd.mview('store', first=n, scene=name)
+        cmd.mview('reinterpolate', power=power, linear=lin)
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
+def move_keyframe(old, new, linear=0):
+    """Re-time a plain camera keyframe from frame `old` to frame `new`, keeping
+    its stored view. Reads the view at the old keyframe, clears it, and re-stores
+    that view at the new frame, then reinterpolates."""
+    try:
+        o = int(old); n = int(new)
+        if o == n:
+            return
+        power, lin = _ease(linear)
+        cmd.frame(o)                       # at an exact keyframe get_view == stored view
+        v = cmd.get_view()
+        cmd.mview('clear', first=o, last=o)
+        cmd.frame(n)                       # interpolation at n (from remaining keyframes)
+        cmd.set_view(v)                    # override with the moved keyframe's view
+        cmd.mview('store', first=n)
+        cmd.mview('reinterpolate', power=power, linear=lin)
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
+def move_scene_marker(old, name, new, linear=0):
+    """Re-time a scene marker from frame `old` to frame `new`. Clears the old
+    keyframe and re-places the scene at the new frame (see place_scene)."""
+    try:
+        o = int(old)
+        cmd.mview('clear', first=o, last=o)
+        place_scene(new, name, linear)
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
 def make_movie(kind, duration=12.0, angle=30.0, axis='y', loop=1,
                factor=1, pause=2.0, scenes=None, reset=1):
     """Author a movie via the high-level movie.add_* builders (the desktop

@@ -6,10 +6,13 @@
 // overlay on iOS. Reuses TransportBar for playback so the playhead IS the core
 // frame — this view only adds the tracks above it.
 //
-// Phase 1 tracks:
-//   • Camera — manual mview keyframes (engine.cameraKeyframes) as tappable
-//     diamonds; drag the ruler to scrub; long-press a diamond to delete.
-//   • Scenes — saved scenes (engine.sceneNames) as chips that recall on tap.
+// Tracks (drag-and-drop to re-time):
+//   • Camera — manual mview keyframes (engine.cameraKeyframes) as diamonds:
+//     drag to re-time, tap to seek, long-press to delete; drag the ruler to scrub.
+//   • Scenes — scenes placed AS time markers (engine.sceneMarkers), backed by
+//     `mview store, scene=` so the camera flies between scenes while reps cut.
+//     A palette strip below is the source: drag a chip onto the lane (macOS) or
+//     tap to drop it at the playhead (touch); markers then drag to re-time.
 // Templates (the MovieBuilderSheet presets) drop a ready-made movie; Produce
 // hands the result to MovieExportSheet. Per-segment easing, per-object tracks and
 // Record mode are the next phases (see the design study).
@@ -28,6 +31,12 @@ struct TimelinePanel: View {
     @State private var showBuilder = false
     @State private var showExport = false
 
+    // Drag-to-re-time state: while dragging a diamond or scene marker we render
+    // it at `dragToFrame` (live) and commit the move on release.
+    private enum DragItem: Equatable { case camera(Int); case scene(Int, String) }
+    @State private var dragItem: DragItem? = nil
+    @State private var dragToFrame: Int = 1
+
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
     private var isCompact: Bool { hSize == .compact }
@@ -38,12 +47,14 @@ struct TimelinePanel: View {
     private let laneH: CGFloat = 40
     private let rulerH: CGFloat = 22
     private var labelW: CGFloat { isCompact ? 66 : 96 }
+    private let laneSpace = "timelineLane"   // coord space for drag→frame mapping
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Rectangle().fill(TimelineTheme.accent.opacity(0.35)).frame(height: 1)
             tracksSection
+            scenePaletteStrip
             Divider()
             TransportBar()
         }
@@ -210,10 +221,11 @@ struct TimelinePanel: View {
                     VStack(spacing: 0) {
                         ruler(width: w)
                         cameraLane(width: w)
-                        scenesLane
+                        scenesLane(width: w)
                     }
                     playhead(width: w)
                 }
+                .coordinateSpace(name: laneSpace)
             }
             .frame(height: rulerH + laneH * 2)
         }
@@ -277,58 +289,159 @@ struct TimelinePanel: View {
     }
 
     private func keyframeDiamond(_ f: Int, width w: CGFloat) -> some View {
+        let dragging = dragItem == .camera(f)
+        let shownFrame = dragging ? dragToFrame : f
         let isCurrent = f == playback.currentFrame
-        return Button {
-            engine.seek(to: f)
-        } label: {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(isCurrent ? TimelineTheme.text : TimelineTheme.accent)
-                .frame(width: 12, height: 12)
-                .rotationEffect(.degrees(45))
-                .shadow(color: .black.opacity(0.4), radius: 0.5)
-        }
-        .buttonStyle(.plain)
-        .position(x: clampX(xFor(f, width: w), width: w), y: laneH / 2)
-        .contextMenu {
-            Text("Keyframe · frame \(f)")
-            Button(role: .destructive) {
-                engine.deleteKeyframe(at: f, linear: interpLinear)
-            } label: { Label("Delete keyframe", systemImage: "trash") }
-        }
-        .accessibilityLabel("Camera keyframe at frame \(f)")
+        return RoundedRectangle(cornerRadius: 2)
+            .fill(isCurrent ? TimelineTheme.text : TimelineTheme.accent)
+            .frame(width: 12, height: 12)
+            .rotationEffect(.degrees(45))
+            .shadow(color: .black.opacity(0.4), radius: 0.5)
+            .scaleEffect(dragging ? 1.3 : 1)
+            .frame(width: 28, height: laneH)          // larger, easier drag/tap target
+            .contentShape(Rectangle())
+            .position(x: clampX(xFor(shownFrame, width: w), width: w), y: laneH / 2)
+            .gesture(reTimeDrag(width: w, item: { .camera(f) },
+                                commit: { to in engine.moveKeyframe(from: f, to: to, linear: interpLinear) }))
+            .onTapGesture { engine.seek(to: f) }
+            .contextMenu {
+                Text("Keyframe · frame \(f)")
+                Button(role: .destructive) {
+                    engine.deleteKeyframe(at: f, linear: interpLinear)
+                } label: { Label("Delete keyframe", systemImage: "trash") }
+            }
+            .accessibilityLabel("Camera keyframe at frame \(f)")
     }
 
-    private var scenesLane: some View {
-        ZStack(alignment: .leading) {
+    // Shared re-time drag for diamonds & scene markers. A small minimumDistance
+    // keeps a stationary tap from starting a drag, so tap-to-seek still works.
+    // Location is read in the lane coordinate space and mapped to a frame.
+    private func reTimeDrag(width w: CGFloat, item: @escaping () -> DragItem,
+                            commit: @escaping (Int) -> Void) -> some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named(laneSpace))
+            .onChanged { g in
+                if dragItem == nil { dragItem = item() }
+                dragToFrame = frame(atX: g.location.x, width: w)
+            }
+            .onEnded { _ in
+                let to = dragToFrame
+                dragItem = nil
+                commit(to)
+            }
+    }
+
+    // Time-positioned scene markers (mirrors the camera lane). Markers are placed
+    // from the palette strip below; drag to re-time, tap to seek, long-press to
+    // remove. On macOS a palette chip can be dropped straight onto a time here.
+    private func scenesLane(width w: CGFloat) -> some View {
+        let lane = ZStack(alignment: .topLeading) {
             Rectangle().fill(Color.white.opacity(0.02))
-            if engine.sceneNames.isEmpty {
-                Text("No saved scenes — store scenes from the Scene card")
+            if engine.sceneMarkers.isEmpty {
+                Text(engine.sceneNames.isEmpty
+                     ? "Store scenes, then drop them onto the timeline"
+                     : (isCompact ? "Tap a scene below to drop it here"
+                                  : "Drag a scene from below onto the timeline"))
                     .font(.system(size: 10))
                     .foregroundColor(TimelineTheme.dim)
                     .padding(.leading, 10)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(engine.sceneNames, id: \.self) { name in
-                            Button { engine.recallScene(name) } label: {
-                                Text(name)
-                                    .font(.system(size: 11))
-                                    .lineLimit(1)
-                                    .padding(.horizontal, 10).padding(.vertical, 5)
-                                    .background(
-                                        Capsule().fill(engine.currentScene == name
-                                                       ? TimelineTheme.accent
-                                                       : Color.white.opacity(0.12)))
-                                    .foregroundColor(engine.currentScene == name ? .black : TimelineTheme.text)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                }
+                    .frame(height: laneH, alignment: .leading)
+            }
+            ForEach(engine.sceneMarkers) { m in
+                sceneMarkerChip(m, width: w)
             }
         }
         .frame(height: laneH)
+        .overlay(alignment: .bottom) { Divider().opacity(0.4) }
+        .clipped()
+        #if os(macOS)
+        return lane.dropDestination(for: String.self) { items, location in
+            guard let name = items.first else { return false }
+            engine.placeScene(name, at: frame(atX: location.x, width: w), linear: interpLinear)
+            return true
+        }
+        #else
+        return lane
+        #endif
+    }
+
+    private func sceneMarkerChip(_ m: PyMOLEngine.SceneMarker, width w: CGFloat) -> some View {
+        let dragging = dragItem == .scene(m.frame, m.name)
+        let shownFrame = dragging ? dragToFrame : m.frame
+        return HStack(spacing: 3) {
+            Image(systemName: "photo.fill").font(.system(size: 7))
+            Text(m.name).font(.system(size: 10, weight: .medium)).lineLimit(1)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(Capsule().fill(TimelineTheme.accent.opacity(dragging ? 0.95 : 0.7)))
+        .foregroundColor(.black)
+        .fixedSize()
+        .scaleEffect(dragging ? 1.08 : 1)
+        .position(x: clampX(xFor(shownFrame, width: w), width: w), y: laneH / 2)
+        .gesture(reTimeDrag(width: w, item: { .scene(m.frame, m.name) },
+                            commit: { to in engine.moveSceneMarker(m.name, from: m.frame, to: to, linear: interpLinear) }))
+        .onTapGesture { engine.seek(to: m.frame) }
+        .contextMenu {
+            Text("Scene · \(m.name) · frame \(m.frame)")
+            Button { engine.recallScene(m.name) } label: { Label("Recall now", systemImage: "eye") }
+            Button(role: .destructive) {
+                engine.deleteSceneMarker(at: m.frame, linear: interpLinear)
+            } label: { Label("Remove from timeline", systemImage: "trash") }
+        }
+        .accessibilityLabel("Scene marker \(m.name) at frame \(m.frame)")
+    }
+
+    // Source palette of saved scenes. Tap to drop at the playhead (all platforms);
+    // on macOS also draggable straight onto the Scenes lane at a time position.
+    @ViewBuilder private var scenePaletteStrip: some View {
+        if !engine.sceneNames.isEmpty {
+            HStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.stack").font(.system(size: 11)).foregroundColor(TimelineTheme.dim)
+                    Text("Scenes").font(.system(size: isCompact ? 10 : 11)).foregroundColor(TimelineTheme.text)
+                    Spacer(minLength: 0)
+                }
+                .frame(width: labelW)
+                .padding(.horizontal, 8)
+
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(engine.sceneNames, id: \.self) { name in
+                            paletteChip(name)
+                        }
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 6)
+                }
+            }
+            .frame(height: 34)
+            .overlay(alignment: .top) { Divider().opacity(0.4) }
+        }
+    }
+
+    private func paletteChip(_ name: String) -> some View {
+        let chip = Text(name)
+            .font(.system(size: 11)).lineLimit(1)
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(Capsule().fill(engine.currentScene == name
+                                       ? TimelineTheme.accent : Color.white.opacity(0.12)))
+            .foregroundColor(engine.currentScene == name ? .black : TimelineTheme.text)
+            .contentShape(Capsule())
+            .onTapGesture { dropSceneAtPlayhead(name) }
+            .contextMenu {
+                Button { engine.recallScene(name) } label: { Label("Recall (preview)", systemImage: "eye") }
+                Button { dropSceneAtPlayhead(name) } label: { Label("Add at playhead", systemImage: "plus") }
+            }
+        #if os(macOS)
+        return chip.draggable(name)
+        #else
+        return chip
+        #endif
+    }
+
+    private func dropSceneAtPlayhead(_ name: String) {
+        if playback.frameCount <= 1 { engine.newTimeline(seconds: 10) }
+        engine.placeScene(name, at: playback.currentFrame, linear: interpLinear)
     }
 
     private func playhead(width w: CGFloat) -> some View {
