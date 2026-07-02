@@ -188,6 +188,32 @@ final class PyMOLEngine: ObservableObject {
         var id: Int { frame }   // one keyframe per frame → frame is a stable id
     }
     @Published var sceneMarkers: [SceneMarker] = []
+
+    // MARK: Unified timeline track
+    //
+    // The docked TimelinePanel edits ONE ordered lane of "objects" — camera
+    // keyframes and scene markers — joined by transitions (duration + easing).
+    // Swift is the source of truth for the ORDER, TIMING and EASING (the things
+    // the UI edits); the heavy camera view matrices live in Python
+    // (appkit_movie._views) keyed by each camera item's UUID. Every edit
+    // recomputes frames from the transition durations and rebuilds the whole
+    // core movie via appkit_movie.rebuild. Session-scoped, like the legacy
+    // tracks above (not reconstructed from a reloaded .pse).
+    struct Transition: Equatable {
+        var seconds: Double = 2.0    // gap from the previous item to this one
+        var linear: Bool = false     // false = smooth (eased) default
+    }
+    struct TimelineItem: Identifiable, Equatable {
+        enum Kind: Equatable { case camera; case scene(name: String) }
+        let id: UUID
+        var kind: Kind
+        var transition: Transition   // transition INTO this item (item[0]'s ignored)
+        init(id: UUID = UUID(), kind: Kind, transition: Transition = Transition()) {
+            self.id = id; self.kind = kind; self.transition = transition
+        }
+    }
+    @Published var timelineItems: [TimelineItem] = []
+
     // While the user drags the scrubber, the poll must NOT overwrite
     // currentFrame (classic two-way-binding fight). Set on drag start, cleared
     // shortly after release so the next poll can re-sync.
@@ -300,15 +326,24 @@ final class PyMOLEngine: ObservableObject {
             DispatchQueue.main.async { [weak self] in self?.timelineMode = true }
         }
 
-        // Test affordance: append one or more templates at launch (through the real
-        // appendTemplate path) so the decompose-onto-tracks can be screenshotted.
-        // PYMOL_AUTOAPPEND=roll  or  roll,scenes  (waits for AUTOCMD scenes to load).
+        // Test affordance: build the unified lane at launch so it can be
+        // screenshotted. PYMOL_AUTOAPPEND is a comma list of:
+        //   roll | rock  → appendCameraTemplate (4 camera items)
+        //   scenes       → appendScenesTemplate (a scene item per saved scene)
+        //   cam          → captureCameraItem (one camera keyframe of the view)
+        // (waits for AUTOCMD scenes to load first).
         if let seq = ProcessInfo.processInfo.environment["PYMOL_AUTOAPPEND"] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
                 guard let self = self else { return }
                 self.timelineMode = true
-                for kind in seq.split(separator: ",") {
-                    self.appendTemplate(kind: String(kind).trimmingCharacters(in: .whitespaces))
+                for raw in seq.split(separator: ",") {
+                    switch String(raw).trimmingCharacters(in: .whitespaces) {
+                    case "roll":   self.appendCameraTemplate(kind: "roll", duration: 8, axis: "y", angle: 30)
+                    case "rock":   self.appendCameraTemplate(kind: "rock", duration: 8, axis: "y", angle: 30)
+                    case "scenes": self.appendScenesTemplate(secondsPerScene: 3)
+                    case "cam":    self.captureCameraItem()
+                    default: break
+                    }
                 }
             }
         }
@@ -1340,6 +1375,168 @@ final class PyMOLEngine: ObservableObject {
         runPython("from pymol import appkit_movie as _am\n"
             + "_am.clear_keyframe(\(frame), linear=\(linear ? 1 : 0))")
         sceneMarkers.removeAll { $0.frame == frame }
+    }
+
+    // MARK: - Unified timeline track ops
+    //
+    // The docked TimelinePanel's single lane. Every mutation ends in
+    // rebuildMovie(), which recomputes frames from the transition durations and
+    // rebuilds the entire core movie from `timelineItems` (Swift is the source
+    // of truth). Camera views live in appkit_movie._views, keyed by item UUID.
+
+    // Cumulative 1-based frame of each item, derived from the transition
+    // durations: item[0] sits at frame 1 (its inbound transition is ignored);
+    // each later item is `transition.seconds` (× fps) past the previous, forced
+    // strictly increasing so mview keyframes never collide. [] when empty.
+    func itemFrames() -> [Int] {
+        guard !timelineItems.isEmpty else { return [] }
+        let fps = max(playback.movieFPS, 1)
+        var frames: [Int] = []
+        var acc = 0.0
+        for (i, it) in timelineItems.enumerated() {
+            if i == 0 { frames.append(1); continue }
+            acc += max(it.transition.seconds, 0.1)
+            let f = 1 + Int((acc * fps).rounded())
+            frames.append(max((frames.last ?? 0) + 1, f))
+        }
+        return frames
+    }
+
+    var timelineTotalFrames: Int { itemFrames().last ?? 1 }
+
+    // Rebuild the whole core movie from `timelineItems`. Serializes an ordered
+    // spec (camera → UUID into _views; scene → base64 name) with each item's
+    // inbound-transition easing, base64-wrapped so scene names / JSON can't break
+    // the Python literal. Mirrors playback.frameCount immediately (the ~10/s poll
+    // would otherwise lag the ruler a beat).
+    func rebuildMovie() {
+        guard isReady else { return }
+        if timelineItems.isEmpty {
+            // "[]" → clears the movie (see appkit_movie.rebuild).
+            runPython("from pymol import appkit_movie as _am\n_am.rebuild('W10=')")
+            playback.frameCount = 1
+            playback.currentFrame = 1
+            return
+        }
+        let frames = itemFrames()
+        var parts: [String] = []
+        for (i, it) in timelineItems.enumerated() {
+            let f = frames[i]
+            let ease = it.transition.linear
+                ? "\"power\":1.0,\"linear\":1"
+                : "\"power\":0.0,\"linear\":0"
+            switch it.kind {
+            case .camera:
+                parts.append("{\"frame\":\(f),\"cam\":\"\(it.id.uuidString)\",\(ease)}")
+            case .scene(let name):
+                let b64 = Data(name.utf8).base64EncodedString()
+                parts.append("{\"frame\":\(f),\"scene\":\"\(b64)\",\(ease)}")
+            }
+        }
+        let json = "[" + parts.joined(separator: ",") + "]"
+        let jb64 = Data(json.utf8).base64EncodedString()
+        runPython("import base64 as _b64\nfrom pymol import appkit_movie as _am\n"
+            + "_am.rebuild(_b64.b64decode('\(jb64)').decode('utf-8'))")
+        playback.frameCount = frames.last ?? 1
+        playback.currentFrame = 1
+    }
+
+    // Append a camera keyframe of the CURRENT view to the end of the lane.
+    func captureCameraItem() {
+        guard isReady else { return }
+        let item = TimelineItem(kind: .camera)
+        runPython("from pymol import appkit_movie as _am\n_am.capture_view('\(item.id.uuidString)')")
+        timelineItems.append(item)
+        rebuildMovie()
+        seekToItem(item.id)
+    }
+
+    // Append a scene marker (from the palette) to the end of the lane. The
+    // camera flies into the scene and its reps cut in at playback.
+    func appendSceneItem(_ name: String) {
+        guard isReady, !name.isEmpty else { return }
+        let item = TimelineItem(kind: .scene(name: name))
+        timelineItems.append(item)
+        rebuildMovie()
+        seekToItem(item.id)
+    }
+
+    // Reorder: move the item at `from` to final index `to` (drag past a
+    // neighbor). Ripples all frames + one rebuild.
+    func moveItem(from: Int, to: Int) {
+        guard timelineItems.indices.contains(from) else { return }
+        let clamped = min(max(to, 0), timelineItems.count - 1)
+        guard from != clamped else { return }
+        let it = timelineItems.remove(at: from)
+        timelineItems.insert(it, at: clamped)
+        rebuildMovie()
+    }
+
+    func deleteItem(_ id: UUID) {
+        guard let idx = timelineItems.firstIndex(where: { $0.id == id }) else { return }
+        let it = timelineItems.remove(at: idx)
+        if case .camera = it.kind {
+            runPython("from pymol import appkit_movie as _am\n_am.forget_view('\(id.uuidString)')")
+        }
+        rebuildMovie()
+    }
+
+    // Edit the transition INTO `id` (duration + easing) — the long-press config.
+    func setTransition(_ id: UUID, seconds: Double, linear: Bool) {
+        guard let idx = timelineItems.firstIndex(where: { $0.id == id }) else { return }
+        timelineItems[idx].transition = Transition(seconds: seconds, linear: linear)
+        rebuildMovie()
+    }
+
+    func frameForItem(_ id: UUID) -> Int? {
+        guard let idx = timelineItems.firstIndex(where: { $0.id == id }) else { return nil }
+        let frames = itemFrames()
+        return frames.indices.contains(idx) ? frames[idx] : nil
+    }
+
+    func seekToItem(_ id: UUID) {
+        if let f = frameForItem(id) { seek(to: f) }
+    }
+
+    // Append a camera Roll/Rock as a run of 4 camera items joined by equal
+    // transitions that sum to `duration`. Python computes the waypoint views
+    // (spin/rock around the current view) under Swift-generated UUIDs.
+    func appendCameraTemplate(kind: String, duration: Double, axis: String, angle: Double) {
+        guard isReady else { return }
+        let count = 4
+        let ids = (0..<count).map { _ in UUID() }
+        let idsJSON = "[" + ids.map { "\"\($0.uuidString)\"" }.joined(separator: ",") + "]"
+        let idsB64 = Data(idsJSON.utf8).base64EncodedString()
+        runPython("import base64 as _b64\nfrom pymol import appkit_movie as _am\n"
+            + "_am.capture_template_views(_b64.b64decode('\(idsB64)').decode('utf-8'), "
+            + "'\(kind)', axis='\(axis)', angle=\(angle))")
+        let per = max(duration / Double(count - 1), 0.2)   // 3 gaps span the duration
+        for id in ids {
+            timelineItems.append(TimelineItem(id: id, kind: .camera,
+                                              transition: Transition(seconds: per, linear: false)))
+        }
+        rebuildMovie()
+    }
+
+    // Append a scene marker per saved scene, each `secondsPerScene` apart.
+    func appendScenesTemplate(secondsPerScene: Double, scenes: [String]? = nil) {
+        guard isReady else { return }
+        let names = scenes ?? sceneNames
+        guard !names.isEmpty else { return }
+        for nm in names {
+            timelineItems.append(TimelineItem(kind: .scene(name: nm),
+                                              transition: Transition(seconds: secondsPerScene, linear: false)))
+        }
+        rebuildMovie()
+    }
+
+    // Empty the unified lane and clear the core movie + stored views.
+    func clearMovieItems() {
+        guard isReady else { return }
+        timelineItems.removeAll()
+        runPython("from pymol import appkit_movie as _am\n_am.forget_all_views()\n_am.reset_movie()")
+        playback.frameCount = 1
+        playback.currentFrame = 1
     }
 
     // MARK: - Selection builder support

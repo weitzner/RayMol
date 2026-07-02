@@ -1,21 +1,20 @@
 // TimelinePanel.swift — the docked "movie studio" (Timeline mode).
 //
-// Promotes RayMol's linear frame transport into a multi-track composition editor
-// (the PyMOL 3 Timeline, adapted to touch + pointer). Shown only while
-// engine.timelineMode is on; docks below the viewport on macOS and as a bottom
-// overlay on iOS. Reuses TransportBar for playback so the playhead IS the core
-// frame — this view only adds the tracks above it.
+// Promotes RayMol's linear frame transport into a composition editor (the PyMOL
+// Timeline, adapted to touch + pointer). Shown only while engine.timelineMode is
+// on; docks below the viewport on macOS and replaces the bottom panel on iOS.
+// Reuses TransportBar for playback so the playhead IS the core frame.
 //
-// Tracks (drag-and-drop to re-time):
-//   • Camera — manual mview keyframes (engine.cameraKeyframes) as diamonds:
-//     drag to re-time, tap to seek, long-press to delete; drag the ruler to scrub.
-//   • Scenes — scenes placed AS time markers (engine.sceneMarkers), backed by
-//     `mview store, scene=` so the camera flies between scenes while reps cut.
-//     A palette strip below is the source: drag a chip onto the lane (macOS) or
-//     tap to drop it at the playhead (touch); markers then drag to re-time.
-// Templates (the MovieBuilderSheet presets) drop a ready-made movie; Produce
-// hands the result to MovieExportSheet. Per-segment easing, per-object tracks and
-// Record mode are the next phases (see the design study).
+// ONE unified lane holds both object kinds — camera keyframes (diamonds) and
+// scene markers (chips) — laid out proportionally on a time ruler and joined by
+// TRANSITIONS (duration + easing). Editing is item-centric:
+//   • ◆ / palette  → append a camera keyframe / scene marker to the end.
+//   • tap an item  → seek to it;  long-press → recall / delete.
+//   • drag an item past a neighbor → reorder (ripples the timing).
+//   • long-press a transition connector → set its duration (preset) + Smooth/
+//     Linear easing. Duration drives timing: movie length = Σ transitions.
+// Swift owns the ordered list (engine.timelineItems); every edit rebuilds the
+// core movie. Produce hands the result to MovieExportSheet.
 
 import SwiftUI
 
@@ -27,27 +26,25 @@ struct TimelinePanel: View {
     /// engine.timelineMode so the caller can just drop `TimelinePanel()` in.
     var onExit: (() -> Void)? = nil
 
-    @State private var interpLinear = false
-    @State private var showBuilder = false
     @State private var showExport = false
 
-    // Drag-to-re-time state: while dragging a diamond or scene marker we render
-    // it at `dragToFrame` (live) and commit the move on release.
-    private enum DragItem: Equatable { case camera(Int); case scene(Int, String) }
-    @State private var dragItem: DragItem? = nil
-    @State private var dragToFrame: Int = 1
+    // Drag-to-reorder: while dragging an item we render it at `dragX` (live) and
+    // commit the reorder on release. A small minimumDistance keeps a stationary
+    // tap (seek) from starting a drag.
+    @State private var dragItemID: UUID? = nil
+    @State private var dragX: CGFloat = 0
 
     // Long-press scene management (rename needs a text-entry alert).
     @State private var sceneRenameTarget: String? = nil
     @State private var sceneRenameText: String = ""
 
-    // Template composer (the preset builders, folded into the dock). Applying a
-    // template APPENDS it to the end of the timeline (engine.appendTemplate).
+    // Template composer (preset builders, folded into the dock). Applying a
+    // template APPENDS its items to the end of the lane.
     @State private var composerKind = "roll"
     @State private var composerAxis = "y"
     @State private var composerDuration: Double = 8
     @State private var composerAngle: Double = 30
-    @State private var composerSecPerScene: Double = 4
+    @State private var composerSecPerScene: Double = 3
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -56,10 +53,26 @@ struct TimelinePanel: View {
     private var isCompact: Bool { false }
     #endif
 
-    private let laneH: CGFloat = 40
+    private let laneH: CGFloat = 44
     private let rulerH: CGFloat = 22
-    private var labelW: CGFloat { isCompact ? 40 : 96 }
-    private let laneSpace = "timelineLane"   // coord space for drag→frame mapping
+    private var labelW: CGFloat { isCompact ? 34 : 72 }
+    private let laneSpace = "timelineLane"   // coord space for drag→x mapping
+
+    static let durationPresets: [Double] = [0.5, 1, 2, 5, 8]
+
+    // A laid-out item: its model, order index, and computed timeline frame.
+    private struct Laid: Identifiable {
+        let item: PyMOLEngine.TimelineItem
+        let index: Int
+        let frame: Int
+        var id: UUID { item.id }
+    }
+    private var laidOut: [Laid] {
+        let frames = engine.itemFrames()
+        return engine.timelineItems.enumerated().compactMap { i, it in
+            frames.indices.contains(i) ? Laid(item: it, index: i, frame: frames[i]) : nil
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,7 +86,6 @@ struct TimelinePanel: View {
             composer
         }
         .background(TimelineTheme.bar)
-        .sheet(isPresented: $showBuilder) { MovieBuilderSheet() }
         .sheet(isPresented: $showExport) { MovieExportSheet() }
         .alert("Rename scene", isPresented: Binding(
             get: { sceneRenameTarget != nil },
@@ -94,36 +106,27 @@ struct TimelinePanel: View {
             Image(systemName: "clapperboard.fill")
                 .font(.system(size: 14))
                 .foregroundColor(TimelineTheme.accent)
-            // The wordmark eats scarce width on iPhone; the mode is obvious from
-            // the docked panel, so show it only where there's room.
             if !isCompact {
                 Text("Timeline")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(TimelineTheme.text)
-                Text("Composition 0")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(TimelineTheme.dim)
-                    .lineLimit(1)
             }
+            Text(lengthLabel)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(TimelineTheme.dim)
+                .lineLimit(1)
 
             Spacer(minLength: 4)
 
-            // Controls live inline in the header. Length ("time") is a dropdown;
-            // compact folds interp/templates/produce to icons to fit iPhone width.
-            if isCompact {
-                addButton
-                lengthMenu
-                interpMenu
-                iconButton("film", help: "Produce") { showExport = true }
-                    .disabled(playback.frameCount <= 1)
-            } else {
-                addButton
-                interpControl
-                lengthMenu
+            addButton
+            if !isCompact {
                 textButton("Produce", "film") { showExport = true }
-                    .disabled(playback.frameCount <= 1)
+                    .disabled(engine.timelineItems.isEmpty)
+            } else {
+                iconButton("film", help: "Produce") { showExport = true }
+                    .disabled(engine.timelineItems.isEmpty)
             }
-
+            overflowMenu
             doneButton
         }
         .padding(.horizontal, isCompact ? 8 : 12)
@@ -146,80 +149,45 @@ struct TimelinePanel: View {
     }
 
     private var addButton: some View {
-        Button(action: addKeyframe) {
-            Label("Keyframe", systemImage: "plus.diamond.fill")
+        Button(action: { engine.captureCameraItem() }) {
+            Label("Camera keyframe", systemImage: "plus.diamond.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .labelStyle(.iconOnly)
-                .frame(width: 40, height: 32)
+                .frame(width: 34, height: 32)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundColor(TimelineTheme.accent)
-        .accessibilityLabel("Capture camera keyframe at playhead")
-        .help("Capture a camera keyframe at the playhead")
+        .accessibilityLabel("Add a camera keyframe of the current view")
+        .help("Add a camera keyframe of the current view to the end")
     }
 
-    private var interpControl: some View {
-        Picker("", selection: $interpLinear) {
-            Text("Smooth").tag(false)
-            Text("Linear").tag(true)
-        }
-        .pickerStyle(.segmented)
-        .frame(width: 150)
-        .onChange(of: interpLinear) { linear in
-            if !engine.cameraKeyframes.isEmpty { engine.setInterpolation(linear: linear) }
-        }
-    }
-
-    // The current movie length, shown as the dropdown's own label ("time in
-    // dropdown") so it reads as a value, not a generic "Length".
-    private var lengthLabel: String {
-        guard playback.frameCount > 1 else { return "Length" }
-        let secs = Double(playback.frameCount) / max(playback.movieFPS, 1)
-        return secs >= 10 ? String(format: "%.0fs", secs) : String(format: "%.1fs", secs)
-    }
-
-    private var lengthMenu: some View {
+    private var overflowMenu: some View {
         Menu {
-            Section("New camera movie") {
-                ForEach([5, 10, 20, 30], id: \.self) { s in
-                    Button("\(s) s") { engine.newTimeline(seconds: Double(s)) }
-                }
-            }
-            if !engine.cameraKeyframes.isEmpty || playback.frameCount > 1 {
-                Divider()
-                Button(role: .destructive) { engine.clearMovie() } label: {
+            if !engine.timelineItems.isEmpty {
+                Button(role: .destructive) { engine.clearMovieItems() } label: {
                     Label("Clear timeline", systemImage: "trash")
                 }
+            } else {
+                Text("Timeline is empty")
             }
         } label: {
-            Label(lengthLabel, systemImage: "clock.arrow.circlepath")
-                .font(.system(size: 12))
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 15))
+                .frame(width: 30, height: 32)
+                .contentShape(Rectangle())
         }
+        .menuStyle(.borderlessButton)
         .fixedSize()
         .tint(TimelineTheme.text)
+        .help("Timeline options")
     }
 
-    // Compact interpolation dropdown (the regular layout uses the segmented
-    // interpControl). Shows the current mode; picks Smooth / Linear.
-    private var interpMenu: some View {
-        Menu {
-            Picker("Interpolation", selection: $interpLinear) {
-                Text("Smooth").tag(false)
-                Text("Linear").tag(true)
-            }
-        } label: {
-            HStack(spacing: 3) {
-                Text(interpLinear ? "Linear" : "Smooth")
-                Image(systemName: "chevron.down").font(.system(size: 9))
-            }
-            .font(.system(size: 12))
-        }
-        .fixedSize()
-        .tint(TimelineTheme.text)
-        .onChange(of: interpLinear) { linear in
-            if !engine.cameraKeyframes.isEmpty { engine.setInterpolation(linear: linear) }
-        }
+    // The current movie length, from the sum of transition durations.
+    private var lengthLabel: String {
+        guard !engine.timelineItems.isEmpty else { return "Empty" }
+        let secs = Double(engine.timelineTotalFrames) / max(playback.movieFPS, 1)
+        return secs >= 10 ? String(format: "%.0fs", secs) : String(format: "%.1fs", secs)
     }
 
     private var doneButton: some View {
@@ -246,57 +214,42 @@ struct TimelinePanel: View {
         .foregroundColor(TimelineTheme.text)
     }
 
-    // MARK: - Tracks
+    // MARK: - The unified lane
 
     private var tracksSection: some View {
         HStack(spacing: 0) {
-            // Left: track labels, aligned to the lanes on the right.
+            // Slim left gutter (icon), aligned to the lane; ruler sits above it.
             VStack(spacing: 0) {
                 Color.clear.frame(height: rulerH)
-                trackLabel("Camera", "camera.fill", tint: TimelineTheme.accent)
-                trackLabel("Scenes", "photo.stack", tint: TimelineTheme.dim)
+                HStack(spacing: 6) {
+                    Image(systemName: "film").font(.system(size: 13)).foregroundColor(TimelineTheme.accent)
+                    if !isCompact {
+                        Text("Track").font(.system(size: 11)).foregroundColor(TimelineTheme.text)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: laneH)
+                .help("Camera keyframes + scene markers")
+                .accessibilityLabel("Timeline track")
             }
             .frame(width: labelW)
 
             Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
 
-            // Right: ruler + lanes + playhead, positioned by frame fraction.
             GeometryReader { geo in
                 let w = geo.size.width
                 ZStack(alignment: .topLeading) {
                     VStack(spacing: 0) {
                         ruler(width: w)
-                        cameraLane(width: w)
-                        scenesLane(width: w)
+                        itemLane(width: w)
                     }
                     playhead(width: w)
                 }
                 .coordinateSpace(name: laneSpace)
             }
-            .frame(height: rulerH + laneH * 2)
+            .frame(height: rulerH + laneH)
         }
-    }
-
-    private func trackLabel(_ title: String, _ icon: String, tint: Color) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 13)).foregroundColor(tint)
-            // Compact drops the label text (it only truncated to "Ca…"/"Sc…");
-            // the name is available via long-press / tooltip / VoiceOver instead.
-            if !isCompact {
-                Text(title)
-                    .font(.system(size: 11))
-                    .foregroundColor(TimelineTheme.text)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 8)
-        .frame(height: laneH)
-        .overlay(alignment: .bottom) { Divider().opacity(0.4) }
-        .contentShape(Rectangle())
-        .help(title)                       // pointer tooltip (macOS / iPad pointer)
-        .accessibilityLabel(title)         // VoiceOver
-        .contextMenu { Text(title) }       // long-press → track name (iPhone)
     }
 
     // Ruler doubles as the scrub strip: drag anywhere on it to move the playhead.
@@ -321,20 +274,27 @@ struct TimelinePanel: View {
         )
     }
 
-    private func cameraLane(width w: CGFloat) -> some View {
+    @ViewBuilder
+    private func itemLane(width w: CGFloat) -> some View {
+        let items = laidOut
         ZStack(alignment: .topLeading) {
             Rectangle().fill(TimelineTheme.accent.opacity(0.05))
-            if engine.cameraKeyframes.isEmpty {
-                Text(playback.frameCount > 1
-                     ? "Scrub, then + to capture a camera keyframe"
-                     : "Set a length, then + to capture the first view")
+            if items.isEmpty {
+                Text("Tap ◆ to add a camera keyframe, or a scene below — then set the gaps between them")
                     .font(.system(size: 10))
                     .foregroundColor(TimelineTheme.dim)
                     .padding(.leading, 10)
                     .frame(height: laneH, alignment: .leading)
-            }
-            ForEach(engine.cameraKeyframes, id: \.self) { f in
-                keyframeDiamond(f, width: w)
+            } else {
+                // Connectors first (behind the item nodes).
+                ForEach(items.dropFirst()) { laid in
+                    connector(laid,
+                              prevX: clampX(xFor(items[laid.index - 1].frame, width: w), width: w),
+                              curX: clampX(xFor(laid.frame, width: w), width: w))
+                }
+                ForEach(items) { laid in
+                    itemNode(laid, width: w)
+                }
             }
         }
         .frame(height: laneH)
@@ -342,117 +302,145 @@ struct TimelinePanel: View {
         .clipped()
     }
 
-    private func keyframeDiamond(_ f: Int, width w: CGFloat) -> some View {
-        let dragging = dragItem == .camera(f)
-        let shownFrame = dragging ? dragToFrame : f
-        let isCurrent = f == playback.currentFrame
-        return RoundedRectangle(cornerRadius: 2)
-            .fill(isCurrent ? TimelineTheme.text : TimelineTheme.accent)
-            .frame(width: 12, height: 12)
+    // The transition INTO `laid.item` (the gap from the previous item), shown as
+    // a bar with its duration; long-press to reconfigure duration + easing.
+    private func connector(_ laid: Laid, prevX: CGFloat, curX: CGFloat) -> some View {
+        let midX = (prevX + curX) / 2
+        let wid = max(curX - prevX, 1)
+        let linear = laid.item.transition.linear
+        return ZStack {
+            Capsule()
+                .fill(TimelineTheme.accent.opacity(linear ? 0.18 : 0.28))
+                .frame(width: wid, height: 3)
+            Text(fmtSeconds(laid.item.transition.seconds))
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(Capsule().fill(TimelineTheme.bar))
+                .overlay(Capsule().stroke(TimelineTheme.accent.opacity(linear ? 0.3 : 0.6),
+                                          style: StrokeStyle(lineWidth: 0.75, dash: linear ? [2, 2] : [])))
+                .foregroundColor(linear ? TimelineTheme.dim : TimelineTheme.accent)
+        }
+        .frame(width: max(wid, 34), height: laneH)
+        .contentShape(Rectangle())
+        .position(x: midX, y: laneH / 2)
+        .contextMenu { transitionMenu(laid.item) }
+        .help("Transition · \(fmtSeconds(laid.item.transition.seconds)) · \(linear ? "Linear" : "Smooth") — long-press to change")
+        .accessibilityLabel("Transition \(fmtSeconds(laid.item.transition.seconds)) \(linear ? "linear" : "smooth")")
+    }
+
+    @ViewBuilder
+    private func transitionMenu(_ item: PyMOLEngine.TimelineItem) -> some View {
+        Text("Transition · \(fmtSeconds(item.transition.seconds)) · \(item.transition.linear ? "Linear" : "Smooth")")
+        Menu("Duration") {
+            ForEach(TimelinePanel.durationPresets, id: \.self) { d in
+                Button {
+                    engine.setTransition(item.id, seconds: d, linear: item.transition.linear)
+                } label: {
+                    Label(fmtSeconds(d), systemImage: item.transition.seconds == d ? "checkmark" : "clock")
+                }
+            }
+        }
+        Button {
+            engine.setTransition(item.id, seconds: item.transition.seconds, linear: false)
+        } label: { Label("Smooth", systemImage: item.transition.linear ? "circle" : "checkmark") }
+        Button {
+            engine.setTransition(item.id, seconds: item.transition.seconds, linear: true)
+        } label: { Label("Linear", systemImage: item.transition.linear ? "checkmark" : "circle") }
+    }
+
+    // A camera keyframe (diamond) or scene marker (chip) at its timeline frame.
+    private func itemNode(_ laid: Laid, width w: CGFloat) -> some View {
+        let dragging = dragItemID == laid.item.id
+        let x = dragging ? clampX(dragX, width: w) : clampX(xFor(laid.frame, width: w), width: w)
+        return Group {
+            switch laid.item.kind {
+            case .camera:
+                cameraNode(laid, current: laid.frame == playback.currentFrame)
+            case .scene(let name):
+                sceneNode(name)
+            }
+        }
+        .scaleEffect(dragging ? 1.25 : 1)
+        .frame(width: nodeHitWidth(laid), height: laneH)
+        .contentShape(Rectangle())
+        .position(x: x, y: laneH / 2)
+        .gesture(reorderDrag(laid, width: w))
+        .onTapGesture { engine.seekToItem(laid.item.id) }
+        .contextMenu { itemMenu(laid) }
+    }
+
+    private func cameraNode(_ laid: Laid, current: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(current ? TimelineTheme.text : TimelineTheme.accent)
+            .frame(width: 13, height: 13)
             .rotationEffect(.degrees(45))
             .shadow(color: .black.opacity(0.4), radius: 0.5)
-            .scaleEffect(dragging ? 1.3 : 1)
-            .frame(width: 28, height: laneH)          // larger, easier drag/tap target
-            .contentShape(Rectangle())
-            .position(x: clampX(xFor(shownFrame, width: w), width: w), y: laneH / 2)
-            .gesture(reTimeDrag(width: w, item: { .camera(f) },
-                                commit: { to in engine.moveKeyframe(from: f, to: to, linear: interpLinear) }))
-            .onTapGesture { engine.seek(to: f) }
-            .contextMenu {
-                Text("Keyframe · frame \(f)")
-                Button(role: .destructive) {
-                    engine.deleteKeyframe(at: f, linear: interpLinear)
-                } label: { Label("Delete keyframe", systemImage: "trash") }
-            }
-            .accessibilityLabel("Camera keyframe at frame \(f)")
+            .accessibilityLabel("Camera keyframe \(laid.index + 1)")
     }
 
-    // Shared re-time drag for diamonds & scene markers. A small minimumDistance
-    // keeps a stationary tap from starting a drag, so tap-to-seek still works.
-    // Location is read in the lane coordinate space and mapped to a frame.
-    private func reTimeDrag(width w: CGFloat, item: @escaping () -> DragItem,
-                            commit: @escaping (Int) -> Void) -> some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .named(laneSpace))
-            .onChanged { g in
-                if dragItem == nil { dragItem = item() }
-                dragToFrame = frame(atX: g.location.x, width: w)
-            }
-            .onEnded { _ in
-                let to = dragToFrame
-                dragItem = nil
-                commit(to)
-            }
-    }
-
-    // Time-positioned scene markers (mirrors the camera lane). Markers are placed
-    // from the palette strip below; drag to re-time, tap to seek, long-press to
-    // remove. On macOS a palette chip can be dropped straight onto a time here.
-    private func scenesLane(width w: CGFloat) -> some View {
-        let lane = ZStack(alignment: .topLeading) {
-            Rectangle().fill(Color.white.opacity(0.02))
-            if engine.sceneMarkers.isEmpty {
-                Text(engine.sceneNames.isEmpty
-                     ? "Store scenes, then drop them onto the timeline"
-                     : (isCompact ? "Tap a scene below to drop it here"
-                                  : "Drag a scene from below onto the timeline"))
-                    .font(.system(size: 10))
-                    .foregroundColor(TimelineTheme.dim)
-                    .padding(.leading, 10)
-                    .frame(height: laneH, alignment: .leading)
-            }
-            ForEach(engine.sceneMarkers) { m in
-                sceneMarkerChip(m, width: w)
-            }
-        }
-        .frame(height: laneH)
-        .overlay(alignment: .bottom) { Divider().opacity(0.4) }
-        .clipped()
-        #if os(macOS)
-        return lane.dropDestination(for: String.self) { items, location in
-            guard let name = items.first else { return false }
-            engine.placeScene(name, at: frame(atX: location.x, width: w), linear: interpLinear)
-            return true
-        }
-        #else
-        return lane
-        #endif
-    }
-
-    private func sceneMarkerChip(_ m: PyMOLEngine.SceneMarker, width w: CGFloat) -> some View {
-        let dragging = dragItem == .scene(m.frame, m.name)
-        let shownFrame = dragging ? dragToFrame : m.frame
-        return HStack(spacing: 3) {
+    private func sceneNode(_ name: String) -> some View {
+        HStack(spacing: 3) {
             Image(systemName: "photo.fill").font(.system(size: 7))
-            Text(m.name).font(.system(size: 10, weight: .medium)).lineLimit(1)
+            Text(name).font(.system(size: 10, weight: .medium)).lineLimit(1)
         }
         .padding(.horizontal, 6).padding(.vertical, 3)
-        .background(Capsule().fill(TimelineTheme.accent.opacity(dragging ? 0.95 : 0.7)))
+        .background(Capsule().fill(TimelineTheme.accent.opacity(0.75)))
         .foregroundColor(.black)
         .fixedSize()
-        .scaleEffect(dragging ? 1.08 : 1)
-        .position(x: clampX(xFor(shownFrame, width: w), width: w), y: laneH / 2)
-        .gesture(reTimeDrag(width: w, item: { .scene(m.frame, m.name) },
-                            commit: { to in engine.moveSceneMarker(m.name, from: m.frame, to: to, linear: interpLinear) }))
-        .onTapGesture { engine.seek(to: m.frame) }
-        .contextMenu {
-            Text("Scene · \(m.name) · frame \(m.frame)")
-            Button { engine.recallScene(m.name) } label: { Label("Recall now", systemImage: "eye") }
-            Button(role: .destructive) {
-                engine.deleteSceneMarker(at: m.frame, linear: interpLinear)
-            } label: { Label("Remove from timeline", systemImage: "trash") }
-        }
-        .accessibilityLabel("Scene marker \(m.name) at frame \(m.frame)")
+        .accessibilityLabel("Scene marker \(name)")
     }
 
-    // Source palette of saved scenes. Tap to drop at the playhead (all platforms);
-    // on macOS also draggable straight onto the Scenes lane at a time position.
+    // Wider hit target for scene chips (variable width) than for diamonds.
+    private func nodeHitWidth(_ laid: Laid) -> CGFloat {
+        if case .scene = laid.item.kind { return 88 }
+        return 30
+    }
+
+    private func itemMenu(_ laid: Laid) -> some View {
+        Group {
+            switch laid.item.kind {
+            case .camera:
+                Text("Camera keyframe \(laid.index + 1) · frame \(laid.frame)")
+                Button { engine.seekToItem(laid.item.id) } label: { Label("Go to", systemImage: "arrow.right.to.line") }
+                Button(role: .destructive) { engine.deleteItem(laid.item.id) } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            case .scene(let name):
+                Text("Scene · \(name) · frame \(laid.frame)")
+                Button { engine.recallScene(name) } label: { Label("Recall (preview)", systemImage: "eye") }
+                Button(role: .destructive) { engine.deleteItem(laid.item.id) } label: {
+                    Label("Remove from timeline", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    // Drag an item past a neighbor to reorder. Live x tracked in the lane space;
+    // on release the target index = # of other items sitting left of the drop.
+    private func reorderDrag(_ laid: Laid, width w: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named(laneSpace))
+            .onChanged { g in
+                if dragItemID == nil { dragItemID = laid.item.id }
+                dragX = g.location.x
+            }
+            .onEnded { _ in
+                let dropX = dragX
+                dragItemID = nil
+                let others = engine.itemFrames().enumerated()
+                    .filter { $0.offset != laid.index }
+                let target = others.filter { xFor($0.element, width: w) < dropX }.count
+                engine.moveItem(from: laid.index, to: target)
+            }
+    }
+
+    // MARK: - Scene palette (source)
+
+    // Saved scenes. Tap (or "Add") appends a scene marker to the end of the lane.
     @ViewBuilder private var scenePaletteStrip: some View {
         if !engine.sceneNames.isEmpty {
             HStack(spacing: 0) {
                 HStack(spacing: 6) {
                     Image(systemName: "photo.stack").font(.system(size: 13)).foregroundColor(TimelineTheme.dim)
-                    // Icon-only on compact to match the track labels (the narrow
-                    // column would just truncate "Scenes" to "Sc…").
                     if !isCompact {
                         Text("Scenes").font(.system(size: 11)).foregroundColor(TimelineTheme.text)
                     }
@@ -460,7 +448,7 @@ struct TimelinePanel: View {
                 }
                 .frame(width: labelW)
                 .padding(.horizontal, 8)
-                .help("Saved scenes — drag onto the timeline")
+                .help("Saved scenes — tap to append to the timeline")
                 .accessibilityLabel("Saved scenes")
 
                 Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
@@ -480,46 +468,33 @@ struct TimelinePanel: View {
     }
 
     private func paletteChip(_ name: String) -> some View {
-        let chip = Text(name)
+        Text(name)
             .font(.system(size: 11)).lineLimit(1)
             .padding(.horizontal, 10).padding(.vertical, 4)
             .background(Capsule().fill(engine.currentScene == name
                                        ? TimelineTheme.accent : Color.white.opacity(0.12)))
             .foregroundColor(engine.currentScene == name ? .black : TimelineTheme.text)
             .contentShape(Capsule())
-            .onTapGesture { dropSceneAtPlayhead(name) }
+            .onTapGesture { engine.appendSceneItem(name) }
             .contextMenu {
                 Text(name)
                 Button { engine.recallScene(name) } label: { Label("Recall (preview)", systemImage: "eye") }
-                Button { dropSceneAtPlayhead(name) } label: { Label("Add at playhead", systemImage: "plus") }
+                Button { engine.appendSceneItem(name) } label: { Label("Add to timeline", systemImage: "plus") }
                 Divider()
                 Button { engine.updateScene(name) } label: { Label("Reset to current view", systemImage: "arrow.clockwise") }
                 Button { sceneRenameText = name; sceneRenameTarget = name } label: { Label("Rename…", systemImage: "pencil") }
                 Button(role: .destructive) { engine.deleteScene(name) } label: { Label("Delete", systemImage: "trash") }
             }
-        #if os(macOS)
-        return chip.draggable(name)
-        #else
-        return chip
-        #endif
-    }
-
-    private func dropSceneAtPlayhead(_ name: String) {
-        if playback.frameCount <= 1 { engine.newTimeline(seconds: 10) }
-        engine.placeScene(name, at: playback.currentFrame, linear: interpLinear)
     }
 
     // MARK: - Template composer (folded-in preset builders → Append)
 
-    // Pick a template kind + its params inline; "Append" stacks it onto the end
-    // of the timeline (engine.appendTemplate), decomposing onto the tracks.
     private var composer: some View {
         HStack(spacing: 8) {
             Menu {
                 Button("Camera Roll") { composerKind = "roll" }
                 Button("Camera Rock") { composerKind = "rock" }
                 Button("Scene loop")  { composerKind = "scenes" }
-                Button("State loop")  { composerKind = "state_loop" }
             } label: { composerChip(composerLabel, composerIcon) }
 
             if composerKind == "roll" || composerKind == "rock" {
@@ -538,7 +513,7 @@ struct TimelinePanel: View {
                 }
             } else if composerKind == "scenes" {
                 Menu {
-                    ForEach([2, 4, 8], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
+                    ForEach([2, 3, 5], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
                 } label: { composerChip("\(Int(composerSecPerScene))s", "clock") }
             }
 
@@ -571,7 +546,6 @@ struct TimelinePanel: View {
         switch composerKind {
         case "rock": return "Camera Rock"
         case "scenes": return "Scene loop"
-        case "state_loop": return "State loop"
         default: return "Camera Roll"
         }
     }
@@ -579,7 +553,6 @@ struct TimelinePanel: View {
     private var composerIcon: String {
         switch composerKind {
         case "scenes": return "photo.stack"
-        case "state_loop": return "square.stack.3d.up"
         default: return "video"
         }
     }
@@ -587,15 +560,15 @@ struct TimelinePanel: View {
     private func appendComposer() {
         switch composerKind {
         case "roll", "rock":
-            engine.appendTemplate(kind: composerKind, duration: composerDuration,
-                                  axis: composerAxis, angle: composerAngle)
+            engine.appendCameraTemplate(kind: composerKind, duration: composerDuration,
+                                        axis: composerAxis, angle: composerAngle)
         case "scenes":
-            engine.appendTemplate(kind: "scenes", secondsPerScene: composerSecPerScene)
-        case "state_loop":
-            engine.appendTemplate(kind: "state_loop")
+            engine.appendScenesTemplate(secondsPerScene: composerSecPerScene)
         default: break
         }
     }
+
+    // MARK: - Playhead / geometry helpers
 
     private func playhead(width w: CGFloat) -> some View {
         let x = clampX(xFor(playback.currentFrame, width: w), width: w)
@@ -608,12 +581,10 @@ struct TimelinePanel: View {
                 .frame(width: 10, height: 7)
                 .offset(y: -1)
         }
-        .frame(width: 10, height: rulerH + laneH * 2, alignment: .top)
-        .offset(x: x - 5)   // center the 10pt-wide head/line box on the frame x
+        .frame(width: 10, height: rulerH + laneH, alignment: .top)
+        .offset(x: x - 5)
         .allowsHitTesting(false)
     }
-
-    // MARK: - Geometry / helpers
 
     private func xFor(_ frame: Int, width w: CGFloat) -> CGFloat {
         let count = max(playback.frameCount, 1)
@@ -639,9 +610,9 @@ struct TimelinePanel: View {
         return secs >= 10 ? String(format: "%.0fs", secs) : String(format: "%.1fs", secs)
     }
 
-    private func addKeyframe() {
-        if playback.frameCount <= 1 { engine.newTimeline(seconds: 10) }
-        engine.captureKeyframe(linear: interpLinear)
+    private func fmtSeconds(_ s: Double) -> String {
+        if s < 1 { return String(format: "%.1fs", s) }
+        return s.rounded() == s ? "\(Int(s))s" : String(format: "%.1fs", s)
     }
 }
 

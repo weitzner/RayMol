@@ -235,6 +235,121 @@ def append_template(kind, duration=8.0, axis='y', angle=30.0,
         print('MOVIE_ERR:' + str(e))
 
 
+# --- Unified single-track timeline ------------------------------------------
+#
+# The docked TimelinePanel edits ONE ordered lane of "objects" (camera keyframes
+# + scene markers) joined by transitions (duration + easing). Swift owns the
+# order/timing/easing (the things the UI edits); Python owns the heavy camera
+# view matrices, keyed by the item's UUID. On every edit Swift calls rebuild()
+# with the ordered spec and we lay a fresh movie. Session-scoped (the dict lives
+# for the process, like the Swift-side item list) — not restored from a .pse.
+
+_views = {}
+
+
+def capture_view(cam_id):
+    """Store the current camera view under `cam_id` (a camera item's UUID)."""
+    try:
+        _views[str(cam_id)] = list(cmd.get_view())
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
+def forget_view(cam_id):
+    """Drop the stored view for a deleted camera item."""
+    _views.pop(str(cam_id), None)
+
+
+def forget_all_views():
+    """Drop every stored camera view (timeline cleared / new session)."""
+    _views.clear()
+
+
+def capture_template_views(ids_json, kind, axis='y', angle=30.0):
+    """Compute + store the waypoint camera views for a roll/rock template under
+    the ordered `ids` (Swift pre-generates one UUID per waypoint). Views are
+    derived from the CURRENT view so the template spins/rocks around wherever
+    the molecule is now; the live view is left unchanged.
+
+      roll : equal steps around a full 360 turn about `axis`.
+      rock : 0 -> +angle -> -angle -> 0 about `axis` (the canonical 4 points)."""
+    import json
+    try:
+        ids = json.loads(ids_json)
+        if not ids:
+            return
+        v0 = cmd.get_view()
+        n = len(ids)
+        k = str(kind)
+        ax = str(axis)
+        if k == 'roll':
+            turns = [i * (360.0 / (n - 1)) for i in range(n)] if n > 1 else [0.0]
+        elif k == 'rock' and n == 4:
+            turns = [0.0, float(angle), -float(angle), 0.0]
+        elif k == 'rock':
+            turns = [0.0] + [(float(angle) if i % 2 else -float(angle))
+                             for i in range(1, n)]
+        else:
+            turns = [0.0] * n
+        for cid, deg in zip(ids, turns):
+            cmd.set_view(v0)
+            if deg:
+                cmd.turn(ax, float(deg))
+            _views[str(cid)] = list(cmd.get_view())
+        cmd.set_view(v0)                          # restore the live view
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
+def rebuild(spec_json):
+    """Rebuild the ENTIRE movie from an ordered item list (the unified-track
+    source of truth lives in Swift). `spec_json` decodes to an ordered list of
+    ``{frame, cam:<uuid>|null, scene:<base64 name>|null, power, linear}``:
+
+      - camera item : ``cam`` is a UUID whose 18-float view is in ``_views``.
+      - scene item  : ``scene`` is the base64-encoded scene name; the scene is
+        recalled to establish the live camera before storing.
+
+    ``power``/``linear`` are the easing of the transition INTO that item
+    (0/0 = smooth default, 1/1 = linear). We clear the timeline, lay a fresh
+    ``mset`` of the right length, store each keyframe with its per-keyframe
+    easing, then a single ``mview interpolate`` fills the gaps (validated to
+    honor per-keyframe easing) and rewind. Base64 keeps arbitrary scene names
+    safe across the Swift->Python string boundary."""
+    import json
+    import base64
+    try:
+        spec = json.loads(spec_json)
+        if not spec:
+            cmd.mview('reset')
+            cmd.mset('')
+            cmd.rewind()
+            return
+        total = max(2, max(int(it['frame']) for it in spec))
+        cmd.mview('reset')
+        cmd.mset('1 x%d' % total)
+        for it in spec:
+            f = int(it['frame'])
+            power = float(it.get('power', 0.0))
+            linear = int(it.get('linear', 0))
+            cmd.frame(f)
+            sc = it.get('scene')
+            if sc:
+                name = base64.b64decode(sc).decode('utf-8')
+                cmd.scene(name, 'recall')       # live view+reps become the scene
+                cmd.mview('store', first=f, scene=name, power=power, linear=linear)
+            else:
+                cam = it.get('cam')
+                v = _views.get(str(cam)) if cam is not None else None
+                if v:
+                    cmd.set_view(v)
+                cmd.mview('store', first=f, power=power, linear=linear)
+        cmd.mview('interpolate')
+        cmd.rewind()
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
 def poll():
     """Emit the PLAYBACK feedback line (current frame / length / play state)."""
     import json
