@@ -1634,7 +1634,12 @@ struct ContentView: View {
             ScenesPane(showViewportButtons: $showSceneButtons,
                        onOpenMovie: { selectedTab = 2 })
                 .tabItem { Label("Scenes", systemImage: "rectangle.on.rectangle") }.tag(5)
+            // fixedSize → the panel hugs its intrinsic height instead of being
+            // stretched by the TabView (which would make reportPaneHeight measure
+            // the filled height and grow the pane on every layout pass).
             TimelinePanel(showsDone: false)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .top)
                 .reportPaneHeight(2)
                 .tabItem { Label("Movie", systemImage: "film") }.tag(2)
             settingsPane

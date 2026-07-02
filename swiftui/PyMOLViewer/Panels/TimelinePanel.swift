@@ -315,6 +315,10 @@ struct TimelinePanel: View {
             }
             .frame(height: rulerH + laneH)
         }
+        // Bound the whole track row — the gutter VStack + divider are otherwise
+        // vertically greedy and, in a taller pane, would center the ruler/lane
+        // inside an over-tall region (empty bands above/below).
+        .frame(height: rulerH + laneH)
     }
 
     // Tick ruler across the whole (scrollable) content width. Tap to seek.
