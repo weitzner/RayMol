@@ -46,7 +46,7 @@ struct TimelinePanel: View {
 
     private let laneH: CGFloat = 40
     private let rulerH: CGFloat = 22
-    private var labelW: CGFloat { isCompact ? 66 : 96 }
+    private var labelW: CGFloat { isCompact ? 40 : 96 }
     private let laneSpace = "timelineLane"   // coord space for drag→frame mapping
 
     var body: some View {
@@ -66,27 +66,35 @@ struct TimelinePanel: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: isCompact ? 6 : 10) {
             Image(systemName: "clapperboard.fill")
                 .font(.system(size: 14))
                 .foregroundColor(TimelineTheme.accent)
-            Text("Timeline")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(TimelineTheme.text)
+            // The wordmark eats scarce width on iPhone; the mode is obvious from
+            // the docked panel, so show it only where there's room.
             if !isCompact {
+                Text("Timeline")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(TimelineTheme.text)
                 Text("Composition 0")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(TimelineTheme.dim)
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 6)
+            Spacer(minLength: 4)
 
-            addButton
-
+            // Controls live inline in the header. Length ("time") is a dropdown;
+            // compact folds interp/templates/produce to icons to fit iPhone width.
             if isCompact {
-                overflowMenu
+                addButton
+                lengthMenu
+                interpMenu
+                iconButton("wand.and.stars", help: "Templates") { showBuilder = true }
+                iconButton("film", help: "Produce") { showExport = true }
+                    .disabled(playback.frameCount <= 1)
             } else {
+                addButton
                 interpControl
                 lengthMenu
                 textButton("Templates", "wand.and.stars") { showBuilder = true }
@@ -96,8 +104,23 @@ struct TimelinePanel: View {
 
             doneButton
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, isCompact ? 8 : 12)
         .frame(height: 44)
+    }
+
+    // Icon-only header button with a tooltip (macOS/pointer) + VoiceOver label.
+    private func iconButton(_ systemName: String, help: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 15))
+                .frame(width: 34, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(TimelineTheme.text)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     private var addButton: some View {
@@ -126,6 +149,14 @@ struct TimelinePanel: View {
         }
     }
 
+    // The current movie length, shown as the dropdown's own label ("time in
+    // dropdown") so it reads as a value, not a generic "Length".
+    private var lengthLabel: String {
+        guard playback.frameCount > 1 else { return "Length" }
+        let secs = Double(playback.frameCount) / max(playback.movieFPS, 1)
+        return secs >= 10 ? String(format: "%.0fs", secs) : String(format: "%.1fs", secs)
+    }
+
     private var lengthMenu: some View {
         Menu {
             Section("New camera movie") {
@@ -140,43 +171,30 @@ struct TimelinePanel: View {
                 }
             }
         } label: {
-            Label("Length", systemImage: "clock.arrow.circlepath")
+            Label(lengthLabel, systemImage: "clock.arrow.circlepath")
                 .font(.system(size: 12))
         }
         .fixedSize()
         .tint(TimelineTheme.text)
     }
 
-    // Compact: fold Length / Interp / Templates / Produce / Clear into one menu.
-    private var overflowMenu: some View {
+    // Compact interpolation dropdown (the regular layout uses the segmented
+    // interpControl). Shows the current mode; picks Smooth / Linear.
+    private var interpMenu: some View {
         Menu {
-            Section("New camera movie") {
-                ForEach([5, 10, 20, 30], id: \.self) { s in
-                    Button("\(s) s") { engine.newTimeline(seconds: Double(s)) }
-                }
-            }
             Picker("Interpolation", selection: $interpLinear) {
                 Text("Smooth").tag(false)
                 Text("Linear").tag(true)
             }
-            Divider()
-            Button { showBuilder = true } label: { Label("Templates…", systemImage: "wand.and.stars") }
-            Button { showExport = true } label: { Label("Produce…", systemImage: "film") }
-                .disabled(playback.frameCount <= 1)
-            if !engine.cameraKeyframes.isEmpty || playback.frameCount > 1 {
-                Divider()
-                Button(role: .destructive) { engine.clearMovie() } label: {
-                    Label("Clear timeline", systemImage: "trash")
-                }
-            }
         } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.system(size: 17))
-                .foregroundColor(TimelineTheme.text)
-                .frame(width: 36, height: 32)
-                .contentShape(Rectangle())
+            HStack(spacing: 3) {
+                Text(interpLinear ? "Linear" : "Smooth")
+                Image(systemName: "chevron.down").font(.system(size: 9))
+            }
+            .font(.system(size: 12))
         }
-        .menuIndicator(.hidden)
+        .fixedSize()
+        .tint(TimelineTheme.text)
         .onChange(of: interpLinear) { linear in
             if !engine.cameraKeyframes.isEmpty { engine.setInterpolation(linear: linear) }
         }
@@ -239,16 +257,24 @@ struct TimelinePanel: View {
 
     private func trackLabel(_ title: String, _ icon: String, tint: Color) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundColor(tint)
-            Text(title)
-                .font(.system(size: isCompact ? 10 : 11))
-                .foregroundColor(TimelineTheme.text)
-                .lineLimit(1)
+            Image(systemName: icon).font(.system(size: 13)).foregroundColor(tint)
+            // Compact drops the label text (it only truncated to "Ca…"/"Sc…");
+            // the name is available via long-press / tooltip / VoiceOver instead.
+            if !isCompact {
+                Text(title)
+                    .font(.system(size: 11))
+                    .foregroundColor(TimelineTheme.text)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
         .frame(height: laneH)
         .overlay(alignment: .bottom) { Divider().opacity(0.4) }
+        .contentShape(Rectangle())
+        .help(title)                       // pointer tooltip (macOS / iPad pointer)
+        .accessibilityLabel(title)         // VoiceOver
+        .contextMenu { Text(title) }       // long-press → track name (iPhone)
     }
 
     // Ruler doubles as the scrub strip: drag anywhere on it to move the playhead.
@@ -402,12 +428,18 @@ struct TimelinePanel: View {
         if !engine.sceneNames.isEmpty {
             HStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    Image(systemName: "photo.stack").font(.system(size: 11)).foregroundColor(TimelineTheme.dim)
-                    Text("Scenes").font(.system(size: isCompact ? 10 : 11)).foregroundColor(TimelineTheme.text)
+                    Image(systemName: "photo.stack").font(.system(size: 13)).foregroundColor(TimelineTheme.dim)
+                    // Icon-only on compact to match the track labels (the narrow
+                    // column would just truncate "Scenes" to "Sc…").
+                    if !isCompact {
+                        Text("Scenes").font(.system(size: 11)).foregroundColor(TimelineTheme.text)
+                    }
                     Spacer(minLength: 0)
                 }
                 .frame(width: labelW)
                 .padding(.horizontal, 8)
+                .help("Saved scenes — drag onto the timeline")
+                .accessibilityLabel("Saved scenes")
 
                 Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
 

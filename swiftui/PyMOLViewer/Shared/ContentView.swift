@@ -1024,15 +1024,23 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 viewportView
                 Divider()
+                // fixedSize → the panel hugs its content instead of stretching to
+                // fill the column (which would scatter empty gaps); top-aligned.
                 TimelinePanel()
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(width: min(geo.size.height, geo.size.width * 0.5))
+                    .frame(maxHeight: .infinity, alignment: .top)
                     .background(themeChromeBg)
             }
         } else {
             VStack(spacing: 0) {
                 viewportView
                 Divider()
+                // fixedSize → the panel is exactly as tall as its content (viewer
+                // takes the rest); without it the panel stretched and spread the
+                // slack as empty bands between the header/ruler/palette.
                 TimelinePanel()
+                    .fixedSize(horizontal: false, vertical: true)
                     .background(themeChromeBg)
                     // Clear the home indicator (the body ignores the safe area).
                     .padding(.bottom, geo.safeAreaInsets.bottom > 0 ? geo.safeAreaInsets.bottom : (hSize == .compact ? 12 : 0))
