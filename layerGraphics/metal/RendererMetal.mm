@@ -377,6 +377,10 @@ RendererMetal::~RendererMetal()
   [_sphereShadowPipeline release];    [_cylinderShadowPipeline release];
   [_shadowDebugPipeline release];
   [_capMarkPipeline release];         [_capFillPipeline release];
+  [_coveragePipeline release];        [_surfaceContourPipeline release];
+  [_surfaceCoverageTex release];
+  [_aoExemptMaskTex release];         [_aoMaskPipeline release];
+  [_aoMaskDepthState release];
   [_vboLinePipeline release];         [_bezierTubePipeline release];
   [_blitPipeline release];            [_ssaoPipeline release];
   [_fxaaPipeline release];            [_outlinePipeline release];
@@ -564,6 +568,124 @@ void RendererMetal::setInteriorCapColor(float r, float g, float b, bool override
   _capColorOverride = overrideColor;
 }
 
+void RendererMetal::setRepClip(float front, float back)
+{
+  _repClipFront = front;       // < 0 disables per-rep clip in the lit fragment
+  _repClipBack = back;
+}
+
+void RendererMetal::setRepContour(bool enabled, const float* rgba, float widthPx)
+{
+  _repContourEnabled = enabled; // armed => the next surface draw is stashed
+  if (enabled) {
+    _contourColor[0] = rgba[0]; _contourColor[1] = rgba[1];
+    _contourColor[2] = rgba[2]; _contourColor[3] = rgba[3];
+    _contourWidth = widthPx;
+  }
+}
+
+void RendererMetal::setRepScreenAO(bool exempt)
+{
+  _repAOExempt = exempt; // armed => the next lit-VBO draw is stashed for the mask
+}
+
+// Rasterize the stashed cartoon/ribbon draws into _aoExemptMaskTex (R8), DEPTH-
+// TESTED (LessEqual, no write) against the resolved _sceneDepth so only the
+// front-most cartoon pixels are marked (a cartoon pixel hidden behind a stick or
+// surface fails the test, so those foreground pixels keep their AO). Reuses the
+// coverage vertex/fragment (position-only, writes 1.0). Returns false (mask not
+// bound; caller sets aoExemptEnabled=0) when there is nothing to exempt.
+// See post_ssao_fog for how the mask gates the SSAO term (shadows are kept).
+bool RendererMetal::renderAOExemptMask()
+{
+  if (_aoExemptDraws.empty() || !_aoExemptMaskTex || !_coverageVtxFunc ||
+      !_coverageFragFunc || !_sceneDepth || !_cmdBuffer)
+    return false;
+
+  // Depth-compare state: test vs stored scene depth, never write it back.
+  if (!_aoMaskDepthState) {
+    MTLDepthStencilDescriptor* dsd = [[MTLDepthStencilDescriptor alloc] init];
+    dsd.depthCompareFunction = MTLCompareFunctionLessEqual;
+    dsd.depthWriteEnabled = NO;
+    _aoMaskDepthState = [_device newDepthStencilStateWithDescriptor:dsd];
+    [dsd release];
+  }
+
+  MTLRenderPassDescriptor* mpd = [MTLRenderPassDescriptor renderPassDescriptor];
+  mpd.colorAttachments[0].texture = _aoExemptMaskTex;
+  mpd.colorAttachments[0].loadAction = MTLLoadActionClear;
+  mpd.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+  mpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+  // Load the existing scene depth to test against; STORE it unchanged (no depth
+  // write happens) so the following SSAO pass still reads valid _sceneDepth.
+  mpd.depthAttachment.texture = _sceneDepth;
+  mpd.depthAttachment.loadAction = MTLLoadActionLoad;
+  mpd.depthAttachment.storeAction = MTLStoreActionStore;
+  mpd.stencilAttachment.texture = _sceneDepth;
+  mpd.stencilAttachment.loadAction = MTLLoadActionLoad;
+  mpd.stencilAttachment.storeAction = MTLStoreActionStore;
+  id<MTLRenderCommandEncoder> me =
+      [_cmdBuffer renderCommandEncoderWithDescriptor:mpd];
+  if (_aoMaskDepthState) [me setDepthStencilState:_aoMaskDepthState];
+  // Slope-scaled negative depth bias: pull the mask fragments slightly toward the
+  // camera so grazing cartoon triangles at folds (whose single-sample re-raster
+  // depth can exceed the MSAA-resolved scene depth by a sub-texel amount) still
+  // pass the LessEqual test and get masked — otherwise an AO contour line leaks
+  // through right at the fold. Slope-scaled so nearly-flat faces get almost no
+  // bias (can't sneak a cartoon that's genuinely behind a stick into the mask).
+  [me setDepthBias:0.0f slopeScale:-3.0f clamp:0.0f];
+  [me setCullMode:MTLCullModeNone];
+  for (const auto& cd : _aoExemptDraws) {
+    if (!_aoMaskPipeline || _aoMaskStride != cd.stride) {
+      MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+      vd.attributes[0].format = MTLVertexFormatFloat3;
+      vd.attributes[0].offset = (NSUInteger)(cd.posOffset < 0 ? 0 : cd.posOffset);
+      vd.attributes[0].bufferIndex = 0;
+      vd.layouts[0].stride = (NSUInteger)cd.stride;
+      vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+      MTLRenderPipelineDescriptor* pd2 = [[MTLRenderPipelineDescriptor alloc] init];
+      pd2.vertexFunction = _coverageVtxFunc;
+      pd2.fragmentFunction = _coverageFragFunc;
+      pd2.vertexDescriptor = vd;
+      pd2.colorAttachments[0].pixelFormat = MTLPixelFormatR8Unorm;
+      // Depth-tested against _sceneDepth (Depth32Float_Stencil8).
+      pd2.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      pd2.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+      pd2.rasterSampleCount = 1;
+      NSError* pe = nil;
+      [_aoMaskPipeline release];  // MRC: release the previous-stride pipeline
+      _aoMaskPipeline = [_device newRenderPipelineStateWithDescriptor:pd2 error:&pe];
+      _aoMaskStride = cd.stride;
+      if (!_aoMaskPipeline)
+        NSLog(@"RendererMetal: AO-exempt mask pipeline failed: %@", pe);
+      [vd release]; [pd2 release];  // MRC: consumed by pipeline creation
+    }
+    if (!_aoMaskPipeline) continue;
+    [me setRenderPipelineState:_aoMaskPipeline];
+    [me setVertexBuffer:cd.vbo offset:0 atIndex:0];
+    struct { float modelview[16]; float projection[16]; float pointSize; float pad[3]; } cu;
+    std::memcpy(cu.modelview, cd.modelview, 64);
+    std::memcpy(cu.projection, cd.projection, 64);
+    cu.pointSize = 1.0f; cu.pad[0] = cu.pad[1] = cu.pad[2] = 0.0f;
+    [me setVertexBytes:&cu length:sizeof(cu) atIndex:1];
+    { struct { float front, back, enabled, pad; } _cl = { cd.clipFront, cd.clipBack,
+        cd.clipFront >= 0.0f ? 1.0f : 0.0f, 0.0f };
+      [me setFragmentBytes:&_cl length:sizeof(_cl) atIndex:1]; }
+    if (cd.ibo) {
+      [me drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                     indexCount:(NSUInteger)cd.count
+                      indexType:MTLIndexTypeUInt32
+                    indexBuffer:cd.ibo
+              indexBufferOffset:0];
+    } else {
+      [me drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+              vertexCount:(NSUInteger)cd.count];
+    }
+  }
+  [me endEncoding];
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 #pragma mark - Frame lifecycle
 // ---------------------------------------------------------------------------
@@ -583,6 +705,9 @@ void RendererMetal::beginFrame()
   _encoder = nil;
   _oitActive = false;
   _oitHasContent = false;
+  _coverageDraws.clear();  // surface outer-contour: re-stashed during this frame
+  _contourActive = false;
+  _aoExemptDraws.clear();  // cartoon/ribbon AO-exempt mask: re-stashed this frame
 
   // Configure clear values on the render pass descriptor
   if (_passDesc) {
@@ -817,7 +942,7 @@ struct PostU {
   float projY;       // projection[5]
   float shadowEnabled;
   float shadowIntensity;
-  float _pad;
+  float aoExemptEnabled; // >0.5: aoMaskTex marks pixels that skip the SSAO term (#79)
   float4x4 lightViewProj; // eye-space light view*proj for shadow-map sampling
 };
 
@@ -828,10 +953,50 @@ static float post_linear_depth(float d, float projA, float projB) {
   return -ez;                         // distance from camera (positive)
 }
 
+// Eye-space position from a window depth at a given screen uv (the inverse of the
+// perspective projection; matches the reconstruction used by the shadow/AO passes).
+static float3 post_eye_pos(float2 uv, float d, float projA, float projB,
+                           float projX, float projY) {
+  float ez = -projB / ((2.0 * d - 1.0) + projA); // eye z (negative)
+  float ndcx = 2.0 * uv.x - 1.0;
+  float ndcy = 1.0 - 2.0 * uv.y;
+  return float3(ndcx * (-ez) / projX, ndcy * (-ez) / projY, ez);
+}
+
+// Robust eye-space surface normal from the depth buffer. Plain
+// cross(dfdx(p), dfdy(p)) uses the 2x2 quad derivative, which at a silhouette
+// straddles the depth discontinuity to the background/behind geometry: the
+// derivative blows up and the normal points sideways/garbage in a 1-2px band along
+// EVERY silhouette. In the screen-space shadow that corrupts the light-facing
+// faceGate, flipping it between ~0 and ~1 pixel-to-pixel along the aliased edge, so
+// the shadow term switches on/off and reads as a serrated lighter border on helices
+// and sticks. Instead, reconstruct the 4 axis-neighbours and, per axis, difference
+// against the neighbour on the CONTINUOUS side (smaller window-depth step) so the
+// stencil never crosses the silhouette. In the smooth interior this equals the old
+// derivative; only the edge band changes.
+static float3 post_eye_normal(depth2d<float> depthTex, sampler s, float2 uv,
+                              float2 invres, float cd, float3 cp, float projA,
+                              float projB, float projX, float projY) {
+  float2 ux = float2(invres.x, 0.0);
+  float2 uy = float2(0.0, invres.y);
+  float dl = depthTex.sample(s, uv - ux), dr = depthTex.sample(s, uv + ux);
+  float dd = depthTex.sample(s, uv - uy), du = depthTex.sample(s, uv + uy);
+  float3 gx = (abs(dl - cd) < abs(dr - cd))
+                  ? (cp - post_eye_pos(uv - ux, dl, projA, projB, projX, projY))
+                  : (post_eye_pos(uv + ux, dr, projA, projB, projX, projY) - cp);
+  float3 gy = (abs(dd - cd) < abs(du - cd))
+                  ? (cp - post_eye_pos(uv - uy, dd, projA, projB, projX, projY))
+                  : (post_eye_pos(uv + uy, du, projA, projB, projX, projY) - cp);
+  float3 n = normalize(cross(gx, gy));
+  if (n.z < 0.0) n = -n; // face toward camera
+  return n;
+}
+
 fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
     texture2d<float> colorTex [[texture(0)]],
     depth2d<float> depthTex [[texture(1)]],
     depth2d<float> shadowTex [[texture(2)]],
+    texture2d<float> aoMaskTex [[texture(3)]],
     sampler s [[sampler(0)]],
     sampler shadowSamp [[sampler(1)]],
     constant PostU& u [[buffer(0)]]) {
@@ -844,8 +1009,26 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   // clean instead of being shaded by the screen-space post passes.
   bool flatCap = (d <= 0.0015);
 
+  // Per-rep AO exemption (#79): aoMaskTex.r == 1 on front-most cartoon/ribbon
+  // pixels. The depth-step SSAO term paints dark contour lines on their
+  // silhouettes/self-folds/coil-crossings, so it is SKIPPED there (surface
+  // pockets keep their AO). Cast SHADOWS are NOT skipped — cartoons still receive
+  // directional shadows for depth (its self-shadow gates suppress the ribbon
+  // darkening itself). Dilate the mask by two texels so grazing cartoon triangles
+  // at folds (whose single-sample re-raster depth can just miss the MSAA-resolved
+  // scene depth) are still covered and no AO line leaks through at the fold.
+  bool aoExempt = false;
+  if (u.aoExemptEnabled > 0.5) {
+    float2 iv = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
+    float m = 0.0;
+    for (int dy = -2; dy <= 2; dy++)
+      for (int dx = -2; dx <= 2; dx++)
+        m = max(m, aoMaskTex.sample(s, in.uv + float2(float(dx), float(dy)) * iv).r);
+    aoExempt = (m > 0.5);
+  }
+
   float ao = 1.0;
-  if (u.aoEnabled > 0.5 && d < 0.99999 && !flatCap) {
+  if (u.aoEnabled > 0.5 && d < 0.99999 && !flatCap && !aoExempt) {
     float zc = post_linear_depth(d, u.projA, u.projB);
     float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
     const int N = 12;
@@ -883,13 +1066,14 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   //   (2) SEPARATION gate — the occluder must be meaningfully closer to the
   //       light than the receiver (a real gap), not the same/adjacent surface.
   if (u.shadowEnabled > 0.5 && d < 0.99999 && !flatCap) {
-    float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);  // eye z (negative)
-    float ndcx = 2.0 * in.uv.x - 1.0;
-    float ndcy = 1.0 - 2.0 * in.uv.y;
-    float3 p = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-    // Eye-space surface normal from depth-reconstructed position derivatives.
-    float3 nrm = normalize(cross(dfdx(p), dfdy(p)));
-    if (nrm.z < 0.0) nrm = -nrm;                         // face toward camera
+    float3 p = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+    // Eye-space surface normal, reconstructed robustly from the depth buffer so the
+    // stencil never crosses a silhouette (see post_eye_normal). The old
+    // cross(dfdx(p),dfdy(p)) produced garbage normals in a 1-2px band at every
+    // silhouette, giving a noisy faceGate that read as a serrated lighter border.
+    float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
+    float3 nrm = post_eye_normal(depthTex, s, in.uv, invres, d, p,
+                                 u.projA, u.projB, u.projX, u.projY);
     float3 Ldir = normalize(float3(0.4, 0.4, 1.0));      // key light (eye space)
     float faceGate = smoothstep(0.0, 0.35, dot(nrm, Ldir));
     float4 lc = u.lightViewProj * float4(p, 1.0);        // eye -> light clip
@@ -966,6 +1150,39 @@ fragment float4 post_outline(PostVOut in [[stage_in]],
   // don't outline pure background (both center far)
   edge *= step(dc, 0.99999);
   color = mix(color, float3(u.colR, u.colG, u.colB), edge);
+  return float4(color, 1.0);
+}
+
+// Surface OUTER contour: outline the boundary of the surface coverage mask
+// (covTex.r = 1 where the surface covers the screen, 0 elsewhere). A pixel is on
+// the contour where coverage differs from a neighbor within the line width, so
+// the line traces the outer silhouette (and any interior holes) of the surface —
+// independent of the surface's transparency or the depth buffer. Composited over
+// the scene color.
+struct ContourU {
+  float invW, invH;             // 1/resolution
+  float thickness;              // ring radius in pixels (~half the line width)
+  float colR, colG, colB, colA; // line color; colA folds in opaque/transparency
+};
+fragment float4 post_surface_contour(PostVOut in [[stage_in]],
+    texture2d<float> colorTex [[texture(0)]],
+    texture2d<float> covTex [[texture(1)]],
+    sampler s [[sampler(0)]],
+    constant ContourU& u [[buffer(0)]]) {
+  float3 color = colorTex.sample(s, in.uv).rgb;
+  float c = covTex.sample(s, in.uv).r;
+  float2 px = float2(u.invW, u.invH) * max(u.thickness, 1.0);
+  float e = 0.0;
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2( px.x, 0)).r));
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2(-px.x, 0)).r));
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2(0,  px.y)).r));
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2(0, -px.y)).r));
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2( px.x,  px.y)).r));
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2(-px.x,  px.y)).r));
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2( px.x, -px.y)).r));
+  e = max(e, abs(c - covTex.sample(s, in.uv + float2(-px.x, -px.y)).r));
+  float a = clamp(e, 0.0, 1.0) * u.colA;
+  color = mix(color, float3(u.colR, u.colG, u.colB), a);
   return float4(color, 1.0);
 }
 
@@ -1061,9 +1278,13 @@ void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
   [_oitAccum release];      [_oitReveal release];
   [_rtAO release];
   [_rtAOHistory release];   [_rtAOAccum release];
+  [_surfaceCoverageTex release];
+  [_aoExemptMaskTex release];
   _sceneColor = _postColor = _sceneDepth = nil;
   _sceneColorMS = _sceneDepthMS = nil;
   _oitAccum = _oitReveal = nil;
+  _surfaceCoverageTex = nil;
+  _aoExemptMaskTex = nil;
   _rtAO = nil;
   _rtAOHistory = _rtAOAccum = nil;
   _rtAOHistoryValid = false;  // resized AO targets: history is stale, hard-reset
@@ -1075,6 +1296,19 @@ void RendererMetal::ensurePostTargets(NSUInteger w, NSUInteger h)
   cd.storageMode = MTLStorageModePrivate;
   _sceneColor = [_device newTextureWithDescriptor:cd];
   _postColor = [_device newTextureWithDescriptor:cd];
+
+  // Surface outer-contour coverage mask (single-sample R8): the surface footprint
+  // is rendered here after the scene, then post_surface_contour outlines its
+  // boundary. Single-sample so the post pass reads it directly (no MSAA resolve).
+  MTLTextureDescriptor* covd = [MTLTextureDescriptor
+      texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm
+                                   width:w height:h mipmapped:NO];
+  covd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+  covd.storageMode = MTLStorageModePrivate;
+  _surfaceCoverageTex = [_device newTextureWithDescriptor:covd];
+  // Per-rep AO-exempt mask (#79): same single-sample R8, rasterized depth-tested
+  // against _sceneDepth so only front-most cartoon/ribbon pixels are marked.
+  _aoExemptMaskTex = [_device newTextureWithDescriptor:covd];
 
   // Raw RT terms: ambient occlusion in .r, traced light-visibility (hard
   // shadow) in .g. Kept in its own float texture so the composite pass can
@@ -1254,6 +1488,7 @@ void RendererMetal::buildPostPipelines()
   _ssaoPipeline = mkpipe(@"post_ssao_fog");
   _oitResolvePipeline = mkpipe(@"oit_resolve");
   _outlinePipeline = mkpipe(@"post_outline");
+  _surfaceContourPipeline = mkpipe(@"post_surface_contour");
   _dofPipeline = mkpipe(@"post_dof");
   _shadowDebugPipeline = mkpipe(@"post_shadow_debug");
   // Temporal-AO accumulate pipeline writes the RG16Float accumulation target, so
@@ -1391,13 +1626,14 @@ fragment float4 rt_ao(PostVOut in [[stage_in]],
   float d = depthTex.sample(s, in.uv);
   if (d >= 0.99999 || d <= 0.0015) return float4(1.0, 1.0, 1.0, 1.0);  // no occlusion
 
-  // Eye-space position + normal (matches post_ssao_fog reconstruction).
-  float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);
-  float ndcx = 2.0 * in.uv.x - 1.0;
-  float ndcy = 1.0 - 2.0 * in.uv.y;
-  float3 pEye = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-  float3 nEye = normalize(cross(dfdx(pEye), dfdy(pEye)));
-  if (nEye.z < 0.0) nEye = -nEye;
+  // Eye-space position + robust normal (matches post_ssao_fog reconstruction).
+  // post_eye_normal avoids the cross-silhouette derivative blow-up that plain
+  // cross(dfdx,dfdy) produces, which otherwise mis-orients the AO hemisphere /
+  // ray-origin bias in a 1-2px band along every silhouette.
+  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+  float2 invres = 1.0 / float2(depthTex.get_width(), depthTex.get_height());
+  float3 nEye = post_eye_normal(depthTex, s, in.uv, invres, d, pEye,
+                                u.projA, u.projB, u.projX, u.projY);
 
   float3 pModel = (u.invModelview * float4(pEye, 1.0)).xyz;
   float3 nModel = normalize((u.invModelview * float4(nEye, 0.0)).xyz);
@@ -1470,13 +1706,13 @@ fragment float4 rt_composite(PostVOut in [[stage_in]],
   if (d >= 0.99999) return float4(col, 1.0);  // background: leave as-is
   if (d <= 0.0015) return float4(col, 1.0);   // interior-cap cross-section: flat
 
-  // Eye-space position (matches post_ssao_fog reconstruction).
-  float ez = -u.projB / ((2.0 * d - 1.0) + u.projA);
-  float ndcx = 2.0 * in.uv.x - 1.0;
-  float ndcy = 1.0 - 2.0 * in.uv.y;
-  float3 pEye = float3(ndcx * (-ez) / u.projX, ndcy * (-ez) / u.projY, ez);
-  float3 nEye = normalize(cross(dfdx(pEye), dfdy(pEye)));
-  if (nEye.z < 0.0) nEye = -nEye;
+  // Eye-space position + robust normal (matches post_ssao_fog reconstruction).
+  // post_eye_normal avoids the cross-silhouette derivative blow-up that plain
+  // cross(dfdx,dfdy) produces (serrated lighter shadow border on edges).
+  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+  float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
+  float3 nEye = post_eye_normal(depthTex, s, in.uv, invres, d, pEye,
+                                u.projA, u.projB, u.projX, u.projY);
 
   // Depth-aware 5x5 blur of the AO term: weight neighbours by eye-space depth
   // closeness so AO doesn't bleed across object silhouettes.
@@ -1489,7 +1725,7 @@ fragment float4 rt_composite(PostVOut in [[stage_in]],
       float dn = depthTex.sample(s, uv);
       if (dn >= 0.99999) continue;
       float ezn = -u.projB / ((2.0 * dn - 1.0) + u.projA);
-      float w = exp(-abs(ezn - ez) / ztol);
+      float w = exp(-abs(ezn - pEye.z) / ztol);
       float2 rg = aoTex.sample(s, uv).rg;
       aoSum += rg.r * w;
       visSum += rg.g * w;
@@ -1538,7 +1774,7 @@ fragment float4 rt_composite(PostVOut in [[stage_in]],
 
   // Depth-cue fog toward bg (eye distance), matching the SSAO pass.
   if (u.bgFog.w > 0.5) {
-    float dist = -ez;
+    float dist = -pEye.z; // eye distance (pEye.z is the eye-space z, negative)
     float f = clamp((dist - u.fogStart) / max(u.fogEnd - u.fogStart, 1e-3), 0.0, 1.0);
     col = mix(col, u.bgFog.rgb, f);
   }
@@ -1974,11 +2210,17 @@ void RendererMetal::runPostChain()
 
   // Pass 1: SSAO + screen-space shadows + depth-cue/fog (color+depth -> post).
   else if ((doAO || doFog || doShadow) && _postColor) {
+    // Per-rep AO/shadow exemption (#79): rasterize the stashed cartoon/ribbon
+    // draws (depth-tested vs the scene) into _aoExemptMaskTex BEFORE the SSAO
+    // pass, so post_ssao_fog can skip the contour terms on those pixels. Only
+    // meaningful when AO or shadow is actually running.
+    bool aoMaskReady = (doAO || doShadow) ? renderAOExemptMask() : false;
+
     struct {
       float projA, projB, fogStart, fogEnd;
       float bgR, bgG, bgB, fogEnabled;
       float aoEnabled, aoIntensity, aoRadiusPx, projX;
-      float projY, shadowEnabled, shadowIntensity, _pad;
+      float projY, shadowEnabled, shadowIntensity, aoExemptEnabled;
       float lightViewProj[16]; // eye-space light VP (matches MSL PostU)
     } u;
     u.projA = _projA; u.projB = _projB;
@@ -1991,7 +2233,7 @@ void RendererMetal::runPostChain()
     u.projX = _projX; u.projY = _projY;
     u.shadowEnabled = doShadow ? 1.0f : 0.0f;
     u.shadowIntensity = 0.45f;
-    u._pad = 0.0f;
+    u.aoExemptEnabled = aoMaskReady ? 1.0f : 0.0f;
     std::memcpy(u.lightViewProj, _lightViewProjEye, 16 * sizeof(float));
 
     MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -2004,6 +2246,9 @@ void RendererMetal::runPostChain()
     [e1 setFragmentTexture:_sceneColor atIndex:0];
     [e1 setFragmentTexture:_sceneDepth atIndex:1];
     [e1 setFragmentTexture:_shadowDepth atIndex:2];
+    // texture(3) = AO-exempt mask; bind a valid 2D texture even when unused
+    // (aoExemptEnabled gates the sample), since the shader declares it.
+    [e1 setFragmentTexture:(aoMaskReady ? _aoExemptMaskTex : _sceneColor) atIndex:3];
     [e1 setFragmentSamplerState:_postSampler atIndex:0];
     [e1 setFragmentSamplerState:_shadowSampler atIndex:1];
     [e1 setFragmentBytes:&u length:sizeof(u) atIndex:0];
@@ -2094,6 +2339,101 @@ void RendererMetal::runPostChain()
     [e3 setFragmentBytes:&u length:sizeof(u) atIndex:0];
     [e3 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [e3 endEncoding];
+    sceneSrc = dst;
+  }
+
+  // Pass 3.4: surface OUTER contour. Render the stashed surface footprint into a
+  // coverage mask, then outline the mask boundary over the scene color. Works on
+  // transparent/clipped surfaces (coverage is independent of depth/OIT).
+  if (_contourActive && !_coverageDraws.empty() && _surfaceContourPipeline &&
+      _surfaceCoverageTex && _coverageVtxFunc && _coverageFragFunc) {
+    // (a) Coverage mask: rasterize the stashed surface draws (position-only,
+    // per-rep clip applied) into the R8 mask, cleared to 0.
+    MTLRenderPassDescriptor* cpd = [MTLRenderPassDescriptor renderPassDescriptor];
+    cpd.colorAttachments[0].texture = _surfaceCoverageTex;
+    cpd.colorAttachments[0].loadAction = MTLLoadActionClear;
+    cpd.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+    cpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> ce =
+        [_cmdBuffer renderCommandEncoderWithDescriptor:cpd];
+    for (const auto& cd : _coverageDraws) {
+      if (!_coveragePipeline || _coverageStride != cd.stride) {
+        MTLVertexDescriptor* vd = [[MTLVertexDescriptor alloc] init];
+        vd.attributes[0].format = MTLVertexFormatFloat3;
+        vd.attributes[0].offset = (NSUInteger)(cd.posOffset < 0 ? 0 : cd.posOffset);
+        vd.attributes[0].bufferIndex = 0;
+        vd.layouts[0].stride = (NSUInteger)cd.stride;
+        vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+        MTLRenderPipelineDescriptor* pd2 = [[MTLRenderPipelineDescriptor alloc] init];
+        pd2.vertexFunction = _coverageVtxFunc;
+        pd2.fragmentFunction = _coverageFragFunc;
+        pd2.vertexDescriptor = vd;
+        pd2.colorAttachments[0].pixelFormat = MTLPixelFormatR8Unorm;
+        pd2.rasterSampleCount = 1;
+        NSError* pe = nil;
+        [_coveragePipeline release];  // MRC: release the previous-stride pipeline
+        _coveragePipeline = [_device newRenderPipelineStateWithDescriptor:pd2 error:&pe];
+        _coverageStride = cd.stride;
+        if (!_coveragePipeline)
+          NSLog(@"RendererMetal: coverage pipeline failed: %@", pe);
+        [vd release]; [pd2 release];  // MRC: consumed by pipeline creation
+      }
+      if (!_coveragePipeline) continue;
+      [ce setRenderPipelineState:_coveragePipeline];
+      [ce setCullMode:MTLCullModeNone];
+      [ce setVertexBuffer:cd.vbo offset:0 atIndex:0];
+      struct { float modelview[16]; float projection[16]; float pointSize; float pad[3]; } cu;
+      std::memcpy(cu.modelview, cd.modelview, 64);
+      std::memcpy(cu.projection, cd.projection, 64);
+      cu.pointSize = 1.0f; cu.pad[0] = cu.pad[1] = cu.pad[2] = 0.0f;
+      [ce setVertexBytes:&cu length:sizeof(cu) atIndex:1];
+      // Coverage mask is intentionally CLIP-AGNOSTIC for the per-rep clip: the
+      // outer contour must trace the surface's true outer silhouette, not the
+      // per-rep "peek inside" clip cross-section. Feeding cd.clipFront/Back here
+      // discards the clipped fragments, so the clip cut edge would enter the
+      // mask boundary and get outlined (the reported bug). Bind a disabled clip
+      // (enabled=0) so the mask is the full surface footprint. The GLOBAL slab
+      // still applies (it rides in cd.projection, shared with the live draw), and
+      // the visible clipped surface + its interior cap are drawn by separate
+      // passes that keep the per-rep clip — only the contour changes.
+      { struct { float front, back, enabled, pad; } _cl = { -1.0f, 1e6f, 0.0f, 0.0f };
+        [ce setFragmentBytes:&_cl length:sizeof(_cl) atIndex:1]; }
+      if (cd.ibo) {
+        [ce drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                       indexCount:(NSUInteger)cd.count
+                        indexType:MTLIndexTypeUInt32
+                      indexBuffer:cd.ibo
+                indexBufferOffset:0];
+      } else {
+        [ce drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                vertexCount:(NSUInteger)cd.count];
+      }
+    }
+    [ce endEncoding];
+
+    // (b) Outline the coverage boundary over the scene color.
+    id<MTLTexture> dst = (sceneSrc == _sceneColor) ? _postColor : _sceneColor;
+    struct { float invW, invH, thickness, colR, colG, colB, colA, _pad; } u;
+    u.invW = (_rtW > 0) ? 1.0f / (float)_rtW : 0.0f;
+    u.invH = (_rtH > 0) ? 1.0f / (float)_rtH : 0.0f;
+    float halfW = _contourWidth * 0.5f;
+    u.thickness = (halfW < 0.5f ? 0.5f : halfW) * pixelRadiusScale();
+    u.colR = _contourColor[0]; u.colG = _contourColor[1];
+    u.colB = _contourColor[2]; u.colA = _contourColor[3];
+    u._pad = 0.0f;
+    MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
+    pd.colorAttachments[0].texture = dst;
+    pd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pd.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> ec =
+        [_cmdBuffer renderCommandEncoderWithDescriptor:pd];
+    [ec setRenderPipelineState:_surfaceContourPipeline];
+    [ec setFragmentTexture:sceneSrc atIndex:0];
+    [ec setFragmentTexture:_surfaceCoverageTex atIndex:1];
+    [ec setFragmentSamplerState:_postSampler atIndex:0];
+    [ec setFragmentBytes:&u length:sizeof(u) atIndex:0];
+    [ec drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [ec endEncoding];
     sceneSrc = dst;
   }
 
@@ -3267,7 +3607,17 @@ struct VBOVertexOut {
   float4 position [[position]];
   float4 color;
   float3 normalEye;   // eye-space normal, interpolated → per-fragment (Phong)
+  float  eyeDist;     // distance from camera (-eyeZ), for per-rep clipping
 };
+
+// Per-representation clip planes (eye-space distances from the camera). Lets one
+// rep (e.g. the surface) clip tighter than the global slab so the user can peek
+// inside while cartoon/sticks stay whole. enabled<0.5 => no per-rep clip.
+struct ClipU { float front; float back; float enabled; float _pad; };
+static void apply_rep_clip(ClipU clip, float eyeDist) {
+  if (clip.enabled > 0.5 && (eyeDist < clip.front || eyeDist > clip.back))
+    discard_fragment();
+}
 
 // PyMOL two-light model. The ambient/direct/reflect/specular/shininess come
 // from the live PyMOL settings (Scene lighting sliders) via LightU, instead of
@@ -3298,7 +3648,16 @@ static float3 vbo_shade(float3 baseColor, float3 nEye, LightU lt) {
   intensity += reflect * wrap_diffuse(n1, lt.wrap);
   if (n1 > 0.0) {
     float3 H1 = normalize(L1 + float3(0.0, 0.0, 1.0));
-    specular += spec_value * pow(max(dot(normal, H1), 0.0), shininess);
+    // Soften specular on the lit-VBO path (cartoon + molecular surface). The
+    // fixed view half-vector makes a flat ribbon/sheet face light up uniformly
+    // bright, which reads as harsh triangular facets once screen-space AO is
+    // removed from cartoons (#79) — the geometry normals are smooth, but the
+    // strong highlight on each flat facet exaggerates the low-poly faces. Scale
+    // the specular toward the softer ray-tracer/desktop look. Sphere/cylinder
+    // impostors have their own shaders and keep full specular (sticks/spheres
+    // stay glossy).
+    const float kLitVBOSpecScale = 0.4;
+    specular += kLitVBOSpecScale * spec_value * pow(max(dot(normal, H1), 0.0), shininess);
   }
   return baseColor * min(intensity, 1.0) + specular;
 }
@@ -3334,12 +3693,17 @@ vertex VBOVertexOut vbo_vertex(
   // (visible triangle banding); per-pixel shading is smooth.
   out.normalEye = (uniforms.modelview * float4(in.normal, 0.0)).xyz;
   out.color = in.color;
+  // Eye-space distance from the camera (eyePos.z is negative in front), used by
+  // the fragment stage to discard fragments outside this rep's clip planes.
+  out.eyeDist = -eyePos.z;
   return out;
 }
 
 fragment float4 vbo_fragment(VBOVertexOut in [[stage_in]],
-    constant LightU& lt [[buffer(0)]])
+    constant LightU& lt [[buffer(0)]],
+    constant ClipU& clip [[buffer(1)]])
 {
+  apply_rep_clip(clip, in.eyeDist);
   return float4(vbo_shade(in.color.rgb, in.normalEye, lt), in.color.a);
 }
 
@@ -3391,21 +3755,36 @@ vertex VBOVertexOutUnlit vbo_vertex_unlit_flat(
 // color/depth write, stencil = INVERT). Each face toggles stencil bit 0, so odd
 // parity == the near (slab) plane is inside the solid the surface encloses.
 struct CapMarkIn { float3 position [[attribute(0)]]; };
-vertex float4 cap_mark_vertex(CapMarkIn in [[stage_in]],
+struct CapMarkOut { float4 position [[position]]; float eyeDist; };
+vertex CapMarkOut cap_mark_vertex(CapMarkIn in [[stage_in]],
     constant VBOUniforms& u [[buffer(1)]]) {
-  float4 p = u.projection * (u.modelview * float4(in.position, 1.0));
+  CapMarkOut o;
+  float4 eye = u.modelview * float4(in.position, 1.0);
+  float4 p = u.projection * eye;
   p.z = 0.5 * (p.z + p.w);   // GL [-1,1] -> Metal [0,1] (match the VBO)
-  return p;
+  o.position = p;
+  o.eyeDist = -eye.z;        // per-rep clip parity (matches vbo_vertex)
+  return o;
 }
-fragment float4 cap_mark_fragment() { return float4(0.0); }  // color discarded
-// FILL: a full-screen triangle at the near-plane sentinel depth; a stencil EQUAL
-// test keeps only the interior pixels, filled with a flat interior color (and the
-// pass clears the stencil bit so multiple capped surfaces don't interfere).
+// Discard the per-rep-clipped-away faces so the stencil parity marks the cut at
+// the per-rep FRONT plane (not just the global near plane). The bound ClipU has
+// back left open so only the viewer-facing cut is capped; when per-rep clip is
+// off (enabled=0) this is a no-op and the global-slab/impostor cap is unchanged.
+fragment float4 cap_mark_fragment(CapMarkOut in [[stage_in]],
+    constant ClipU& clip [[buffer(1)]]) {
+  apply_rep_clip(clip, in.eyeDist);
+  return float4(0.0);  // color masked off (writeMask none)
+}
+// FILL: a full-screen triangle at the cut-plane depth (capDepth; the global near
+// sentinel 1e-5 when per-rep clip is off); a stencil EQUAL test keeps only the
+// interior pixels, filled with a flat interior color (and the pass clears the
+// stencil bit so multiple capped surfaces don't interfere).
 struct CapFillOut { float4 position [[position]]; };
-vertex CapFillOut cap_fill_vertex(uint vid [[vertex_id]]) {
+vertex CapFillOut cap_fill_vertex(uint vid [[vertex_id]],
+    constant float& capDepth [[buffer(0)]]) {
   float2 p = float2(float((vid << 1) & 2), float(vid & 2));   // (0,0)(2,0)(0,2)
   CapFillOut o;
-  o.position = float4(p * 2.0 - 1.0, 1e-5, 1.0);  // cover screen at sentinel depth
+  o.position = float4(p * 2.0 - 1.0, capDepth, 1.0);  // cover screen at cut depth
   return o;
 }
 fragment float4 cap_fill_fragment(constant float4& interiorColor [[buffer(0)]]) {
@@ -3414,6 +3793,26 @@ fragment float4 cap_fill_fragment(constant float4& interiorColor [[buffer(0)]]) 
   // {0,0,1}). Caps use the default lighting (a minor flat fill).
   LightU lt = {0.14, 0.45, 0.481, 0.5, 55.0, 0.0};
   return float4(vbo_shade(interiorColor.rgb, float3(0.0, 0.0, 1.0), lt), interiorColor.a);
+}
+
+// --- Surface coverage (for the outer-contour outline) ---
+// Rendered AFTER the scene into an R8 mask: position-only, applies the per-rep
+// clip (so coverage matches the displayed/clipped surface), writes 1 for every
+// surviving fragment. post_surface_contour then outlines the mask boundary.
+struct CovOut { float4 position [[position]]; float eyeDist; };
+vertex CovOut coverage_vertex(CapMarkIn in [[stage_in]],
+    constant VBOUniforms& u [[buffer(1)]]) {
+  CovOut o;
+  float4 eye = u.modelview * float4(in.position, 1.0);
+  o.position = u.projection * eye;
+  o.position.z = 0.5 * (o.position.z + o.position.w);
+  o.eyeDist = -eye.z;
+  return o;
+}
+fragment float4 coverage_fragment(CovOut in [[stage_in]],
+    constant ClipU& clip [[buffer(1)]]) {
+  apply_rep_clip(clip, in.eyeDist);
+  return float4(1.0, 0.0, 0.0, 1.0); // R8 mask = 1 where the surface covers
 }
 
 // Weighted-blended OIT output (McGuire/Bavoil). Transparent geometry writes
@@ -3428,8 +3827,10 @@ static float oit_weight(float a, float z) {
                pow(1.0 - z * 0.9, 3.0), 1e-2, 3e3);
 }
 fragment OITFragOut vbo_fragment_oit(VBOVertexOut in [[stage_in]],
-    constant LightU& lt [[buffer(0)]])
+    constant LightU& lt [[buffer(0)]],
+    constant ClipU& clip [[buffer(1)]])
 {
+  apply_rep_clip(clip, in.eyeDist);
   float4 c = float4(vbo_shade(in.color.rgb, in.normalEye, lt), in.color.a);
   float w = oit_weight(c.a, in.position.z);
   OITFragOut o;
@@ -3497,6 +3898,8 @@ fragment float4 line_aa_fragment(LineAAOut in [[stage_in]],
   _capMarkFragFunc = [lib newFunctionWithName:@"cap_mark_fragment"];
   _capFillVtxFunc = [lib newFunctionWithName:@"cap_fill_vertex"];
   _capFillFragFunc = [lib newFunctionWithName:@"cap_fill_fragment"];
+  _coverageVtxFunc = [lib newFunctionWithName:@"coverage_vertex"];
+  _coverageFragFunc = [lib newFunctionWithName:@"coverage_fragment"];
   _lineAAVtxFunc = [lib newFunctionWithName:@"line_aa_vertex"];
   _lineAAFragFunc = [lib newFunctionWithName:@"line_aa_fragment"];
   if (!_vboVertexFunc || !_vboFragmentFunc) {
@@ -3986,6 +4389,24 @@ id<MTLRenderPipelineState> RendererMetal::cachedVBOPipeline(
 #pragma mark - VBO Drawing
 // ---------------------------------------------------------------------------
 
+// Window-space depth ([0,1], matching the VBO's 0.5*(z+w) convention) of the
+// per-rep front cut plane, for placing the interior cap-fill at the cut instead
+// of the global near plane. Returns the near sentinel (1e-5) when per-rep clip
+// is off (repClipFront < 0), preserving the original global-slab/impostor cap.
+// P is the column-major projection matrix; clip.z/clip.w of eye point (0,0,ez)
+// use P[10],P[14] and P[11],P[15].
+static float repCapDepth(const float* P, float repClipFront)
+{
+  if (repClipFront < 0.0f)
+    return 1e-5f;
+  float ez = -repClipFront; // eye-space z of the front cut plane (negative)
+  float cz = P[10] * ez + P[14];
+  float cw = P[11] * ez + P[15];
+  if (std::fabs(cw) < 1e-6f)
+    return 1e-5f;
+  return 0.5f * (cz / cw + 1.0f); // GL NDC [-1,1] -> window [0,1]
+}
+
 void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
     const void* data, size_t dataSize, size_t stride,
     int posOffset, int normalOffset, int colorOffset, int colorType,
@@ -4153,6 +4574,11 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   { struct { float a, d, r, s, sh, w; } _lt = { _lightAmbient, _lightDirect,
       _lightReflect, _lightSpecular, _lightShininess, _sssWrap };
     [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
+  // Per-rep clip planes for the lit vbo_fragment / vbo_fragment_oit at fragment
+  // buffer(1). enabled=0 (front<0) leaves the rep clipped only by the global slab.
+  { struct { float front, back, enabled, pad; } _cl = { _repClipFront, _repClipBack,
+      _repClipFront >= 0.0f ? 1.0f : 0.0f, 0.0f };
+    [_encoder setFragmentBytes:&_cl length:sizeof(_cl) atIndex:1]; }
 
   // Flat (uniform-colored) geometry: supply the color the flat shader reads
   // from buffer 2. No per-vertex color is available here (the GL path would set
@@ -4211,11 +4637,18 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   { struct { float a, d, r, s, sh, w; } _lt = { _lightAmbient, _lightDirect,
       _lightReflect, _lightSpecular, _lightShininess, _sssWrap };
     [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
+      // MARK pass: per-rep clip (front-only) so stencil parity marks the cut at
+      // the per-rep front plane; no-op (enabled=0) when per-rep clip is off.
+      { struct { float front, back, enabled, pad; } _capcl = { _repClipFront, 1e6f,
+          _repClipFront >= 0.0f ? 1.0f : 0.0f, 0.0f };
+        [_encoder setFragmentBytes:&_capcl length:sizeof(_capcl) atIndex:1]; }
       [_encoder drawPrimitives:toMTL(mode)
                    vertexStart:0
                    vertexCount:static_cast<NSUInteger>(vertexCount)];
       [_encoder setRenderPipelineState:_capFillPipeline];
       [_encoder setDepthStencilState:_capFillDSS];
+      { float capDepth = repCapDepth(_projectionMatrix.data(), _repClipFront);
+        [_encoder setVertexBytes:&capDepth length:sizeof(capDepth) atIndex:0]; }
       const float interior[4] = {
           _capColorOverride ? _capColor[0] : 0.32f,
           _capColorOverride ? _capColor[1] : 0.32f,
@@ -4226,6 +4659,31 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
       applyDepthStencilState();
       if (_depthStencilState) [_encoder setDepthStencilState:_depthStencilState];
     }
+  }
+
+  // Surface outer-contour: stash this (non-shadow) surface draw to be rendered
+  // into the coverage mask after the scene (see runPostChain).
+  if (_repContourEnabled && !_shadowMode) {
+    CoverageDraw cd;
+    cd.vbo = vbo; cd.ibo = nil; cd.count = vertexCount;
+    cd.stride = stride; cd.posOffset = posOffset;
+    std::memcpy(cd.modelview, _modelviewMatrix.data(), 64);
+    std::memcpy(cd.projection, _projectionMatrix.data(), 64);
+    cd.clipFront = _repClipFront; cd.clipBack = _repClipBack;
+    _coverageDraws.push_back(cd);
+    _contourActive = true;
+  }
+
+  // Per-rep AO/shadow exemption (#79): stash this cartoon/ribbon draw to be
+  // rasterized into the AO-exempt mask after the scene (see renderAOExemptMask).
+  if (_repAOExempt && !_shadowMode) {
+    CoverageDraw cd;
+    cd.vbo = vbo; cd.ibo = nil; cd.count = vertexCount;
+    cd.stride = stride; cd.posOffset = posOffset;
+    std::memcpy(cd.modelview, _modelviewMatrix.data(), 64);
+    std::memcpy(cd.projection, _projectionMatrix.data(), 64);
+    cd.clipFront = _repClipFront; cd.clipBack = _repClipBack;
+    _aoExemptDraws.push_back(cd);
   }
 }
 
@@ -4363,6 +4821,11 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   { struct { float a, d, r, s, sh, w; } _lt = { _lightAmbient, _lightDirect,
       _lightReflect, _lightSpecular, _lightShininess, _sssWrap };
     [_encoder setFragmentBytes:&_lt length:sizeof(_lt) atIndex:0]; }
+  // Per-rep clip planes for the lit vbo_fragment / vbo_fragment_oit at fragment
+  // buffer(1). enabled=0 (front<0) leaves the rep clipped only by the global slab.
+  { struct { float front, back, enabled, pad; } _cl = { _repClipFront, _repClipBack,
+      _repClipFront >= 0.0f ? 1.0f : 0.0f, 0.0f };
+    [_encoder setFragmentBytes:&_cl length:sizeof(_cl) atIndex:1]; }
 
   // Flat (uniform-colored) geometry reads its color from buffer 2 — see drawVBO.
   if (flat) {
@@ -4415,6 +4878,11 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
       [_encoder setCullMode:MTLCullModeNone];
       [_encoder setVertexBuffer:vbo offset:0 atIndex:0];
       [_encoder setVertexBytes:&matrices length:sizeof(matrices) atIndex:1];
+      // MARK pass: per-rep clip (front-only) so stencil parity marks the cut at
+      // the per-rep front plane; no-op (enabled=0) when per-rep clip is off.
+      { struct { float front, back, enabled, pad; } _capcl = { _repClipFront, 1e6f,
+          _repClipFront >= 0.0f ? 1.0f : 0.0f, 0.0f };
+        [_encoder setFragmentBytes:&_capcl length:sizeof(_capcl) atIndex:1]; }
       [_encoder drawIndexedPrimitives:toMTL(mode)
                            indexCount:static_cast<NSUInteger>(indexCount)
                             indexType:MTLIndexTypeUInt32
@@ -4422,6 +4890,8 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
                     indexBufferOffset:0];
       [_encoder setRenderPipelineState:_capFillPipeline];
       [_encoder setDepthStencilState:_capFillDSS];
+      { float capDepth = repCapDepth(_projectionMatrix.data(), _repClipFront);
+        [_encoder setVertexBytes:&capDepth length:sizeof(capDepth) atIndex:0]; }
       const float interior[4] = {
           _capColorOverride ? _capColor[0] : 0.32f,
           _capColorOverride ? _capColor[1] : 0.32f,
@@ -4433,6 +4903,31 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
       applyDepthStencilState();
       if (_depthStencilState) [_encoder setDepthStencilState:_depthStencilState];
     }
+  }
+
+  // Surface outer-contour: stash this (non-shadow) surface draw to be rendered
+  // into the coverage mask after the scene (see runPostChain).
+  if (_repContourEnabled && !_shadowMode) {
+    CoverageDraw cd;
+    cd.vbo = vbo; cd.ibo = ibo; cd.count = indexCount;
+    cd.stride = stride; cd.posOffset = posOffset;
+    std::memcpy(cd.modelview, _modelviewMatrix.data(), 64);
+    std::memcpy(cd.projection, _projectionMatrix.data(), 64);
+    cd.clipFront = _repClipFront; cd.clipBack = _repClipBack;
+    _coverageDraws.push_back(cd);
+    _contourActive = true;
+  }
+
+  // Per-rep AO/shadow exemption (#79): stash this cartoon/ribbon draw to be
+  // rasterized into the AO-exempt mask after the scene (see renderAOExemptMask).
+  if (_repAOExempt && !_shadowMode) {
+    CoverageDraw cd;
+    cd.vbo = vbo; cd.ibo = ibo; cd.count = indexCount;
+    cd.stride = stride; cd.posOffset = posOffset;
+    std::memcpy(cd.modelview, _modelviewMatrix.data(), 64);
+    std::memcpy(cd.projection, _projectionMatrix.data(), 64);
+    cd.clipFront = _repClipFront; cd.clipBack = _repClipBack;
+    _aoExemptDraws.push_back(cd);
   }
 }
 
