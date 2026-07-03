@@ -69,6 +69,38 @@ enum CartoonLOD {
     static func autoUpscale(backingScale: CGFloat) -> Bool { backingScale >= 2.0 }
 }
 
+/// Formatting helpers for the perf HUD. Unit-tested standalone (swift script).
+enum PerfFormat {
+    static func bytes(_ b: UInt64) -> String {
+        let mb = Double(b) / (1024*1024)
+        if mb >= 1024 { return String(format: "%.2f GB", mb/1024) }
+        return String(format: "%.0f MB", mb)
+    }
+    static func fps(_ f: Double) -> String { f <= 0 ? "idle" : String(format: "%.0f", f) }
+}
+
+/// Live render metrics for the perf HUD overlay (metal_perf_hud). Published ~3x/s
+/// from MetalViewport.draw(in:) + PyMOLEngine.applyDynamicCartoonSampling.
+final class PerfHUD: ObservableObject {
+    @Published var visible = false          // mirrors metal_perf_hud
+    @Published var fps: Double = 0
+    @Published var triangles: UInt64 = 0
+    @Published var cpuBytes: UInt64 = 0
+    @Published var gpuBytes: UInt64 = 0
+    @Published var sampling = 0             // live cartoon_sampling
+    @Published var angPerPx: Float = 0
+    @Published var bucketMax = 0            // effective cartoon_sampling_max
+    @Published var dynamicOn = false
+    @Published var upscale = 0              // metal_upscale (0/1/2)
+    @Published var renderScale: Float = 1
+    @Published var msaa = false
+    @Published var shadows = false
+    @Published var raytrace = false
+    @Published var drawableW = 0
+    @Published var drawableH = 0
+    @Published var retina = true
+}
+
 /// One PyMOL setting for the Settings panel. type: 1 bool, 2 int, 3 float,
 /// 4 float3, 5 color, 6 string (pymol.setting type codes).
 struct SettingItem: Identifiable, Equatable, Codable {
@@ -910,14 +942,29 @@ final class PyMOLEngine: ObservableObject {
         defer { PyMOLBridge_FreeFeedback(c) }
         return String(cString: c)
     }
-    private func evalFloat(_ expr: String) -> Float? { evalString(expr).flatMap { Float($0) } }
-    private func evalInt(_ expr: String) -> Int? { evalString(expr).flatMap { Int($0) } }
+    func evalFloat(_ expr: String) -> Float? { evalString(expr).flatMap { Float($0) } }
+    func evalInt(_ expr: String) -> Int? { evalString(expr).flatMap { Int($0) } }
 
     // MARK: - Adaptive cartoon LOD (cartoon_sampling_dynamic)
 
     /// Last sampling this engine applied, so hysteresis compares against what we
     /// set (not a stale read). -1 = unknown.
     private var lastAppliedSampling: Int = -1
+
+    /// Live perf-HUD metrics (metal_perf_hud). Observed by PerfHUDView.
+    let perf = PerfHUD()
+
+    /// Process physical memory footprint in bytes (mach TASK_VM_INFO).
+    func cpuFootprintBytes() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return kr == KERN_SUCCESS ? UInt64(info.phys_footprint) : 0
+    }
 
     /// Zoom-adaptive cartoon detail: map the current Å/px to a target
     /// cartoon_sampling (CartoonLOD) and rebuild if it changed. No-op unless
@@ -943,6 +990,11 @@ final class PyMOLEngine: ObservableObject {
         let app = CartoonLOD.angstromPerPixel(cameraDistance: camDist, fovDegrees: fov,
                                               viewportHeightPx: viewportHeightPx)
         let target = CartoonLOD.targetSampling(angstromPerPixel: app, maxSampling: maxS, current: cur)
+        // Publish LOD values for the perf HUD (even when no rebuild is needed).
+        DispatchQueue.main.async {
+            self.perf.angPerPx = app; self.perf.bucketMax = maxS
+            self.perf.sampling = target; self.perf.dynamicOn = true
+        }
         guard target != cur else { return }
         lastAppliedSampling = target
         runPython("cmd.set('cartoon_sampling', \(target)); cmd.rebuild()")

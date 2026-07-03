@@ -252,9 +252,47 @@ extension MetalViewport {
             let scale = view.window?.screen.scale ?? view.contentScaleFactor
             #endif
             let retina = CartoonLOD.autoUpscale(backingScale: scale)
+            if let e = engine, e.perf.retina != retina { DispatchQueue.main.async { e.perf.retina = retina } }
             guard retina != lastRetina else { return }
             lastRetina = retina
             engine?.setDisplayIsRetina(retina)
+        }
+
+        // Perf HUD (metal_perf_hud): FPS is an EMA of rendered-frame intervals;
+        // the rest (renderer stats + settings) is published ~3x/s. Called from
+        // draw(in:) only on frames that actually rendered.
+        private var lastFrameTime: CFTimeInterval = 0
+        private var fpsEMA: Double = 0
+        private var lastHUDPublish: CFTimeInterval = 0
+        func updatePerfHUD(_ view: MTKView) {
+            let now = CACurrentMediaTime()
+            if lastFrameTime > 0 {
+                let dt = now - lastFrameTime
+                if dt > 0 { fpsEMA = fpsEMA == 0 ? 1.0/dt : (0.9*fpsEMA + 0.1*(1.0/dt)) }
+            }
+            lastFrameTime = now
+            guard let engine = engine else { return }
+            let hudOn = (engine.evalInt("int(cmd.get_setting_int('metal_perf_hud'))") ?? 0) == 1
+            if engine.perf.visible != hudOn { DispatchQueue.main.async { engine.perf.visible = hudOn } }
+            guard hudOn, now - lastHUDPublish > 0.33 else { return }   // ~3x/s
+            lastHUDPublish = now
+            var tris: UInt64 = 0, gpu: UInt64 = 0; var rs: Float = 1
+            PyMOLBridge_GetRenderStats(&tris, &gpu, &rs)
+            let cpu = engine.cpuFootprintBytes()
+            let samp = engine.evalInt("int(cmd.get_setting_int('cartoon_sampling'))") ?? 0
+            let up = engine.evalInt("int(cmd.get_setting_int('metal_upscale'))") ?? 0
+            let msaa = (engine.evalInt("int(cmd.get_setting_int('metal_msaa'))") ?? 0) == 1
+            let sh = (engine.evalInt("int(cmd.get_setting_int('metal_shadows'))") ?? 0) == 1
+            let rt = (engine.evalInt("int(cmd.get_setting_int('metal_raytrace'))") ?? 0) == 1
+            let dw = Int(view.drawableSize.width), dh = Int(view.drawableSize.height)
+            let fps = fpsEMA
+            DispatchQueue.main.async {
+                let p = engine.perf
+                p.fps = fps; p.triangles = tris; p.gpuBytes = gpu; p.cpuBytes = cpu
+                p.sampling = samp; p.upscale = up; p.renderScale = rs
+                p.msaa = msaa; p.shadows = sh; p.raytrace = rt
+                p.drawableW = dw; p.drawableH = dh
+            }
         }
         // Set when the app/display wakes (unlock, system wake, re-activate). The
         // next draw(in:) then renders unconditionally, bypassing the on-demand
@@ -429,6 +467,8 @@ extension MetalViewport {
             // resolves against the CURRENT screen — covers launch + window moved
             // between displays even if no backing-property change fired.
             pushDisplayRetina(view)
+            // Perf HUD: FPS + metrics (throttled internally; gated on metal_perf_hud).
+            updatePerfHUD(view)
         }
 
         // MARK: - Coordinate conversion
