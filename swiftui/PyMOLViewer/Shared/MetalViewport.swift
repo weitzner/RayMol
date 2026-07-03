@@ -271,11 +271,15 @@ extension MetalViewport {
                 if dt > 0 { fpsEMA = fpsEMA == 0 ? 1.0/dt : (0.9*fpsEMA + 0.1*(1.0/dt)) }
             }
             lastFrameTime = now
+            // Throttle EVERYTHING below (incl. the metal_perf_hud gate read) to
+            // ~3x/s so a frame costs nothing extra when the HUD is off — FPS EMA
+            // above is pure Swift and stays per-frame.
+            guard now - lastHUDPublish > 0.33 else { return }
+            lastHUDPublish = now
             guard let engine = engine else { return }
             let hudOn = (engine.evalInt("int(cmd.get_setting_int('metal_perf_hud'))") ?? 0) == 1
             if engine.perf.visible != hudOn { DispatchQueue.main.async { engine.perf.visible = hudOn } }
-            guard hudOn, now - lastHUDPublish > 0.33 else { return }   // ~3x/s
-            lastHUDPublish = now
+            guard hudOn else { return }
             var tris: UInt64 = 0, gpu: UInt64 = 0; var rs: Float = 1
             PyMOLBridge_GetRenderStats(&tris, &gpu, &rs)
             let cpu = engine.cpuFootprintBytes()
