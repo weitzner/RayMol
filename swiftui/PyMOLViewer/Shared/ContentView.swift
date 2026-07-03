@@ -786,15 +786,12 @@ struct ContentView: View {
                 // The Movie tab (tag 2) IS the timeline on iPhone: enter it directly
                 // from the tab selection (not just after onChange sets timelineMode),
                 // so there's no 1-frame flash of the old builder pane.
-                let isPhone = phonePortrait || isPhoneLandscape
                 Group {
-                    // iPad / desktop: the timeline is an explicit docked mode (no
-                    // tab bar), so it takes over the bottom region. iPhone: the
-                    // Movie tab renders the timeline INSIDE the tab UI (below) so
-                    // the bottom tab bar stays visible — no immersive takeover.
-                    if engine.timelineMode && !isPhone {
-                        iosTimelineLayout(geo: geo)
-                    } else if phonePortrait {
+                    // iPhone: the Movie tab hosts the timeline (the tab bar stays).
+                    // iPad: the timeline lives in the right inspector's Movie tab and
+                    // optionally docks full-width at the bottom (iPadMacStyleLayout) —
+                    // no full-screen takeover, so the inspector stays usable.
+                    if phonePortrait {
                         iPhoneLayout(geo: geo)
                     } else if isPhoneLandscape {
                         // iPhone landscape mirrors the portrait UX with the same
@@ -1082,54 +1079,9 @@ struct ContentView: View {
         }
     }
 
-    // MARK: iOS Timeline mode — docked movie studio replaces the bottom panel
-    //
-    // The TimelinePanel takes over the bottom control-panel region (so the tab
-    // bar is hidden) while the 3D viewer stays on screen. Portrait docks it at
-    // the bottom; landscape docks it on the RIGHT (a column the width of the
-    // short edge) so the wide ruler still lays out like portrait and the viewer
-    // keeps the majority of the screen. Exit via the panel's Done button (or the
-    // top-bar clapperboard). The viewer keeps its floating help/controls; the
-    // transport lives INSIDE the TimelinePanel, so no separate transportOverlay.
-    @ViewBuilder
-    private func iosTimelineLayout(geo: GeometryProxy) -> some View {
-        let landscape = geo.size.width > geo.size.height
-        if landscape {
-            HStack(spacing: 0) {
-                viewportView
-                Divider()
-                // fixedSize → the panel hugs its content instead of stretching to
-                // fill the column (which would scatter empty gaps); top-aligned.
-                TimelinePanel(onExit: exitTimeline)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(width: min(geo.size.height, geo.size.width * 0.5))
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .background(themeChromeBg)
-            }
-        } else {
-            VStack(spacing: 0) {
-                viewportView
-                Divider()
-                // fixedSize → the panel is exactly as tall as its content (viewer
-                // takes the rest); without it the panel stretched and spread the
-                // slack as empty bands between the header/ruler/palette.
-                TimelinePanel(onExit: exitTimeline)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .background(themeChromeBg)
-                    // Clear the home indicator (the body ignores the safe area).
-                    .padding(.bottom, geo.safeAreaInsets.bottom > 0 ? geo.safeAreaInsets.bottom : (hSize == .compact ? 12 : 0))
-            }
-        }
-    }
-
-    // Leave Timeline mode (the panel's Done) — and step off the Movie tab so the
-    // tab bar returns to a normal pane instead of immediately re-entering it.
-    private func exitTimeline() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            engine.timelineMode = false
-            if selectedTab == 2 { selectedTab = 1 }
-        }
-    }
+    // (Retired) iOS full-screen timeline takeover. The timeline now lives in the
+    // iPhone Movie tab (iPhoneLayout) and, on iPad, in the right inspector's Movie
+    // tab + an optional bottom dock (iPadMacStyleLayout) — no takeover.
 
     @ViewBuilder
     private func iPhoneLayout(geo: GeometryProxy) -> some View {
@@ -1323,6 +1275,14 @@ struct ContentView: View {
                         Divider()
                     }
                     viewportView
+                    // Expanded timeline docks full-width under the viewport (the
+                    // Movie tab's Expand button toggles engine.timelineMode). Its own
+                    // ✕ Close collapses it; independent of the inspector tab.
+                    if engine.timelineMode {
+                        Divider()
+                        TimelinePanel()
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 // Push the console/sequence below the toolbar only when one is
                 // shown; a bare viewport stays full-bleed/immersive.
@@ -1359,6 +1319,13 @@ struct ContentView: View {
                 }
                 viewportView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Expanded timeline docks between the viewport and the bottom
+                // inspector (portrait). Toggled by the Movie tab's Expand button.
+                if engine.timelineMode {
+                    Divider()
+                    TimelinePanel()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if showThemeStudio {
                     resizeDivider(landscape: false, total: geo.size.height)
                     ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
@@ -2204,7 +2171,10 @@ struct ContentView: View {
                 ScenesPane(showViewportButtons: $showSceneButtons,
                            onOpenMovie: { inspectorTab = .movie })
             case .movie:
-                MoviePane()
+                // The right-panel timeline mimics the iPhone Movie tab; its Expand
+                // button toggles the full-width bottom dock (engine.timelineMode).
+                TimelinePanel(showsDone: false,
+                              onExpand: { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() } })
             case .display:
                 // The SCENE render card (bg/lighting/effects/ray); its
                 // "All settings…" opens the shared searchable SettingsSheet. Theme

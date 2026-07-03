@@ -32,6 +32,10 @@ struct TimelinePanel: View {
     /// Whether to show the Done button. False on iPhone, where the timeline is
     /// the Movie tab and the tab bar handles navigation.
     var showsDone: Bool = true
+    /// When set, the header shows an Expand button that opens/collapses the
+    /// full-width bottom dock (macOS / iPad right-panel compact view). The button
+    /// reflects `engine.timelineMode` (dock open) as its active state.
+    var onExpand: (() -> Void)? = nil
 
     @State private var showClearConfirm = false
 
@@ -136,6 +140,7 @@ struct TimelinePanel: View {
             addCameraButton
             zoomControl
             trashButton
+            if onExpand != nil { expandButton }
             if showsDone { doneButton }
         }
         .padding(.horizontal, isCompact ? 8 : 12)
@@ -200,6 +205,24 @@ struct TimelinePanel: View {
         .disabled(engine.timelineItems.isEmpty)
         .help("Clear the timeline")
         .accessibilityLabel("Clear timeline")
+    }
+
+    // Open / collapse the full-width bottom dock (compact right-panel view only).
+    // Active (accent) while the dock is open (engine.timelineMode).
+    private var expandButton: some View {
+        let open = engine.timelineMode
+        return Button { onExpand?() } label: {
+            Image(systemName: open ? "arrow.down.right.and.arrow.up.left"
+                                   : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .background(Capsule().fill(open ? TimelineTheme.accent : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(open ? .white : TimelineTheme.text)
+        .help(open ? "Collapse the full editor" : "Expand into a full editor at the bottom")
+        .accessibilityLabel(open ? "Collapse timeline editor" : "Expand timeline editor")
     }
 
     // The current movie length, from the sum of transition durations.
