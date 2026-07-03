@@ -225,9 +225,11 @@ public:
     selColor[0] = r; selColor[1] = g; selColor[2] = b;
   }
 
-  // VBO buffer cache — returns a cached buffer ID for the given key,
-  // creating it from data if not already cached.
-  virtual void invalidateVBOCache(uint64_t key) {}
+  // Evict the cached GPU vertex/index buffer keyed by `key` (the buffer's
+  // CPU-data pointer, GPUBuffer::cpuDataPointer()). Called when the owning
+  // buffer is freed so its cached device buffer is released rather than
+  // orphaned. No-op unless a renderer maintains such a cache (Metal does).
+  virtual void invalidateVBOCache(const void* key) {}
 
   // Screen-aligned textured text quads (labels + measurement text). The
   // interleaved vertex data carries the attributes the GL label shader uses;

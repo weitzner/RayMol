@@ -146,7 +146,7 @@ public:
   void setRepClip(float front, float back) override;
   void setRepContour(bool enabled, const float* rgba, float widthPx) override;
   void setRepScreenAO(bool exempt) override;
-  void invalidateVBOCache(uint64_t key) override;
+  void invalidateVBOCache(const void* key) override;
   void drawLabels(const LabelDrawCall& call) override;
   void drawSphereImpostors(const SphereImpostorDrawCall& call) override;
   void drawCylinderImpostors(const CylinderImpostorDrawCall& call) override;

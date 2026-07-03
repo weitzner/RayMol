@@ -979,10 +979,30 @@ final class PyMOLEngine: ObservableObject {
         guard let camDist = evalFloat("abs(cmd.get_view()[11])") else { return }
         let fov = evalFloat("float(cmd.get_setting_float('field_of_view'))") ?? 20
         var maxS = evalInt("int(cmd.get_setting_int('cartoon_sampling_max'))") ?? -1
+        #if os(iOS)
+        // iOS has a far tighter memory budget than desktop. A large cartoon at
+        // high sampling OOM-kills the app (jetsam) — measured: cartoon_sampling=100
+        // on the 20S proteasome (1ss8) = 7.1M triangles ≈ 2.8 GB resident. So on
+        // iOS we HARD-CLAMP the effective ceiling to a device-safe value scaled by
+        // polymer atom count, REGARDLESS of an explicit (or session-restored)
+        // cartoon_sampling_max — a phone simply cannot render sampling 100. The
+        // clamp bounds both the auto (-1) case and any high explicit value.
+        do {
+            let n = evalInt("cmd.count_atoms('polymer')") ?? 0
+            // Device-safe ceiling scaled by polymer size. Post leak-fix, memory is
+            // bounded (measured: sampling 12 ≈ 1.1 GB vs ~3 GB jetsam ceiling), so
+            // small/mid structures can afford 10-12 for smooth cartoons; only very
+            // large assemblies scale down to stay under the cap. Faceting is
+            // front-loaded — 5→10 removes most visible facets at phone DPI.
+            let cap = n < 20000 ? 12 : (n < 100000 ? 10 : (n < 300000 ? 6 : 4))
+            maxS = (maxS < 0) ? cap : min(maxS, cap)
+        }
+        #else
         if maxS < 0 {   // auto ceiling: scale down by polymer atom count
             let n = evalInt("cmd.count_atoms('polymer')") ?? 0
             maxS = n < 10000 ? 18 : (n < 50000 ? 12 : (n < 200000 ? 8 : 5))
         }
+        #endif
         // Hysteresis reference = the bucket value we last applied (always a real
         // bucket). -1 on first run => targetSampling has no reference and returns
         // the raw bucket (the current setting may be -1/auto or a non-bucket value).
@@ -997,7 +1017,13 @@ final class PyMOLEngine: ObservableObject {
         }
         guard target != cur else { return }
         lastAppliedSampling = target
-        runPython("cmd.set('cartoon_sampling', \(target)); cmd.rebuild()")
+        // Rebuild ONLY the cartoon rep — NOT every representation of every object.
+        // cmd.rebuild() defaults to selection='all', representation='everything'
+        // (viewing.py), so a bare rebuild() retessellates the whole scene: on a
+        // memory-constrained device that transient spike OOM-kills the app (jetsam)
+        // and the synchronous main-thread work risks a watchdog kill. cartoon_sampling
+        // only affects the cartoon rep, so scope the rebuild to it.
+        runPython("cmd.set('cartoon_sampling', \(target)); cmd.rebuild('all', 'cartoon')")
     }
 
     /// Tell the renderer whether the window's current display is Retina; gates

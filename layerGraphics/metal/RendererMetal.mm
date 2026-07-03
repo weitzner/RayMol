@@ -5026,15 +5026,22 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
   }
 }
 
-void RendererMetal::invalidateVBOCache(uint64_t key)
+void RendererMetal::invalidateVBOCache(const void* key)
 {
-  // Clear entire cache — key type changed to pointer-based.
-  // MRC: the map holds +1 MTLBuffers (newBufferWithBytes); STL clear() does not
-  // release them, so drop each ownership first. Any buffer still referenced by an
-  // in-flight command buffer is kept alive by Metal's own retain until that
-  // command buffer completes (same reasoning as ensurePostTargets).
-  for (auto& kv : _vboCache) [kv.second release];
-  _vboCache.clear();
+  // Evict the single cached MTLBuffer for this CPU-data pointer. Called from
+  // CShaderMgr::freeAllGPUBuffers when the owning VertexBufferGL/IndexBufferGL is
+  // freed, so orphaned buffers from rebuilt geometry (e.g. the zoom-driven
+  // cartoon LOD rebuilds) are released instead of accumulating — this map had no
+  // per-entry eviction, an unbounded leak that OOM-jettisoned the app on iOS.
+  // MRC: the map holds +1 MTLBuffers (newBufferWithBytes); drop our ownership.
+  // Any buffer still referenced by an in-flight command buffer is kept alive by
+  // Metal's own retain until that command buffer completes.
+  if (!key) return;
+  auto it = _vboCache.find(key);
+  if (it != _vboCache.end()) {
+    [it->second release];
+    _vboCache.erase(it);
+  }
 }
 
 // ---------------------------------------------------------------------------
