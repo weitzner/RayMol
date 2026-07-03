@@ -948,6 +948,13 @@ final class PyMOLEngine: ObservableObject {
         runPython("cmd.set('cartoon_sampling', \(target)); cmd.rebuild()")
     }
 
+    /// Tell the renderer whether the window's current display is Retina; gates
+    /// metal_upscale=auto. Call on launch and whenever the window changes screen.
+    func setDisplayIsRetina(_ retina: Bool) {
+        guard let inst = instance else { return }
+        PyMOLBridge_SetDisplayIsRetina(inst, retina ? 1 : 0)
+    }
+
     /// Write the whole session to `url` (a .pse) via cmd.save (the only path to the
     /// C++ saver is runPython — there's no Swift cmd.save wrapper) and track it as
     /// the open document so a subsequent ⌘S overwrites it with no panel. Raw triple

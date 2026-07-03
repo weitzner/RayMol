@@ -98,6 +98,13 @@ class PyMOLMTKView: MTKView {
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // Fires when the backing scale changes (window moved to a display of a
+    // different DPI) → re-evaluate metal_upscale=auto immediately.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        coordinator?.pushDisplayRetina(self)
+    }
+
     override func mouseDown(with event: NSEvent) {
         coordinator?.handleMouseDown(event, in: self)
     }
@@ -230,6 +237,24 @@ extension MetalViewport {
             }
             lodWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: work)
+        }
+
+        // Cached so we only push the retina flag to the core on an actual change.
+        private var lastRetina: Bool?
+
+        /// Push whether the window's current display is Retina (backingScale>=2)
+        /// to the renderer, gating metal_upscale=auto. Change-gated; cheap to call
+        /// from draw() and from viewDidChangeBackingProperties.
+        func pushDisplayRetina(_ view: MTKView) {
+            #if os(macOS)
+            let scale = view.window?.screen?.backingScaleFactor ?? 2.0
+            #else
+            let scale = view.window?.screen.scale ?? view.contentScaleFactor
+            #endif
+            let retina = CartoonLOD.autoUpscale(backingScale: scale)
+            guard retina != lastRetina else { return }
+            lastRetina = retina
+            engine?.setDisplayIsRetina(retina)
         }
         // Set when the app/display wakes (unlock, system wake, re-activate). The
         // next draw(in:) then renders unconditionally, bypassing the on-demand
@@ -400,6 +425,10 @@ extension MetalViewport {
             // settled, and re-tessellates only if the LOD bucket changed. Covers
             // gestures AND programmatic zoom/orient/animation uniformly.
             scheduleLODUpdate()
+            // Push the display's Retina flag (change-gated) so metal_upscale=auto
+            // resolves against the CURRENT screen — covers launch + window moved
+            // between displays even if no backing-property change fired.
+            pushDisplayRetina(view)
         }
 
         // MARK: - Coordinate conversion

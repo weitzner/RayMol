@@ -31,6 +31,9 @@ void PyMOLBridge_Drag(PyMOLHandle instance, int x, int y, int modifiers);
 void PyMOLBridge_SetLetterboxAspect(PyMOLHandle instance, float aspect);
 // RGB (0..1) of the 3D selection indicator squares — set from the active theme.
 void PyMOLBridge_SetSelectionColor(PyMOLHandle instance, float r, float g, float b);
+// Tell the renderer whether the window's current display is Retina (gates
+// metal_upscale=auto). retina: 1 = Retina (backingScale>=2), 0 = not.
+void PyMOLBridge_SetDisplayIsRetina(PyMOLHandle instance, int retina);
 void PyMOLBridge_CapturePNG(PyMOLHandle instance, const char* path);
 // Hi-res offscreen render → PNG: reshape PyMOL to width×height, render the full
 // Metal pipeline (all reps + hardware-RT AO/shadows) into offscreen targets at

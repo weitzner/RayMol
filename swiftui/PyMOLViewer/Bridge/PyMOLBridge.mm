@@ -223,6 +223,14 @@ void PyMOLBridge_SetSelectionColor(PyMOLHandle h, float r, float g, float b)
     G->Renderer->setSelectionColor(r, g, b);
 }
 
+void PyMOLBridge_SetDisplayIsRetina(PyMOLHandle h, int retina)
+{
+    if (!h) return;
+    PyMOLGlobals* G = PyMOL_GetGlobals(INST(h));
+    if (!G || !G->Renderer) return;
+    G->Renderer->setDisplayIsRetina(retina != 0);
+}
+
 void PyMOLBridge_CapturePNG(PyMOLHandle h, const char* path)
 {
     if (!h || !path) return;

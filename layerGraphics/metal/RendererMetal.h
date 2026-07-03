@@ -203,6 +203,8 @@ public:
   void setLightViewProjEye(const float* m) override;
   void setShadowFrustum(float radius) override;
   void setShadowBias(float bias) override;
+  void setDisplayIsRetina(bool retina) override;
+  bool displayIsRetina() const override { return _displayIsRetina; }
 
 private:
   void buildImpostorPipelines();
@@ -462,6 +464,8 @@ private:
                                   // receiver bias be expressed in Angstroms.
   float _shadowBias = 1.0f;       // metal_shadow_bias: user multiplier on the
                                   // self-shadow depth bias.
+  bool _displayIsRetina = true;   // window's current display backingScale>=2;
+                                  // set from Swift, gates metal_upscale=auto.
   void buildShadowPipelines();
   // Depth-only shadow pipeline for an arbitrary lit vertex layout (e.g. the
   // surface's stride-44), mirroring oitPipelineForVD.

@@ -2730,6 +2730,11 @@ void RendererMetal::setShadowBias(float bias)
   _shadowBias = (bias > 0.0f) ? bias : 0.0f;
 }
 
+void RendererMetal::setDisplayIsRetina(bool retina)
+{
+  _displayIsRetina = retina;
+}
+
 void RendererMetal::beginShadowPass()
 {
   if (!_cmdBuffer || !_shadowPassDesc || !_vboShadowPipelineUByte) return;
