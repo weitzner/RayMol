@@ -370,8 +370,9 @@ struct ContentView: View {
                             if engine.measureMode != nil { measureOverlay }
                         }
                         // Perf HUD (metal_perf_hud): live LOD/triangles/memory/FPS.
-                        // Bottom-left, clear of the top toolbar/notch.
-                        .overlay(alignment: .bottomLeading) {
+                        // Centered in the viewport, clear of the top toolbar and
+                        // the bottom transport bar.
+                        .overlay(alignment: .center) {
                             if engine.perf.visible {
                                 PerfHUDView(perf: engine.perf).padding(8).allowsHitTesting(false)
                             }
@@ -1401,8 +1402,9 @@ struct ContentView: View {
         MetalViewport()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Perf HUD (metal_perf_hud): live LOD/triangles/memory/FPS.
-            // Bottom-left, clear of the top toolbar/notch.
-            .overlay(alignment: .bottomLeading) {
+            // Centered in the viewport, clear of the top toolbar and the bottom
+            // transport bar.
+            .overlay(alignment: .center) {
                 if engine.perf.visible {
                     PerfHUDView(perf: engine.perf).padding(8).allowsHitTesting(false)
                 }
