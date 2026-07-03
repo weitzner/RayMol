@@ -142,23 +142,16 @@ struct TimelinePanel: View {
         .frame(height: 44)
     }
 
-    // Clearly-buttoned "add a camera keyframe" control (bordered capsule with the
-    // diamond glyph; adds a label where there's room).
+    // Add a camera keyframe of the current view — a plain accent diamond.
     private var addCameraButton: some View {
         Button(action: { engine.captureCameraItem() }) {
-            HStack(spacing: 4) {
-                Image(systemName: "plus.diamond.fill")
-                if !isCompact { Text("Camera") }
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, isCompact ? 10 : 12)
-            .frame(height: 30)
-            .background(Capsule().fill(TimelineTheme.accent.opacity(0.18)))
-            .overlay(Capsule().stroke(TimelineTheme.accent, lineWidth: 1))
-            .foregroundColor(TimelineTheme.accent)
-            .contentShape(Capsule())
+            Image(systemName: "plus.diamond.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 36, height: 32)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .foregroundColor(TimelineTheme.accent)
         .accessibilityLabel("Add a camera keyframe of the current view")
         .help("Add a camera keyframe of the current view to the end")
     }

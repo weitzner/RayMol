@@ -230,13 +230,17 @@ struct TransportBar: View {
                 Text("0.3 fps").tag(0.3)
             }
         } label: {
-            Text("\(fpsLabel)fps")
+            Text("\(fpsLabel) fps")
                 .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundColor(TimelineTheme.accent)
                 .frame(height: 36)
+                .padding(.horizontal, 2)
                 .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     private var overflowMenu: some View {
