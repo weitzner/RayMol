@@ -364,6 +364,12 @@ public:
   virtual void setDisplayIsRetina(bool retina) {}
   virtual bool displayIsRetina() const { return true; }
 
+  // Live render metrics for the perf HUD (metal_perf_hud). Default 0/1 (base
+  // and GL unaffected).
+  virtual uint64_t frameTriangleCount() const { return 0; }
+  virtual uint64_t gpuAllocatedBytes() const { return 0; }
+  virtual float renderScale() const { return 1.0f; }
+
   // GPU-tessellated Bezier tubes ("tube cartoon"). controlPoints is a tightly
   // packed array of cubic Bezier patches: 4 Float3 control points each
   // (P0,P1,P2,P3), dataSize bytes total. radius = tube radius; r/g/b = color.

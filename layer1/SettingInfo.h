@@ -933,6 +933,7 @@ enum {
   REC_f( 823, metal_shadow_bias                       , global    , 1.0F ),  /* Metal: multiplier on the self-shadow depth bias. 1.0 = default. Raise (e.g. 2-4) if flat cartoon strands still show striped self-shadow "triangle" acne at steep/grazing angles; lower toward 0 for tighter contact shadows. */
   REC_b( 824, cartoon_sampling_dynamic                , global    , true ),  /* Adaptively raise/lower cartoon_sampling with zoom (debounced whole-object rebuild): crisp when zoomed in, cheap when zoomed out. Off = static cartoon_sampling. */
   REC_i( 825, cartoon_sampling_max                    , global    , -1 ),    /* Detail ceiling used by cartoon_sampling_dynamic when zoomed in. -1 = auto (scaled down by atom count so large structures stay bounded). */
+  REC_b( 826, metal_perf_hud                          , global    , false ), /* Metal: show a live performance HUD overlay (LOD, triangle count, CPU/GPU memory, FPS, render state). set metal_perf_hud, 1 */
 
 #ifdef SETTINGINFO_IMPLEMENTATION
 #undef SETTINGINFO_IMPLEMENTATION

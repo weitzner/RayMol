@@ -205,6 +205,10 @@ public:
   void setShadowBias(float bias) override;
   void setDisplayIsRetina(bool retina) override;
   bool displayIsRetina() const override { return _displayIsRetina; }
+  // Perf HUD metrics (metal_perf_hud).
+  uint64_t frameTriangleCount() const override { return _frameTriangles; }
+  float renderScale() const override { return _renderScale; }
+  uint64_t gpuAllocatedBytes() const override;   // [_device currentAllocatedSize]
 
 private:
   void buildImpostorPipelines();
@@ -521,6 +525,8 @@ private:
   // byte-identical. Forced to 1 for offscreen export.
   int _upscaleEnabled = 0;
   float _renderScale = 1.0f;
+  uint64_t _frameTriangles = 0;   // scene-mesh triangles submitted this frame
+                                  // (main pass only); reset in beginFrame().
   // MetalFX spatial scaler (typed id<MTLFXSpatialScaler>; untyped here to keep
   // MetalFX out of the header). Recreated when in/out sizes change. When nil/
   // unsupported the present path falls back to the bilinear blit.

@@ -700,6 +700,7 @@ void RendererMetal::beginFrame()
   if (_rtEnabled) ensureRayTracingAS();
   _rtSpheres.clear();  // re-accumulated during this frame's opaque pass
   _rtTris.clear();
+  _frameTriangles = 0; // perf HUD: reset the per-frame scene-triangle counter
 
   _cmdBuffer = [_queue commandBuffer];
   _encoder = nil;
@@ -2735,6 +2736,11 @@ void RendererMetal::setDisplayIsRetina(bool retina)
   _displayIsRetina = retina;
 }
 
+uint64_t RendererMetal::gpuAllocatedBytes() const
+{
+  return _device ? (uint64_t)[_device currentAllocatedSize] : 0;
+}
+
 void RendererMetal::beginShadowPass()
 {
   if (!_cmdBuffer || !_shadowPassDesc || !_vboShadowPipelineUByte) return;
@@ -4493,6 +4499,12 @@ void RendererMetal::drawVBO(PrimitiveType mode, int vertexCount,
   ensureEncoder();
   if (!_encoder) return;
 
+  // Perf HUD: count scene-mesh triangles in the main pass (not the shadow
+  // re-draw). Non-indexed triangle-list/strip.
+  if (!_shadowMode && (mode == PrimitiveType::Triangles ||
+                       mode == PrimitiveType::TriangleStrip))
+    _frameTriangles += (uint64_t)(vertexCount / 3);
+
   // Ray tracing: capture solid triangle meshes (cartoon/surface) once per frame.
   if (_rtEnabled && !_shadowMode && !_oitActive)
     rtAppendVBOTris(_rtTris, mode, vertexCount, data, stride, posOffset, nullptr);
@@ -4773,6 +4785,12 @@ void RendererMetal::drawVBOIndexed(PrimitiveType mode, int indexCount,
       indexDataSize == 0 || indexCount <= 0) return;
   ensureEncoder();
   if (!_encoder) return;
+
+  // Perf HUD: count scene-mesh triangles in the main pass (not the shadow
+  // re-draw). Indexed triangle-list/strip.
+  if (!_shadowMode && (mode == PrimitiveType::Triangles ||
+                       mode == PrimitiveType::TriangleStrip))
+    _frameTriangles += (uint64_t)(indexCount / 3);
 
   // Ray tracing: capture solid triangle meshes (cartoon/surface) once per frame.
   if (_rtEnabled && !_shadowMode && !_oitActive)

@@ -231,6 +231,15 @@ void PyMOLBridge_SetDisplayIsRetina(PyMOLHandle h, int retina)
     G->Renderer->setDisplayIsRetina(retina != 0);
 }
 
+void PyMOLBridge_GetRenderStats(uint64_t* outTriangles, uint64_t* outGpuBytes, float* outRenderScale)
+{
+    PyMOLGlobals* G = SingletonPyMOLGlobals;
+    bool ok = (G && G->Renderer);
+    if (outTriangles)   *outTriangles   = ok ? G->Renderer->frameTriangleCount() : 0;
+    if (outGpuBytes)    *outGpuBytes    = ok ? G->Renderer->gpuAllocatedBytes() : 0;
+    if (outRenderScale) *outRenderScale = ok ? G->Renderer->renderScale() : 1.0f;
+}
+
 void PyMOLBridge_CapturePNG(PyMOLHandle h, const char* path)
 {
     if (!h || !path) return;
