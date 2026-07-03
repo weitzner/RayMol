@@ -54,7 +54,9 @@ enum CartoonLOD {
     static func targetSampling(angstromPerPixel a: Float, maxSampling: Int, current: Int) -> Int {
         let lv = levels(maxSampling)
         let rl = rawLevel(a)
-        let cur = lv.firstIndex(of: current) ?? rl
+        // Unknown/non-bucket current (e.g. -1 auto, 7 default, a user value) -> no
+        // hysteresis reference; jump straight to the raw bucket.
+        guard let cur = lv.firstIndex(of: current) else { return lv[rl] }
         if rl == cur { return current }
         if abs(rl - cur) >= 2 { return lv[rl] }        // big jump: no ambiguity
         if rl > cur {                                   // finer: cross bounds[cur]
@@ -899,6 +901,51 @@ final class PyMOLEngine: ObservableObject {
     func runPython(_ code: String) {
         guard isReady else { return }
         PyMOLBridge_RunPython(code)
+    }
+
+    /// Evaluate a Python expression and return str(result), or nil. Lets Swift
+    /// read core values (get_view, settings, count_atoms). Main-thread.
+    func evalString(_ expr: String) -> String? {
+        guard isReady, let c = PyMOLBridge_EvalString(expr) else { return nil }
+        defer { PyMOLBridge_FreeFeedback(c) }
+        return String(cString: c)
+    }
+    private func evalFloat(_ expr: String) -> Float? { evalString(expr).flatMap { Float($0) } }
+    private func evalInt(_ expr: String) -> Int? { evalString(expr).flatMap { Int($0) } }
+
+    // MARK: - Adaptive cartoon LOD (cartoon_sampling_dynamic)
+
+    /// Last sampling this engine applied, so hysteresis compares against what we
+    /// set (not a stale read). -1 = unknown.
+    private var lastAppliedSampling: Int = -1
+
+    /// Zoom-adaptive cartoon detail: map the current Å/px to a target
+    /// cartoon_sampling (CartoonLOD) and rebuild if it changed. No-op unless
+    /// cartoon_sampling_dynamic is on. Call on the main thread after the camera
+    /// has SETTLED (the caller debounces) — never mid-gesture.
+    func applyDynamicCartoonSampling(viewportHeightPx: Float) {
+        guard isReady, viewportHeightPx >= 1 else { return }
+        guard (evalInt("int(cmd.get_setting_int('cartoon_sampling_dynamic'))") ?? 0) == 1 else { return }
+        // No cartoon shown → nothing to retessellate.
+        guard (evalInt("cmd.count_atoms('rep cartoon or rep ribbon')") ?? 0) > 0 else { return }
+        // 18-float embedded get_view: v[11] is the camera translation z (distance).
+        guard let camDist = evalFloat("abs(cmd.get_view()[11])") else { return }
+        let fov = evalFloat("float(cmd.get_setting_float('field_of_view'))") ?? 20
+        var maxS = evalInt("int(cmd.get_setting_int('cartoon_sampling_max'))") ?? -1
+        if maxS < 0 {   // auto ceiling: scale down by polymer atom count
+            let n = evalInt("cmd.count_atoms('polymer')") ?? 0
+            maxS = n < 10000 ? 18 : (n < 50000 ? 12 : (n < 200000 ? 8 : 5))
+        }
+        // Hysteresis reference = the bucket value we last applied (always a real
+        // bucket). -1 on first run => targetSampling has no reference and returns
+        // the raw bucket (the current setting may be -1/auto or a non-bucket value).
+        let cur = lastAppliedSampling > 0 ? lastAppliedSampling : -1
+        let app = CartoonLOD.angstromPerPixel(cameraDistance: camDist, fovDegrees: fov,
+                                              viewportHeightPx: viewportHeightPx)
+        let target = CartoonLOD.targetSampling(angstromPerPixel: app, maxSampling: maxS, current: cur)
+        guard target != cur else { return }
+        lastAppliedSampling = target
+        runPython("cmd.set('cartoon_sampling', \(target)); cmd.rebuild()")
     }
 
     /// Write the whole session to `url` (a .pse) via cmd.save (the only path to the

@@ -214,6 +214,23 @@ extension MetalViewport {
         weak var engine: PyMOLEngine?
         weak var mtkView: MTKView?
         private var viewportSize: CGSize = .zero
+        // Debounce for zoom-adaptive cartoon LOD (cartoon_sampling_dynamic): a
+        // rebuild fires only ~200ms AFTER the zoom settles, never mid-gesture.
+        private var lodWork: DispatchWorkItem?
+
+        /// Schedule a debounced adaptive-cartoon-sampling update. Call from any
+        /// zoom handler; the debounce coalesces bursts and the engine no-ops when
+        /// the LOD bucket is unchanged or the setting is off.
+        func scheduleLODUpdate() {
+            lodWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self, let v = self.mtkView else { return }
+                let h = Float(v.drawableSize.height)
+                self.engine?.applyDynamicCartoonSampling(viewportHeightPx: h)
+            }
+            lodWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: work)
+        }
         // Set when the app/display wakes (unlock, system wake, re-activate). The
         // next draw(in:) then renders unconditionally, bypassing the on-demand
         // gate, to repaint a drawable whose contents were discarded during sleep.
@@ -376,6 +393,13 @@ extension MetalViewport {
             // let the engine clear the "Calculating…" overlay once the build
             // frame(s) have completed.
             engine.heavyRenderTick()
+            // Zoom-adaptive cartoon LOD: reset the debounce each frame that
+            // actually rendered (i.e. the scene/camera changed — this is AFTER
+            // the on-demand gate, so a static scene never resets it). The timer
+            // fires ~200ms after the LAST such frame, i.e. once the camera has
+            // settled, and re-tessellates only if the LOD bucket changed. Covers
+            // gestures AND programmatic zoom/orient/animation uniformly.
+            scheduleLODUpdate()
         }
 
         // MARK: - Coordinate conversion

@@ -62,6 +62,12 @@ char *PyMOLBridge_Complete(const char *text);
 char *PyMOLBridge_GetFeedback(PyMOLHandle instance);
 void PyMOLBridge_FreeFeedback(char *str);
 
+// Evaluate a Python expression (in __main__, with `cmd` imported) and return
+// str(result) as a UTF-8 C string, or NULL on error/None. Lets Swift read core
+// values (get_view, settings, count_atoms). Caller frees with
+// PyMOLBridge_FreeFeedback. Main-thread / in-process.
+char *PyMOLBridge_EvalString(const char *expr);
+
 // --- Metal rendering ---
 void PyMOLBridge_RenderMetal(PyMOLHandle instance);
 

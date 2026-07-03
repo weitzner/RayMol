@@ -286,6 +286,33 @@ void PyMOLBridge_RunCommand(const char *command)
     PAutoUnblock(G, blk);
 }
 
+char *PyMOLBridge_EvalString(const char *expr)
+{
+    if (!expr) return nullptr;
+    PyMOLGlobals *G = SingletonPyMOLGlobals;
+    if (!G) return nullptr;
+    int blk = PAutoBlock(G);
+    char *result = nullptr;
+    PyObject *mainMod = PyImport_AddModule("__main__");  // borrowed
+    if (mainMod) {
+        PyObject *gd = PyModule_GetDict(mainMod);        // borrowed
+        PyRun_SimpleString("from pymol import cmd");      // idempotent; ensures cmd
+        PyObject *res = PyRun_String(expr, Py_eval_input, gd, gd);
+        if (res && res != Py_None) {
+            PyObject *s = PyObject_Str(res);
+            if (s) {
+                const char *cs = PyUnicode_AsUTF8(s);
+                if (cs) result = strdup(cs);
+                Py_DECREF(s);
+            }
+        }
+        Py_XDECREF(res);
+    }
+    if (PyErr_Occurred()) PyErr_Clear();
+    PAutoUnblock(G, blk);
+    return result;
+}
+
 char *PyMOLBridge_Complete(const char *text)
 {
     if (!text) return nullptr;
