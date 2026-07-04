@@ -47,8 +47,15 @@ final class MCPServerManager: ObservableObject {
 
     // Auto-start on launch if the user had it on. The engine inits asynchronously,
     // so retry on the main queue until it's ready (capped, like loadOpenedFile).
+    //
+    // Dev/testing: RAYMOL_MCP_ENABLE=1 in the process environment forces the server
+    // to start even when the UserDefault toggle is off — used to bring the server up
+    // headlessly in a fresh mac-vm-test VM clone (no UI to flip). Like
+    // RAYMOL_MCP_BIND / RAYMOL_MCP_AUTOTRUST (read by the Python server), this var is
+    // never present in a Finder/`open` launch, so it can't affect shipped builds.
     private func autoStartIfEnabled(attempt: Int) {
-        guard UserDefaults.standard.bool(forKey: "raymol.mcp.enabled") else { return }
+        let forced = ProcessInfo.processInfo.environment["RAYMOL_MCP_ENABLE"] == "1"
+        guard forced || UserDefaults.standard.bool(forKey: "raymol.mcp.enabled") else { return }
         guard let engine else { return }
         if engine.isReady {
             start()
