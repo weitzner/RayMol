@@ -801,8 +801,91 @@ void RendererMetal::endOffscreen()
 #pragma mark - Post-processing (offscreen scene target + fullscreen passes)
 // ---------------------------------------------------------------------------
 
+// Shared eye-space / normal reconstruction helpers used by BOTH the post-processing
+// library (kPostSrc) and the ray-tracing library (kRTSrc). Metal compiles each
+// newLibraryWithSource: as an independent translation unit with NO cross-library
+// symbol linking, so any helper that kRTSrc's rt_ao/rt_composite call MUST be
+// present in the RT source too. This block is prepended to both libraries at their
+// compile sites (see kPostSrc/kRTSrc newLibraryWithSource calls). It exists because
+// a prior refactor (#83/#87) moved these helpers into kPostSrc only and updated the
+// kRTSrc call sites without carrying the definitions across, which silently broke
+// the standalone RT library compile (undeclared identifiers) and disabled RT.
+static NSString* const kEyeReconSrc = @R"(
+#include <metal_stdlib>
+using namespace metal;
+
+// Eye-space position from a window depth at a given screen uv (the inverse of the
+// perspective projection; matches the reconstruction used by the shadow/AO passes).
+static float3 post_eye_pos(float2 uv, float d, float projA, float projB,
+                           float projX, float projY) {
+  float ez = -projB / ((2.0 * d - 1.0) + projA); // eye z (negative)
+  float ndcx = 2.0 * uv.x - 1.0;
+  float ndcy = 1.0 - 2.0 * uv.y;
+  return float3(ndcx * (-ez) / projX, ndcy * (-ez) / projY, ez);
+}
+
+// Robust eye-space surface normal from the depth buffer. Plain
+// cross(dfdx(p), dfdy(p)) uses the 2x2 quad derivative, which at a silhouette
+// straddles the depth discontinuity to the background/behind geometry: the
+// derivative blows up and the normal points sideways/garbage in a 1-2px band along
+// EVERY silhouette. In the screen-space shadow that corrupts the light-facing
+// faceGate, flipping it between ~0 and ~1 pixel-to-pixel along the aliased edge, so
+// the shadow term switches on/off and reads as a serrated lighter border on helices
+// and sticks. Instead, reconstruct the 4 axis-neighbours and, per axis, difference
+// against the neighbour on the CONTINUOUS side (smaller window-depth step) so the
+// stencil never crosses the silhouette. In the smooth interior this equals the old
+// derivative; only the edge band changes.
+static float3 post_eye_normal(depth2d<float> depthTex, sampler s, float2 uv,
+                              float2 invres, float cd, float3 cp, float projA,
+                              float projB, float projX, float projY) {
+  float2 ux = float2(invres.x, 0.0);
+  float2 uy = float2(0.0, invres.y);
+  float dl = depthTex.sample(s, uv - ux), dr = depthTex.sample(s, uv + ux);
+  float dd = depthTex.sample(s, uv - uy), du = depthTex.sample(s, uv + uy);
+  float3 gx = (abs(dl - cd) < abs(dr - cd))
+                  ? (cp - post_eye_pos(uv - ux, dl, projA, projB, projX, projY))
+                  : (post_eye_pos(uv + ux, dr, projA, projB, projX, projY) - cp);
+  float3 gy = (abs(dd - cd) < abs(du - cd))
+                  ? (cp - post_eye_pos(uv - uy, dd, projA, projB, projX, projY))
+                  : (post_eye_pos(uv + uy, du, projA, projB, projX, projY) - cp);
+  float3 n = normalize(cross(gx, gy));
+  if (n.z < 0.0) n = -n; // face toward camera
+  return n;
+}
+
+// Bilaterally-smoothed eye-space normal. A plain depth reconstruction of the
+// coarse cartoon mesh gives a FACETED (flat per-triangle) normal, which made
+// both the light-facing faceGate and the shadow-map self-comparison vary per
+// triangle — the "triangles under shadows". Averaging post_eye_normal over a
+// small neighbourhood, weighted by eye-Z similarity, smooths across the facets
+// (a near-continuous surface normal) but rejects samples across a real
+// silhouette (large depth jump -> ~0 weight), so the #83 edge behaviour is kept.
+static float3 post_eye_normal_smooth(depth2d<float> depthTex, sampler s, float2 uv,
+                                     float2 invres, float cd, float3 cp, float projA,
+                                     float projB, float projX, float projY) {
+  float3 nSum = post_eye_normal(depthTex, s, uv, invres, cd, cp,
+                                projA, projB, projX, projY);
+  float wSum = 1.0;
+  float ztol = max(0.02 * abs(cp.z), 0.05);
+  for (int j = -1; j <= 1; j++)
+    for (int i = -1; i <= 1; i++) {
+      if (i == 0 && j == 0) continue;
+      float2 o = float2(float(i), float(j)) * 2.0 * invres;
+      float dn = depthTex.sample(s, uv + o);
+      if (dn >= 0.99999) continue;
+      float3 pn = post_eye_pos(uv + o, dn, projA, projB, projX, projY);
+      float w = exp(-abs(pn.z - cp.z) / ztol);
+      nSum += post_eye_normal(depthTex, s, uv + o, invres, dn, pn,
+                              projA, projB, projX, projY) * w;
+      wSum += w;
+    }
+  return normalize(nSum);
+}
+)";
+
 // Fullscreen-triangle vertex shader + post-process fragment shaders. A single
-// library so all post pipelines share the vertex function.
+// library so all post pipelines share the vertex function. Compiled with the
+// shared kEyeReconSrc helpers prepended (post_eye_pos/normal/normal_smooth).
 static NSString* const kPostSrc = @R"(
 #include <metal_stdlib>
 using namespace metal;
@@ -955,73 +1038,10 @@ static float post_linear_depth(float d, float projA, float projB) {
   return -ez;                         // distance from camera (positive)
 }
 
-// Eye-space position from a window depth at a given screen uv (the inverse of the
-// perspective projection; matches the reconstruction used by the shadow/AO passes).
-static float3 post_eye_pos(float2 uv, float d, float projA, float projB,
-                           float projX, float projY) {
-  float ez = -projB / ((2.0 * d - 1.0) + projA); // eye z (negative)
-  float ndcx = 2.0 * uv.x - 1.0;
-  float ndcy = 1.0 - 2.0 * uv.y;
-  return float3(ndcx * (-ez) / projX, ndcy * (-ez) / projY, ez);
-}
-
-// Robust eye-space surface normal from the depth buffer. Plain
-// cross(dfdx(p), dfdy(p)) uses the 2x2 quad derivative, which at a silhouette
-// straddles the depth discontinuity to the background/behind geometry: the
-// derivative blows up and the normal points sideways/garbage in a 1-2px band along
-// EVERY silhouette. In the screen-space shadow that corrupts the light-facing
-// faceGate, flipping it between ~0 and ~1 pixel-to-pixel along the aliased edge, so
-// the shadow term switches on/off and reads as a serrated lighter border on helices
-// and sticks. Instead, reconstruct the 4 axis-neighbours and, per axis, difference
-// against the neighbour on the CONTINUOUS side (smaller window-depth step) so the
-// stencil never crosses the silhouette. In the smooth interior this equals the old
-// derivative; only the edge band changes.
-static float3 post_eye_normal(depth2d<float> depthTex, sampler s, float2 uv,
-                              float2 invres, float cd, float3 cp, float projA,
-                              float projB, float projX, float projY) {
-  float2 ux = float2(invres.x, 0.0);
-  float2 uy = float2(0.0, invres.y);
-  float dl = depthTex.sample(s, uv - ux), dr = depthTex.sample(s, uv + ux);
-  float dd = depthTex.sample(s, uv - uy), du = depthTex.sample(s, uv + uy);
-  float3 gx = (abs(dl - cd) < abs(dr - cd))
-                  ? (cp - post_eye_pos(uv - ux, dl, projA, projB, projX, projY))
-                  : (post_eye_pos(uv + ux, dr, projA, projB, projX, projY) - cp);
-  float3 gy = (abs(dd - cd) < abs(du - cd))
-                  ? (cp - post_eye_pos(uv - uy, dd, projA, projB, projX, projY))
-                  : (post_eye_pos(uv + uy, du, projA, projB, projX, projY) - cp);
-  float3 n = normalize(cross(gx, gy));
-  if (n.z < 0.0) n = -n; // face toward camera
-  return n;
-}
-
-// Bilaterally-smoothed eye-space normal. A plain depth reconstruction of the
-// coarse cartoon mesh gives a FACETED (flat per-triangle) normal, which made
-// both the light-facing faceGate and the shadow-map self-comparison vary per
-// triangle — the "triangles under shadows". Averaging post_eye_normal over a
-// small neighbourhood, weighted by eye-Z similarity, smooths across the facets
-// (a near-continuous surface normal) but rejects samples across a real
-// silhouette (large depth jump -> ~0 weight), so the #83 edge behaviour is kept.
-static float3 post_eye_normal_smooth(depth2d<float> depthTex, sampler s, float2 uv,
-                                     float2 invres, float cd, float3 cp, float projA,
-                                     float projB, float projX, float projY) {
-  float3 nSum = post_eye_normal(depthTex, s, uv, invres, cd, cp,
-                                projA, projB, projX, projY);
-  float wSum = 1.0;
-  float ztol = max(0.02 * abs(cp.z), 0.05);
-  for (int j = -1; j <= 1; j++)
-    for (int i = -1; i <= 1; i++) {
-      if (i == 0 && j == 0) continue;
-      float2 o = float2(float(i), float(j)) * 2.0 * invres;
-      float dn = depthTex.sample(s, uv + o);
-      if (dn >= 0.99999) continue;
-      float3 pn = post_eye_pos(uv + o, dn, projA, projB, projX, projY);
-      float w = exp(-abs(pn.z - cp.z) / ztol);
-      nSum += post_eye_normal(depthTex, s, uv + o, invres, dn, pn,
-                              projA, projB, projX, projY) * w;
-      wSum += w;
-    }
-  return normalize(nSum);
-}
+// post_eye_pos / post_eye_normal / post_eye_normal_smooth are defined once in the
+// shared kEyeReconSrc block, prepended to this library (and to kRTSrc) at compile
+// time — see the newLibraryWithSource call sites. Keeping a single copy is what
+// prevents the RT library from silently losing them again (the #83/#87 regression).
 
 fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
     texture2d<float> colorTex [[texture(0)]],
@@ -1482,7 +1502,10 @@ void RendererMetal::buildPostPipelines()
 {
   if (_blitPipeline) return;
   NSError* err = nil;
-  id<MTLLibrary> lib = [_device newLibraryWithSource:kPostSrc options:nil error:&err];
+  // Prepend the shared eye/normal reconstruction helpers (kEyeReconSrc); this
+  // library and the RT library both compile from that single copy.
+  id<MTLLibrary> lib = [_device newLibraryWithSource:[kEyeReconSrc stringByAppendingString:kPostSrc]
+                                             options:nil error:&err];
   if (!lib) { NSLog(@"RendererMetal: post lib compile failed: %@", err); return; }
 
   if (!_postSampler) {
@@ -1601,6 +1624,18 @@ void RendererMetal::setLightingParams(float ambient, float direct,
   _lightSpecular = specular;
   _lightShininess = shininess;
   _sssWrap = sssWrap;
+}
+
+void RendererMetal::setRayTraceParams(int samples, float aoRadius,
+    float aoIntensity, float shadowIntensity)
+{
+  // Clamp defensively: nSamples bounds the per-pixel AO ray loop, so an absurd
+  // value would hang the GPU; intensities are [0,1] multipliers; radius > 0.
+  _rtSamples = samples < 1 ? 1 : (samples > 256 ? 256 : samples);
+  _rtAORadius = aoRadius < 0.1f ? 0.1f : aoRadius;
+  _rtAOIntensity = aoIntensity < 0.0f ? 0.0f : (aoIntensity > 1.0f ? 1.0f : aoIntensity);
+  _rtShadowIntensity =
+      shadowIntensity < 0.0f ? 0.0f : (shadowIntensity > 1.0f ? 1.0f : shadowIntensity);
 }
 
 // ---------------------------------------------------------------------------
@@ -2102,12 +2137,19 @@ void RendererMetal::ensureRayTracingAS()
   }
 
   // Lazily compile the RT resolve pipeline (separate library so the raytracing
-  // intersector code can't affect the main post library). If it fails, the RT
-  // pass is skipped and the SSAO/shadow path runs — zero regression.
-  if (_rtReady && !_rtResolvePipeline) {
+  // intersector code can't affect the main post library). Attempted at most ONCE
+  // (_rtCompileTried latch): a compile failure must NOT busy-recompile the source
+  // every frame (that was a real perf sink while RT was broken). If it fails the RT
+  // pass is skipped and the SSAO/shadow path runs — zero regression. kEyeReconSrc
+  // is prepended so rt_ao/rt_composite can call post_eye_pos/normal/normal_smooth.
+  if (_rtReady && !_rtResolvePipeline && !_rtCompileTried) {
+    _rtCompileTried = true;
     NSError* err = nil;
-    id<MTLLibrary> lib = [_device newLibraryWithSource:kRTSrc options:nil error:&err];
-    if (lib) {
+    id<MTLLibrary> lib = [_device newLibraryWithSource:[kEyeReconSrc stringByAppendingString:kRTSrc]
+                                               options:nil error:&err];
+    if (!lib) {
+      NSLog(@"RendererMetal RT: shader library failed to compile: %@", err);
+    } else {
       // Pass A: raw AO (.r) + traced light-visibility (.g) -> RG16Float.
       MTLRenderPipelineDescriptor* pa = [[MTLRenderPipelineDescriptor alloc] init];
       pa.vertexFunction = [lib newFunctionWithName:@"rt_vertex"];
@@ -2120,9 +2162,9 @@ void RendererMetal::ensureRayTracingAS()
       pd.fragmentFunction = [lib newFunctionWithName:@"rt_composite"];
       pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
       _rtResolvePipeline = [_device newRenderPipelineStateWithDescriptor:pd error:&err];
+      if (!_rtAOPipeline || !_rtResolvePipeline)
+        NSLog(@"RendererMetal RT: AO/composite pipeline failed: %@", err);
     }
-    if (!_rtAOPipeline || !_rtResolvePipeline)
-      NSLog(@"RendererMetal RT: AO/composite pipeline failed: %@", err);
   }
 }
 
@@ -2165,12 +2207,14 @@ void RendererMetal::runPostChain()
     u.bgFog[3] = doFog ? 1.0f : 0.0f;
     u.projA = _projA; u.projB = _projB; u.projX = _projX; u.projY = _projY;
     u.fogStart = _fogStart; u.fogEnd = _fogEnd;
-    u.aoRadius = 5.0f; u.aoIntensity = 0.72f;
-    u.shadowIntensity = doShadow ? 0.45f : 0.0f;
-    // 16 stratified (Hammersley) samples + the composite-pass blur is clean and
-    // shimmer-free; for the single-shot offscreen PNG (no temporal smoothing)
-    // trace more rays since each export frame stands alone.
-    u.nSamples = _offscreen ? 48.0f : 16.0f;
+    u.aoRadius = _rtAORadius; u.aoIntensity = _rtAOIntensity;
+    u.shadowIntensity = doShadow ? _rtShadowIntensity : 0.0f;
+    // AO rays/pixel: the live view uses metal_rt_samples (_rtSamples, default 16
+    // stratified Hammersley samples — clean and shimmer-free with the composite
+    // blur); the single-shot offscreen PNG (no temporal smoothing) traces more
+    // since each export frame stands alone, never fewer than 48.
+    u.nSamples = _offscreen ? (float)(_rtSamples > 48 ? _rtSamples : 48)
+                            : (float)_rtSamples;
     // Temporal AO: when enabled (and not a single-shot offscreen export), advance
     // the frame counter so rt_ao jitters each frame; the accumulate pass below
     // EMAs successive frames toward offscreen quality. Off => frame 0, which is

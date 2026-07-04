@@ -321,6 +321,14 @@ public:
   {
   }
 
+  // Real-time ray-tracing quality knobs (metal_rt_* settings): AO rays/pixel,
+  // AO hemisphere radius (Angstroms), AO darkening strength, cast-shadow
+  // darkening strength. Fed each frame from SceneRender. Default: no-op.
+  virtual void setRayTraceParams(int samples, float aoRadius, float aoIntensity,
+      float shadowIntensity)
+  {
+  }
+
   // PyMOL lighting model (ambient/direct/reflect/specular/shininess). Default:
   // no-op (the GL renderer reads these settings itself). The Metal renderer
   // uploads them into its lit shaders so the Scene lighting sliders take effect.

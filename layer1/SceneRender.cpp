@@ -2064,6 +2064,13 @@ void SceneRenderMetal(PyMOLGlobals* G)
         rtShadowEnabled, outlineCol[0], outlineCol[1], outlineCol[2],
         outlineWidth, dofEnabled, dofFocus, dofRange, temporalAO,
         upscaleEnabled, dofAperture);
+    // Real-time RT quality knobs (metal_rt_*): AO rays/pixel, AO radius (A),
+    // AO intensity, cast-shadow intensity — applied in RendererMetal::runPostChain.
+    G->Renderer->setRayTraceParams(
+        SettingGetGlobal_i(G, cSetting_metal_rt_samples),
+        SettingGetGlobal_f(G, cSetting_metal_rt_ao_radius),
+        SettingGetGlobal_f(G, cSetting_metal_rt_ao_intensity),
+        SettingGetGlobal_f(G, cSetting_metal_rt_shadow_intensity));
     // Lighting model — the Metal lit shaders read these instead of hard-coded
     // constants, so the Scene-panel lighting sliders take effect. Specular and
     // shininess must go through PyMOL's light-count adjustment (the same path
