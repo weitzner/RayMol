@@ -2175,9 +2175,14 @@ struct ContentView: View {
                 // The right-panel timeline mimics the iPhone Movie tab; its Expand
                 // button toggles the full-width bottom dock (engine.timelineMode).
                 // forceCompact → the narrow iPhone-style layout that fits the column.
+                // fill the column height (top-aligned) with the timeline chrome so
+                // the area below the compact panel isn't transparent (desktop
+                // showing through) — the panel otherwise hugs its content.
                 TimelinePanel(showsDone: false,
                               onExpand: { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() } },
                               forceCompact: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .background(TimelineTheme.bar)
             case .display:
                 // The SCENE render card (bg/lighting/effects/ray); its
                 // "All settings…" opens the shared searchable SettingsSheet. Theme
