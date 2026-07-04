@@ -201,8 +201,8 @@ enum SceneCatalog {
                    help: "Show every coordinate state (NMR models / trajectory frames) at once."),
 
         // --- Camera: viewpoint + lens ---
-        SceneParam(setting: "field_of_view", label: "Field of view", kind: .slider, min: 10, max: 60, step: 1, decimals: 0, group: "Camera",
-                   help: "Camera lens angle. Lower = flatter / telephoto; higher = wider with more perspective."),
+        SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 15, max: 135, step: 1, decimals: 0, group: "Camera",
+                   help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~15mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Pinch to zoom. No effect in orthoscopic mode."),
         SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
                    help: "Blur objects in front of and behind the focal plane for a photographic bokeh look."),
         SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
@@ -2043,11 +2043,27 @@ struct SceneCard: View {
                 SegmentedSetting(prop: RepProperty(setting: p.setting, label: p.label, kind: .segmented, options: p.options),
                                  value: v) { engine.runCommand("set \(p.setting), \(Int($0))") }
             case .slider:
-                LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
-                                                min: p.min, max: p.max, step: p.step, decimals: p.decimals),
-                              value: v,
-                              onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
-                              onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+                if p.setting == "field_of_view" {
+                    // Lens control: the slider is a 35mm-equivalent focal length (mm),
+                    // shown by converting the polled field_of_view, and applied via
+                    // set_fov (a dolly zoom) so it swaps perspective rather than
+                    // zooming. Inert in orthoscopic mode.
+                    let fovDeg = engine.sceneState.values["field_of_view"] ?? 20
+                    let orthoOn = (engine.sceneState.values["ortho"] ?? 0) > 0.5
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: fovToMM(fovDeg),
+                                  onLive: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") },
+                                  onCommit: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") })
+                        .disabled(orthoOn)
+                        .opacity(orthoOn ? 0.4 : 1.0)
+                } else {
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: v,
+                                  onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
+                                  onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+                }
             case .color:
                 EmptyView()  // scene colors use p.isColor above, not the .color kind
             }
@@ -2056,6 +2072,18 @@ struct SceneCard: View {
 
     private func fmtScene(_ v: Double, _ p: SceneParam) -> String {
         p.decimals == 0 ? String(Int(v.rounded())) : String(format: "%.4f", v)
+    }
+
+    // Lens control: map PyMOL's vertical field_of_view (degrees) to a 35mm-
+    // equivalent focal length using the full-frame sensor height (24mm):
+    //   fov = 2*atan(12/f)   <->   f = 12/tan(fov/2)
+    // fovToMM clamps into the slider's mm range so the thumb never leaves bounds.
+    private func fovToMM(_ fovDeg: Double) -> Double {
+        let f = 12.0 / tan(fovDeg * .pi / 360.0)
+        return min(max(f, 15.0), 135.0)
+    }
+    private func mmToFOV(_ mm: Double) -> Double {
+        2.0 * atan(12.0 / mm) * 180.0 / .pi
     }
 
     private func setBackground(_ color: Color) {

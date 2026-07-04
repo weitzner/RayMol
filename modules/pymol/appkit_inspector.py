@@ -57,7 +57,7 @@ SCENE_SETTINGS = ['metal_raytrace', 'metal_rt_shadows', 'metal_shadows', 'metal_
                   'metal_tonemap', 'metal_exposure',
                   'metal_sss_wrap', 'metal_dof', 'metal_dof_focus',
                   'metal_dof_range', 'metal_dof_aperture', 'metal_temporal_ao', 'metal_upscale',
-                  'depth_cue', 'fog', 'field_of_view', 'surface_quality',
+                  'depth_cue', 'fog', 'field_of_view', 'ortho', 'surface_quality',
                   'grid_mode', 'all_states', 'mouse_selection_mode',
                   'ambient', 'direct', 'reflect', 'specular', 'shininess',
                   'ray_opaque_background']
