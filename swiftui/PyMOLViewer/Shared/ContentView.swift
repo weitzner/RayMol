@@ -391,6 +391,9 @@ struct ContentView: View {
                                     .padding(.bottom, 12)
                             }
                         }
+                        // Empty-state CTA centered in the VIEWPORT (not over the
+                        // docked timeline below it).
+                        .overlay { if engine.objects.isEmpty && !showThemeStudio { macEmptyState } }
                     if engine.timelineMode {
                         Divider()
                         TimelinePanel()
@@ -399,8 +402,6 @@ struct ContentView: View {
                         TransportBar()
                     }
                 }
-                // Empty-state CTA when nothing is loaded (mirrors the iOS overlay).
-                .overlay { if engine.objects.isEmpty && !showThemeStudio { macEmptyState } }
                 // Drag a .pdb/.cif/.pse/etc. onto the viewport to load it (same
                 // path as File ▸ Open / Finder "Open With"). Highlight while hovered.
                 .onDrop(of: [.fileURL], isTargeted: $isViewportDropTargeted) { providers in
@@ -429,7 +430,7 @@ struct ContentView: View {
                     .frame(width: 340)
             } else if showObjectPanel {
                 inspectorSwitcher
-                    .frame(width: 360)
+                    .frame(width: 400)   // iPhone-ish width so the Movie tab timeline fits
             }
         }
         } // end VStack
@@ -1244,7 +1245,7 @@ struct ContentView: View {
     @ViewBuilder
     private func iPadMacStyleLayout(geo: GeometryProxy) -> some View {
         let landscape = geo.size.width > geo.size.height
-        let rightW: CGFloat = 360                          // landscape side column
+        let rightW: CGFloat = 400                          // landscape side column (fits Movie-tab timeline)
         let maxTerm = max(140, geo.size.height * 0.33)
         let clampedTermH = min(max(termH, 60), maxTerm)
         // Effective pane visibility: iPhone landscape uses its minimal-default
@@ -2173,8 +2174,10 @@ struct ContentView: View {
             case .movie:
                 // The right-panel timeline mimics the iPhone Movie tab; its Expand
                 // button toggles the full-width bottom dock (engine.timelineMode).
+                // forceCompact → the narrow iPhone-style layout that fits the column.
                 TimelinePanel(showsDone: false,
-                              onExpand: { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() } })
+                              onExpand: { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() } },
+                              forceCompact: true)
             case .display:
                 // The SCENE render card (bg/lighting/effects/ray); its
                 // "All settings…" opens the shared searchable SettingsSheet. Theme

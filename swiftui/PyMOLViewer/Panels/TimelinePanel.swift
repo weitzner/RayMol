@@ -36,6 +36,10 @@ struct TimelinePanel: View {
     /// full-width bottom dock (macOS / iPad right-panel compact view). The button
     /// reflects `engine.timelineMode` (dock open) as its active state.
     var onExpand: (() -> Void)? = nil
+    /// Force the narrow (iPhone-style) layout even on macOS/iPad — used for the
+    /// right-inspector instance so it fits the ~400pt column instead of rendering
+    /// the wide desktop transport that overflows.
+    var forceCompact: Bool = false
 
     @State private var showClearConfirm = false
 
@@ -62,9 +66,9 @@ struct TimelinePanel: View {
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
-    private var isCompact: Bool { hSize == .compact }
+    private var isCompact: Bool { forceCompact || hSize == .compact }
     #else
-    private var isCompact: Bool { false }
+    private var isCompact: Bool { forceCompact }
     #endif
 
     private let laneH: CGFloat = 44
@@ -97,7 +101,7 @@ struct TimelinePanel: View {
             tracksSection
             scenePaletteStrip
             Divider()
-            TransportBar()
+            TransportBar(forceCompact: isCompact, inTimeline: true)
             Divider().opacity(0.5)
             composer
         }

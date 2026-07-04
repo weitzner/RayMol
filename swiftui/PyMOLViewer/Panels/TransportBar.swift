@@ -35,15 +35,24 @@ struct TransportBar: View {
     var compactPeek: Bool = false
     /// Called when the user taps the expand/collapse chevron (iPhone only).
     var onToggleExpand: (() -> Void)? = nil
+    /// Force the narrow (compact) layout regardless of size class — used when the
+    /// bar is embedded in a narrow column (the macOS/iPad right-inspector timeline)
+    /// where the wide `regularRow` would overflow.
+    var forceCompact: Bool = false
+    /// True when embedded in a TimelinePanel: the ruler is the scrubber, so this
+    /// bar always uses the clean timeline layout (no redundant slider, no
+    /// Make/Export — those live in the top Export menu), regardless of whether the
+    /// bottom dock (engine.timelineMode) is open.
+    var inTimeline: Bool = false
 
     @State private var showBuilder = false
     @State private var showExport = false
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
-    private var isCompact: Bool { hSize == .compact }
+    private var isCompact: Bool { forceCompact || hSize == .compact }
     #else
-    private var isCompact: Bool { false }
+    private var isCompact: Bool { forceCompact }
     #endif
 
     var body: some View {
@@ -67,8 +76,8 @@ struct TransportBar: View {
     private var regularRow: some View {
         HStack(spacing: 10) {
             transportCluster
-            // Timeline mode: the ruler scrubs, so the slider is redundant here.
-            if !engine.timelineMode { scrubber }
+            // In a timeline the ruler scrubs, so the slider is redundant here.
+            if !inTimeline { scrubber }
             counter
             loopButton
             overflowMenu
@@ -84,7 +93,7 @@ struct TransportBar: View {
     //  • Otherwise: cluster+counter row, a scrubber, and a loop/fps + Make/Export row.
     private var compactFull: some View {
         Group {
-            if engine.timelineMode {
+            if inTimeline {
                 HStack(spacing: 6) {
                     transportCluster
                     Spacer(minLength: 4)
