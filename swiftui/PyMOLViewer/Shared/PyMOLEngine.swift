@@ -872,11 +872,27 @@ final class PyMOLEngine: ObservableObject {
 
     // MARK: - Theme
 
+    /// Whether the passive launch-time theme re-assertion
+    /// (ContentView.applyPersistedTheme) should SKIP the theme's render toggles
+    /// (metal_outline / metal_raytrace / metal_shadows). True when a session was
+    /// restored or a file-open is pending at launch: that session OWNS its render
+    /// state and must not be clobbered by the theme (the .pse already restored
+    /// them). On a fresh/empty launch this is false so the theme establishes them.
+    var suppressLaunchThemeRenderToggles: Bool {
+        #if os(iOS)
+        return didRestoreAutosave || launchOpenRequested
+        #else
+        return false   // macOS launch-open loads the .pse AFTER the theme, so the session wins
+        #endif
+    }
+
     /// Push a theme's molecular/viewport defaults into PyMOL. Chrome is handled
     /// in SwiftUI; this covers bg_color + render toggles + the default palette
     /// that NEW objects pick up via raymol_theme.apply_to. Does NOT restyle or
-    /// recolor existing objects.
-    func applyTheme(_ theme: Theme) {
+    /// recolor existing objects. `applyRenderToggles` gates the three render-state
+    /// settings (outline/raytrace/shadows) so the launch-time re-assertion won't
+    /// clobber a restored session (see suppressLaunchThemeRenderToggles).
+    func applyTheme(_ theme: Theme, applyRenderToggles: Bool = true) {
         guard isReady else { return }
         // 3D selection-indicator color follows the theme's selection color.
         if let inst = instance {
@@ -894,6 +910,7 @@ final class PyMOLEngine: ObservableObject {
         // Prefer the rich raymol_theme palette; fall back to the immediate
         // scene-wide bits so chrome (bg/outline) still themes if the module is
         // somehow unavailable.
+        let renderToggles = applyRenderToggles ? "True" : "False"
         var py = "try:\n"
         py += "    from pymol import raymol_theme as _rt\n"
         py += "    _rt.set_palette(bg=(\(theme.viewportBackground.pymolTriplet)),"
@@ -903,11 +920,15 @@ final class PyMOLEngine: ObservableObject {
         py += " ray_trace=\(theme.rayTrace ? "True" : "False"),"
         py += " shadows=\(theme.shadows ? "True" : "False"),"
         py += " default_style='\(theme.defaultStyle.rawValue)',"
-        py += " chain_cycle=[\(chains)], element_colors={\(elems)})\n"
+        py += " chain_cycle=[\(chains)], element_colors={\(elems)},"
+        py += " apply_render_toggles=\(renderToggles))\n"
         py += "except Exception as _e:\n"
         py += "    from pymol import cmd as _c\n"
-        py += "    _c.bg_color('\(bgHex)'); _c.set('metal_outline', \(theme.outline ? 1 : 0))\n"
-        py += "    _c.set('metal_raytrace', \(theme.rayTrace ? 1 : 0)); _c.set('metal_shadows', \(theme.shadows ? 1 : 0))\n"
+        py += "    _c.bg_color('\(bgHex)')\n"
+        if applyRenderToggles {
+            py += "    _c.set('metal_outline', \(theme.outline ? 1 : 0))\n"
+            py += "    _c.set('metal_raytrace', \(theme.rayTrace ? 1 : 0)); _c.set('metal_shadows', \(theme.shadows ? 1 : 0))\n"
+        }
         runPython(py)
     }
 

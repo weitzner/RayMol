@@ -2417,9 +2417,14 @@ struct ContentView: View {
     }
 
     // Push the persisted theme's molecular/viewport defaults into PyMOL once the
-    // engine is ready (chrome already reflects it via @Published `active`).
+    // engine is ready (chrome already reflects it via @Published `active`). When a
+    // session is being restored/opened at this launch, SKIP the theme's render
+    // toggles (metal_outline/raytrace/shadows) — the loaded .pse owns that state,
+    // and re-asserting the theme here would clobber it (the theme apply fires on
+    // the isReady onChange, i.e. AFTER the synchronous autosave restore).
     private func applyPersistedTheme() {
-        themeManager.apply(engine: engine)
+        themeManager.apply(engine: engine,
+                           applyRenderToggles: !engine.suppressLaunchThemeRenderToggles)
     }
 }
 
