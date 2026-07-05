@@ -1270,6 +1270,7 @@ private struct LabeledSlider: View {
     @State private var text: String = ""
     @State private var editing = false
     @State private var debounce: DispatchWorkItem?
+    @State private var lastLiveAt: Date = .distantPast
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1310,11 +1311,24 @@ private struct LabeledSlider: View {
     }
 
     private func fmt(_ v: Double) -> String { String(format: "%.\(prop.decimals)f", v) }
+    // Leading-edge throttle (~30 Hz): fire onLive immediately during a
+    // continuous drag, rate-limited, with a trailing call so the final value
+    // always lands. A plain trailing debounce (cancel + reschedule on every
+    // change) starved the update until the finger paused, so the view chased
+    // the drag instead of tracking it — the perceived slider lag.
     private func scheduleLive(_ v: Double) {
+        let interval = 0.033
         debounce?.cancel()
-        let w = DispatchWorkItem { onLive(v) }
-        debounce = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: w)
+        let now = Date()
+        let wait = interval - now.timeIntervalSince(lastLiveAt)
+        if wait <= 0 {
+            lastLiveAt = now
+            onLive(v)
+        } else {
+            let w = DispatchWorkItem { lastLiveAt = Date(); onLive(v) }
+            debounce = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: w)
+        }
     }
 }
 
