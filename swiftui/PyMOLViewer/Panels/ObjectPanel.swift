@@ -205,8 +205,10 @@ enum SceneCatalog {
                    help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~12mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Drag for a live, continuous perspective change. Pinch to zoom. No effect in orthoscopic mode."),
         SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
                    help: "Blur objects in front of and behind the focal plane for a photographic bokeh look."),
+        SceneParam(setting: "metal_dof_autofocus", label: "Autofocus (lock to selection)", kind: .toggle, group: "Camera", dependsOn: "metal_dof",
+                   help: "Lock focus onto the current selection and keep it sharp as you zoom/rotate. Select an element, then turn this on to snapshot it (it stays locked even if you select elsewhere; toggle off→on to re-target). No selection → focuses the center of interest. Overrides the focus slider."),
         SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
-                   help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest."),
+                   help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest. Disabled while Autofocus is on."),
         SceneParam(setting: "metal_dof_range", label: "DOF range", kind: .slider, min: 1, max: 60, step: 0.5, decimals: 1, group: "Camera", dependsOn: "metal_dof",
                    help: "How far beyond focus before blur reaches maximum. Smaller = sharper falloff."),
         SceneParam(setting: "metal_dof_aperture", label: "DOF aperture (blur)", kind: .slider, min: 0, max: 40, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
@@ -2054,7 +2056,18 @@ struct SceneCard: View {
             let v = engine.sceneState.values[p.setting] ?? 0
             switch p.kind {
             case .toggle:
-                ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
+                if p.setting == "metal_dof_autofocus" {
+                    // Enabling snapshots the current selection into "dof_focus" —
+                    // the locked target the renderer tracks each frame (see the
+                    // SceneRender auto-focus block). Disabling just clears the flag.
+                    ToggleSetting(value: v) { on in
+                        engine.runCommand(on
+                            ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
+                            : "set metal_dof_autofocus, 0")
+                    }
+                } else {
+                    ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
+                }
             case .segmented:
                 SegmentedSetting(prop: RepProperty(setting: p.setting, label: p.label, kind: .segmented, options: p.options),
                                  value: v) { engine.runCommand("set \(p.setting), \(Int($0))") }
@@ -2074,11 +2087,16 @@ struct SceneCard: View {
                         .disabled(orthoOn)
                         .opacity(orthoOn ? 0.4 : 1.0)
                 } else {
+                    // The DOF focus slider is driven by autofocus while it's on.
+                    let dofAuto = p.setting == "metal_dof_focus"
+                        && (engine.sceneState.values["metal_dof_autofocus"] ?? 0) > 0.5
                     LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
                                                     min: p.min, max: p.max, step: p.step, decimals: p.decimals),
                                   value: v,
                                   onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
                                   onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+                        .disabled(dofAuto)
+                        .opacity(dofAuto ? 0.4 : 1.0)
                 }
             case .color:
                 EmptyView()  // scene colors use p.isColor above, not the .color kind
