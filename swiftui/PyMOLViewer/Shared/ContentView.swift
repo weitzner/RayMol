@@ -1428,6 +1428,16 @@ struct ContentView: View {
                     // Sit clear ABOVE the transport bar (don't overlap it).
                     .padding(.bottom, engine.hasTimeline ? 96 : 12)
             }
+            // iPhone camera overlay: a glassy floating card docked near the bottom
+            // (no dimming scrim, unlike a system sheet). iPad (regular) uses the
+            // popover attached to the chip instead.
+            .overlay(alignment: .bottom) {
+                if showCameraPanel && hSize == .compact && !engine.objects.isEmpty {
+                    cameraGlassCard
+                        .padding(.bottom, engine.hasTimeline ? 84 : 10)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 Button { showGestureLegend = true } label: {
                     Image(systemName: "questionmark.circle.fill")
@@ -2384,7 +2394,7 @@ struct ContentView: View {
 
     // Bottom-left viewport shortcut to the Camera overlay.
     private var cameraButton: some View {
-        Button { showCameraPanel.toggle() } label: {
+        Button { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel.toggle() } } label: {
             Image(systemName: "camera")
                 .font(.system(size: 20))
                 .foregroundStyle(.white.opacity(showCameraPanel ? 0.95 : 0.6))
@@ -2418,21 +2428,50 @@ struct ContentView: View {
     private func cameraPanelPresentation<V: View>(_ content: V) -> some View {
         #if os(macOS)
         content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
-            CameraControlsView(engine: engine)
+            CameraControlsView(engine: engine).padding(14).frame(width: 300)
         }
         #else
+        // iPad (regular): a popover. iPhone (compact): the chip alone — the glassy
+        // floating card (cameraGlassCard) is presented as a viewport overlay so it
+        // doesn't dim the background and can be translucent, unlike a system sheet.
         if hSize == .regular {
             content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
-                CameraControlsView(engine: engine)
+                CameraControlsView(engine: engine).padding(14).frame(width: 300)
             }
         } else {
-            content.sheet(isPresented: $showCameraPanel) {
-                CameraControlsView(engine: engine)
-                    .presentationDetents([.medium])
-                    .presentationDragIndicator(.visible)
-            }
+            content
         }
         #endif
+    }
+
+    // iPhone: the camera controls as a glassy floating card near the bottom — no
+    // dimming scrim (unlike a system sheet), translucent so the molecule shows
+    // through, and content-sized (compact). The grab handle taps or drags down to
+    // dismiss.
+    private var cameraGlassCard: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(.white.opacity(0.45))
+                .frame(width: 40, height: 5)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } }
+            CameraControlsView(engine: engine)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+        .padding(.horizontal, 10)
+        .gesture(
+            DragGesture().onEnded { v in
+                if v.translation.height > 40 {
+                    withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false }
+                }
+            }
+        )
     }
 
     private func initializeEngine() {

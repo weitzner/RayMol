@@ -2170,7 +2170,10 @@ struct CameraControlsView: View {
     @ObservedObject var engine: PyMOLEngine
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // Pure content (no background / outer padding): the macOS popover and the
+        // iOS glassy card each supply their own chrome. Tight spacing keeps it
+        // vertically compact — it hugs its content rather than filling a sheet.
+        VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Image(systemName: "camera")
                 Text("Camera").font(.system(size: 15, weight: .medium))
@@ -2185,8 +2188,6 @@ struct CameraControlsView: View {
                 }
             }
 
-            Divider().padding(.vertical, 4)
-
             Button { engine.runCommand("reset") } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "dot.viewfinder")
@@ -2195,12 +2196,11 @@ struct CameraControlsView: View {
                 }
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(PanelTheme.selectionTextColor)
+                .padding(.top, 6)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
-        .padding(14)
-        .frame(minWidth: 300, alignment: .leading)
     }
 }
 
