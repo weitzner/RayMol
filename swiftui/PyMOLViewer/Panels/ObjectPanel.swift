@@ -211,6 +211,8 @@ enum SceneCatalog {
                    help: "How far beyond focus before blur reaches maximum. Smaller = sharper falloff."),
         SceneParam(setting: "metal_dof_aperture", label: "DOF aperture (blur)", kind: .slider, min: 0, max: 40, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
                    help: "Maximum out-of-focus blur (bokeh radius). Larger = stronger blur."),
+        SceneParam(setting: "metal_dof_hq", label: "High-quality DOF (2-pass)", kind: .toggle, group: "Camera", dependsOn: "metal_dof",
+                   help: "Two-pass bokeh: more gather samples plus a de-noise smoothing pass, for smoother, cleaner out-of-focus blur at some GPU cost. Off = faster single-pass."),
 
         // --- Lighting: real-time lighting model + shading ---
         SceneParam(setting: "ambient",   label: "Ambient",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",

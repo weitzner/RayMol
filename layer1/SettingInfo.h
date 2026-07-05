@@ -935,6 +935,7 @@ enum {
   REC_f( 825, metal_rt_ao_radius                      , global    , 5.0F ),  /* Metal real-time RT: ambient-occlusion hemisphere radius in Angstroms (occlusion reach). Larger = broader pocket/cavity darkening; smaller = tight contact AO. */
   REC_f( 826, metal_rt_ao_intensity                   , global    , 0.72F ), /* Metal real-time RT: ambient-occlusion darkening strength (0..1). */
   REC_f( 827, metal_rt_shadow_intensity               , global    , 0.45F ), /* Metal real-time RT: cast-shadow darkening strength (0..1); still gated by metal_shadows. */
+  REC_b( 828, metal_dof_hq                            , global    , false ), /* Metal depth-of-field: high-quality two-pass bokeh (more gather samples + a de-noise smoothing pass) vs the single-pass gather. */
 
 #ifdef SETTINGINFO_IMPLEMENTATION
 #undef SETTINGINFO_IMPLEMENTATION

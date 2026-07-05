@@ -329,6 +329,10 @@ public:
   {
   }
 
+  // Depth-of-field quality: 0 = single-pass gather, 1 = two-pass (more samples
+  // + a de-noise smoothing pass) — metal_dof_hq. Default: no-op.
+  virtual void setDofHighQuality(int highQuality) {}
+
   // PyMOL lighting model (ambient/direct/reflect/specular/shininess). Default:
   // no-op (the GL renderer reads these settings itself). The Metal renderer
   // uploads them into its lit shaders so the Scene lighting sliders take effect.
