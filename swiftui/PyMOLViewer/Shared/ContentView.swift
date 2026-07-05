@@ -384,11 +384,9 @@ struct ContentView: View {
                         // frame (sibling in the VStack), so no transport clearance
                         // is needed as on iOS.
                         .overlay(alignment: .bottomLeading) {
-                            if showSceneButtons && !engine.sceneNames.isEmpty {
-                                sceneButtonsOverlay
-                                    .padding(.leading, 12)
-                                    .padding(.bottom, 12)
-                            }
+                            bottomLeadingViewportChrome
+                                .padding(.leading, 12)
+                                .padding(.bottom, 12)
                         }
                     if engine.hasTimeline {
                         Divider()
@@ -567,6 +565,7 @@ struct ContentView: View {
     // Scenes tab: opt-in glanceable scene buttons overlaid on the viewport.
     // Also outside #if os(iOS) since inspectorSwitcher (shared) binds to it.
     @State private var showSceneButtons = false
+    @State private var showCameraPanel = false   // viewport Camera overlay (shared macOS/iOS)
 
     // Floating scene chips over the viewport (teal/global), shown only when the
     // Scenes tab's "Show scene buttons in viewport" toggle is on. Tap = recall.
@@ -1424,12 +1423,10 @@ struct ContentView: View {
             // Opt-in glanceable scene buttons (Scenes tab → "Show scene buttons
             // in viewport"). Sits above the transport when a timeline is present.
             .overlay(alignment: .bottomLeading) {
-                if showSceneButtons && !engine.sceneNames.isEmpty {
-                    sceneButtonsOverlay
-                        .padding(.leading, 12)
-                        // Sit clear ABOVE the transport bar (don't overlap it).
-                        .padding(.bottom, engine.hasTimeline ? 96 : 12)
-                }
+                bottomLeadingViewportChrome
+                    .padding(.leading, 12)
+                    // Sit clear ABOVE the transport bar (don't overlap it).
+                    .padding(.bottom, engine.hasTimeline ? 96 : 12)
             }
             .overlay(alignment: .bottomTrailing) {
                 Button { showGestureLegend = true } label: {
@@ -2384,6 +2381,59 @@ struct ContentView: View {
     }
 
     // MARK: - Initialization
+
+    // Bottom-left viewport shortcut to the Camera overlay.
+    private var cameraButton: some View {
+        Button { showCameraPanel.toggle() } label: {
+            Image(systemName: "camera")
+                .font(.system(size: 20))
+                .foregroundStyle(.white.opacity(showCameraPanel ? 0.95 : 0.6))
+                .frame(width: 46, height: 46)
+                .background(.white.opacity(showCameraPanel ? 0.22 : 0.12), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Camera settings")
+    }
+
+    // Bottom-left viewport chrome: optional scene buttons stacked above the camera
+    // shortcut. Extracted into its own property so ContentView.body stays within
+    // the Swift type-checker's complexity budget.
+    @ViewBuilder
+    private var bottomLeadingViewportChrome: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showSceneButtons && !engine.sceneNames.isEmpty {
+                sceneButtonsOverlay
+            }
+            if !engine.objects.isEmpty {
+                cameraPanelPresentation(cameraButton)
+            }
+        }
+    }
+
+    // Popover on regular width (macOS always; iPad), bottom sheet on compact
+    // (iPhone). hSize is iOS-only in this file, so it's referenced only in the
+    // iOS branch; macOS always uses a popover.
+    @ViewBuilder
+    private func cameraPanelPresentation<V: View>(_ content: V) -> some View {
+        #if os(macOS)
+        content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
+            CameraControlsView(engine: engine)
+        }
+        #else
+        if hSize == .regular {
+            content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
+                CameraControlsView(engine: engine)
+            }
+        } else {
+            content.sheet(isPresented: $showCameraPanel) {
+                CameraControlsView(engine: engine)
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
+            }
+        }
+        #endif
+    }
 
     private func initializeEngine() {
         guard !engine.isReady else { return }

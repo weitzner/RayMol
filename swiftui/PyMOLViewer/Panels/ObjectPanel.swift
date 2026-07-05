@@ -189,6 +189,16 @@ struct SceneParam: Identifiable {
 enum SceneCatalog {
     // Ordered sub-groups shown inside the SCENE section (see panel reorg).
     static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Metal optimization", "Effects", "Quality"]
+    // Ordered subset shown in the viewport Camera overlay (a shortcut to the
+    // most-used camera controls). Deliberately omits metal_dof_range and
+    // depth_cue, which remain in the full inspector.
+    static let cameraOverlayKeys = [
+        "field_of_view", "ortho", "metal_dof",
+        "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_hq",
+    ]
+    static func param(for setting: String) -> SceneParam? {
+        params.first { $0.setting == setting }
+    }
     static let params: [SceneParam] = [
         // --- Canvas: background + multi-object/state layout ---
         SceneParam(setting: "bg_rgb",     label: "Background", kind: .toggle, group: "Canvas", isColor: true,
@@ -203,9 +213,11 @@ enum SceneCatalog {
         // --- Camera: viewpoint + lens ---
         SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 12, max: 135, step: 0.5, decimals: 0, group: "Camera",
                    help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~12mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Drag for a live, continuous perspective change. Pinch to zoom. No effect in orthoscopic mode."),
+        SceneParam(setting: "ortho", label: "Orthographic", kind: .toggle, group: "Camera",
+                   help: "Orthographic (parallel) projection — no perspective. Disables the Lens control."),
         SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
                    help: "Blur objects in front of and behind the focal plane for a photographic bokeh look."),
-        SceneParam(setting: "metal_dof_autofocus", label: "Autofocus (lock to selection)", kind: .toggle, group: "Camera", dependsOn: "metal_dof",
+        SceneParam(setting: "metal_dof_autofocus", label: "Auto lock focus", kind: .toggle, group: "Camera", dependsOn: "metal_dof",
                    help: "Lock focus onto the current selection and keep it sharp as you zoom/rotate. Select an element, then turn this on to snapshot it (it stays locked even if you select elsewhere; toggle off→on to re-target). No selection → focuses the center of interest. Overrides the focus slider."),
         SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
                    help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest. Disabled while Autofocus is on."),
@@ -1991,7 +2003,7 @@ struct SceneCard: View {
             .buttonStyle(.plain)
             if isOpen {
                 ForEach(SceneCatalog.params.filter { $0.group == group }) { p in
-                    if visible(p) { paramRow(p) }
+                    SceneParamRow(param: p, engine: engine)
                 }
                 if group == "Effects" { resetEffectsButton }
             }
@@ -2022,21 +2034,30 @@ struct SceneCard: View {
     // scene-state poll re-syncs the toggles/sliders after the sets land.
     private func resetEffects() { engine.resetEffects() }
 
-    // Dependent rows (dependsOn set) are hidden while their parent toggle is off.
-    private func visible(_ p: SceneParam) -> Bool {
-        guard let dep = p.dependsOn else { return true }
-        return (engine.sceneState.values[dep] ?? 0) > 0.5
-    }
+}
 
-    @ViewBuilder
-    private func paramRow(_ p: SceneParam) -> some View {
-        // Hardware ray tracing is unavailable on some GPUs (Simulator, A-series
-        // iPads); gray the row out so the toggle doesn't read as a working control.
-        let rtUnavailable = p.setting == "metal_raytrace" && !engine.rayTracingSupported
-        sceneRow(rtUnavailable ? "\(p.label) (unavailable)" : p.label, help: p.help) { sceneControl(p) }
-            .padding(.leading, p.dependsOn != nil ? 12 : 0)   // indent gated sub-settings
+// MARK: - Shared scene-setting row + Camera overlay
+
+// One scene-setting row (label + control + help), shared by the inspector's
+// Scene section (SceneCard) and the viewport Camera overlay (CameraControlsView).
+// Self-hides when its dependsOn parent toggle is off, so callers render it
+// unconditionally.
+struct SceneParamRow: View {
+    let param: SceneParam
+    @ObservedObject var engine: PyMOLEngine
+
+    var body: some View {
+        if let dep = param.dependsOn, (engine.sceneState.values[dep] ?? 0) <= 0.5 {
+            EmptyView()
+        } else {
+            let rtUnavailable = param.setting == "metal_raytrace" && !engine.rayTracingSupported
+            sceneRow(rtUnavailable ? "\(param.label) (unavailable)" : param.label, help: param.help) {
+                sceneControl(param)
+            }
+            .padding(.leading, param.dependsOn != nil ? 12 : 0)
             .disabled(rtUnavailable)
             .opacity(rtUnavailable ? 0.45 : 1)
+        }
     }
 
     @ViewBuilder
@@ -2139,6 +2160,47 @@ struct SceneCard: View {
             Spacer(minLength: 0)
             if !help.isEmpty { HelpButton(text: help) }
         }
+    }
+}
+
+// Content of the viewport Camera overlay (popover on macOS/iPad, bottom sheet on
+// iPhone). Reuses SceneParamRow for the curated camera params, then a Reset view
+// action. Reads/writes go through PyMOLEngine exactly as the inspector does.
+struct CameraControlsView: View {
+    @ObservedObject var engine: PyMOLEngine
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "camera")
+                Text("Camera").font(.system(size: 15, weight: .medium))
+                Spacer()
+            }
+            .foregroundColor(PanelTheme.textColor)
+            .padding(.bottom, 2)
+
+            ForEach(SceneCatalog.cameraOverlayKeys, id: \.self) { key in
+                if let p = SceneCatalog.param(for: key) {
+                    SceneParamRow(param: p, engine: engine)
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            Button { engine.runCommand("reset") } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "dot.viewfinder")
+                    Text("Reset view")
+                    Spacer()
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(PanelTheme.selectionTextColor)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .frame(minWidth: 300, alignment: .leading)
     }
 }
 
