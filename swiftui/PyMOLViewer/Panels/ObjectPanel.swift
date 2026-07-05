@@ -201,8 +201,8 @@ enum SceneCatalog {
                    help: "Show every coordinate state (NMR models / trajectory frames) at once."),
 
         // --- Camera: viewpoint + lens ---
-        SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 15, max: 135, step: 1, decimals: 0, group: "Camera",
-                   help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~15mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Pinch to zoom. No effect in orthoscopic mode."),
+        SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 12, max: 135, step: 0.5, decimals: 0, group: "Camera",
+                   help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~12mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Drag for a live, continuous perspective change. Pinch to zoom. No effect in orthoscopic mode."),
         SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
                    help: "Blur objects in front of and behind the focal plane for a photographic bokeh look."),
         SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
@@ -2080,7 +2080,7 @@ struct SceneCard: View {
     // fovToMM clamps into the slider's mm range so the thumb never leaves bounds.
     private func fovToMM(_ fovDeg: Double) -> Double {
         let f = 12.0 / tan(fovDeg * .pi / 360.0)
-        return min(max(f, 15.0), 135.0)
+        return min(max(f, 12.0), 135.0)
     }
     private func mmToFOV(_ mm: Double) -> Double {
         2.0 * atan(12.0 / mm) * 180.0 / .pi
