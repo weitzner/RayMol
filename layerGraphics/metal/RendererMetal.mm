@@ -936,10 +936,15 @@ fragment float4 post_tonemap(PostVOut in [[stage_in]],
 // when a transparent background was requested (ray_opaque_background 0); the
 // live view never uses it. Alpha is binary (no matte fringing toward bg_rgb);
 // exporting at 2x and downscaling anti-aliases the cutout.
+struct ExportAlphaU {
+  float projA, projB, invW, invH;
+  float focusDist, focusRange, maxRadiusPx, dofOn;
+};
 fragment float4 post_export_alpha(PostVOut in [[stage_in]],
     texture2d<float> src [[texture(0)]],
     depth2d<float> depthTex [[texture(1)]],
-    texture2d<float> revealTex [[texture(2)]], sampler s [[sampler(0)]]) {
+    texture2d<float> revealTex [[texture(2)]], sampler s [[sampler(0)]],
+    constant ExportAlphaU& u [[buffer(0)]]) {
   float d = depthTex.sample(s, in.uv);
   // Opaque geometry (depth < far) stays fully opaque; the far-plane background is
   // cut out. BUT transparent reps (the molecular surface) render via weighted-
@@ -950,6 +955,37 @@ fragment float4 post_export_alpha(PostVOut in [[stage_in]],
   // (cover = 1 - reveal, matching oit_resolve) so the surface survives the matte.
   float cover = 1.0 - revealTex.sample(s, in.uv).r;
   float a = (d < 0.99995) ? 1.0 : cover;   // far plane == cleared background
+
+  // Depth-of-field: the bokeh of out-of-focus geometry spreads PAST the silhouette
+  // into the background region. A depth-only cutout would clip that halo, so for a
+  // background pixel scatter-gather coverage from nearby geometry whose CoC-disk
+  // reaches here (same acceptance test as post_dof), giving the halo a matching
+  // semi-transparent alpha. (Depth math inlined — post_linear_depth/dof_coc are
+  // defined later in this source.)
+  if (u.dofOn > 0.5 && u.maxRadiusPx > 0.5 && d >= 0.99995) {
+    float focus = u.focusDist;
+    if (focus <= 0.0) {
+      float dc = depthTex.sample(s, float2(0.5, 0.5));
+      focus = u.projB / ((2.0 * dc - 1.0) + u.projA);
+    }
+    float maxR = max(u.maxRadiusPx, 1.0);
+    float2 texel = float2(u.invW, u.invH);
+    const int N = 24;
+    float acc = 0.0;
+    for (int i = 0; i < N; ++i) {
+      float t = (float(i) + 0.5) / float(N);
+      float ang = float(i) * 2.39996323;
+      float rr = sqrt(t) * maxR;
+      float2 suv = in.uv + float2(cos(ang), sin(ang)) * rr * texel;
+      float sd = depthTex.sample(s, suv);
+      if (sd < 0.99995) {                                   // neighbour is geometry
+        float sz = u.projB / ((2.0 * sd - 1.0) + u.projA);  // linear eye distance
+        float sRad = abs(clamp((sz - focus) / max(u.focusRange, 1e-3), -1.0, 1.0) * u.maxRadiusPx);
+        acc += clamp(sRad - rr + 0.5, 0.0, 1.0) / float(N); // does its CoC-disk cover here?
+      }
+    }
+    a = max(a, clamp(acc * 3.0, 0.0, 1.0));   // lift sparse gather coverage into a visible matte
+  }
   return float4(src.sample(s, in.uv).rgb, a);
 }
 
@@ -2692,6 +2728,17 @@ void RendererMetal::runPostChain()
     [ea setFragmentTexture:_sceneDepth atIndex:1];
     [ea setFragmentTexture:_oitReveal atIndex:2];  // recover transparent (surface) coverage
     [ea setFragmentSamplerState:_postSampler atIndex:0];
+    // DOF params so the matte keeps out-of-focus bokeh halos semi-transparent
+    // (must match the DOF pass's focus/range/aperture, incl. pixelRadiusScale).
+    struct { float projA, projB, invW, invH; float focusDist, focusRange, maxRadiusPx, dofOn; } au;
+    au.projA = _projA; au.projB = _projB;
+    au.invW = (_rtW > 0) ? 1.0f / (float)_rtW : 0.0f;
+    au.invH = (_rtH > 0) ? 1.0f / (float)_rtH : 0.0f;
+    au.focusDist = _dofFocus;
+    au.focusRange = (_dofRange > 0.01f) ? _dofRange : 14.0f;
+    au.maxRadiusPx = ((_dofAperture > 0.0f) ? _dofAperture : 14.0f) * pixelRadiusScale();
+    au.dofOn = _dofEnabled ? 1.0f : 0.0f;
+    [ea setFragmentBytes:&au length:sizeof(au) atIndex:0];
     [ea drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [ea endEncoding];
     sceneSrc = dst;

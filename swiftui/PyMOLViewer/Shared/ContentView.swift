@@ -1937,17 +1937,15 @@ struct ContentView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("RayMol.png")
         try? FileManager.default.removeItem(at: url)
         engine.runHeavy("Rendering image…") {
-            if exportTransparent {
-                // The Metal fast path bakes the background color (its post chain
-                // composites onto bg). For a true transparent PNG, use the CPU
-                // ray-tracer, which honors ray_opaque_background. Slower but correct.
-                engine.runCommand("set ray_opaque_background, 0")
-                engine.runCommand("png \(url.path), width=\(width), height=\(height), ray=1")
-            } else {
-                engine.runCommand("set ray_opaque_background, 1")
-                engine.renderHiResPNG(url.path, width: width, height: height,
-                                      rayTraced: exportRayTraced ? 1 : 0)
-            }
+            // Both opaque and transparent go through the METAL offscreen path (same
+            // as macOS renderExportPNG): it honors ray_opaque_background (transparent
+            // => the post chain rewrites alpha from coverage) and runs the full post
+            // chain — including depth-of-field. The old transparent branch used the
+            // CPU ray-tracer, which is slow and drops every Metal post-effect (DOF,
+            // outline, tone-map). rtFlag still selects hardware-RT AO/shadows.
+            engine.runCommand("set ray_opaque_background, \(exportTransparent ? 0 : 1)")
+            engine.renderHiResPNG(url.path, width: width, height: height,
+                                  rayTraced: exportRayTraced ? 1 : 0)
             done(FileManager.default.fileExists(atPath: url.path) ? url : nil)
         }
     }
