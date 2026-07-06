@@ -73,7 +73,7 @@ struct TimelinePanel: View {
 
     private let laneH: CGFloat = 56
     private let rulerH: CGFloat = 28
-    private var labelW: CGFloat { isCompact ? 34 : 72 }
+    private var labelW: CGFloat { isCompact ? 34 : 90 }   // wide enough for "Scenes" without wrapping
     private let laneSpace = "timelineLane"   // coord space for drag/tap -> frame
     private let minZoom: CGFloat = 0.05
     private let maxZoom: CGFloat = 8.0
@@ -133,10 +133,12 @@ struct TimelinePanel: View {
                 Text("Timeline")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(TimelineTheme.text)
+                    .lineLimit(1).fixedSize()
             }
             Text(lengthLabel)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(TimelineTheme.dim)
+                .lineLimit(1).fixedSize()
                 .lineLimit(1)
 
             Spacer(minLength: 4)
@@ -238,17 +240,14 @@ struct TimelinePanel: View {
 
     private var doneButton: some View {
         Button { (onExit ?? { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = false } })() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "xmark.circle.fill")
-                Text("Done")
-            }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundColor(.white)
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(Capsule().fill(TimelineTheme.accent))
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 20))
+                .foregroundColor(TimelineTheme.accent)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Exit Timeline mode")
+        .help("Close the timeline editor")
         .accessibilityLabel("Close timeline")
     }
 
@@ -262,6 +261,7 @@ struct TimelinePanel: View {
                     Image(systemName: "film").font(.system(size: 13)).foregroundColor(TimelineTheme.accent)
                     if !isCompact {
                         Text("Track").font(.system(size: 11)).foregroundColor(TimelineTheme.text)
+                            .lineLimit(1).fixedSize()
                     }
                     Spacer(minLength: 0)
                 }
@@ -511,6 +511,7 @@ struct TimelinePanel: View {
                 Image(systemName: "photo.stack").font(.system(size: 13)).foregroundColor(TimelineTheme.dim)
                 if !isCompact {
                     Text("Scenes").font(.system(size: 11)).foregroundColor(TimelineTheme.text)
+                        .lineLimit(1).fixedSize()
                 }
                 Spacer(minLength: 0)
             }
@@ -577,6 +578,7 @@ struct TimelinePanel: View {
                         Button("Camera Rock") { composerKind = "rock" }
                         Button("Scene loop")  { composerKind = "scenes" }
                     } label: { composerChip(composerLabel, composerIcon) }
+                    .help("Motion preset to append")
 
                     if composerKind == "roll" || composerKind == "rock" {
                         Menu {
@@ -584,21 +586,25 @@ struct TimelinePanel: View {
                                 Button(a.uppercased()) { composerAxis = a }
                             }
                         } label: { composerChip(composerAxis.uppercased(), "arrow.triangle.2.circlepath") }
+                        .help("Rotation axis")
                         Menu {
                             ForEach([4, 8, 16], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
                         } label: { composerChip("\(Int(composerDuration))s", "clock") }
+                        .help("Duration of the motion")
                         if composerKind == "rock" {
                             Menu {
                                 ForEach([30, 60, 90], id: \.self) { a in Button("\(a)°") { composerAngle = Double(a) } }
                             } label: { composerChip("\(Int(composerAngle))°", "angle") }
+                            .help("Rock angle (± degrees)")
                         }
                     } else if composerKind == "scenes" {
                         Menu {
                             ForEach([2, 3, 5], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
                         } label: { composerChip("\(Int(composerSecPerScene))s", "clock") }
+                        .help("Seconds per scene")
                     }
                 }
-                .padding(.vertical, 1)
+                .padding(.vertical, 1).padding(.trailing, 4)
             }
 
             Button(action: appendComposer) {
@@ -609,6 +615,7 @@ struct TimelinePanel: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(TimelineTheme.accent)
+            .help("Append this motion to the end of the timeline")
             .disabled(composerKind == "scenes" && engine.sceneNames.isEmpty)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -627,11 +634,14 @@ struct TimelinePanel: View {
         .foregroundColor(TimelineTheme.text)
     }
 
+    // Short chip labels (the video/photo icon conveys "camera") so all of Rock's
+    // options — axis, duration, angle — fit without clipping. Full names live in
+    // the dropdown menu.
     private var composerLabel: String {
         switch composerKind {
-        case "rock": return "Camera Rock"
-        case "scenes": return "Scene loop"
-        default: return "Camera Roll"
+        case "rock": return "Rock"
+        case "scenes": return "Scenes"
+        default: return "Roll"
         }
     }
 

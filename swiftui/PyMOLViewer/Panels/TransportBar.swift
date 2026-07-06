@@ -151,14 +151,14 @@ struct TransportBar: View {
     private var transportCluster: some View {
         HStack(spacing: 2) {
             iconButton("backward.end.fill", size: 15) { engine.rewindMovie() }
-                .accessibilityLabel("Rewind to start")
+                .accessibilityLabel("Rewind to start").help("Rewind to start")
             iconButton("backward.fill", size: 15) { engine.stepBackward() }
-                .accessibilityLabel("Step back")
+                .accessibilityLabel("Step back").help("Step back one frame")
             playPauseButton(size: 20)
             iconButton("forward.fill", size: 15) { engine.stepForward() }
-                .accessibilityLabel("Step forward")
+                .accessibilityLabel("Step forward").help("Step forward one frame")
             iconButton("forward.end.fill", size: 15) { engine.endingMovie() }
-                .accessibilityLabel("Go to end")
+                .accessibilityLabel("Go to end").help("Jump to end")
         }
     }
 
@@ -172,6 +172,7 @@ struct TransportBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
+        .help(playback.isPlaying ? "Pause" : "Play")
     }
 
     private var scrubber: some View {
@@ -189,11 +190,14 @@ struct TransportBar: View {
     }
 
     private var counter: some View {
-        Text("\(playback.currentFrame) / \(playback.frameCount)")
+        // Reserve width for the movie's max digit count ("NNN / NNN") so the
+        // current frame number growing (1 → N digits) never shifts neighbors.
+        let digits = String(max(playback.frameCount, 1)).count
+        return Text("\(playback.currentFrame) / \(playback.frameCount)")
             .font(.system(size: 12, weight: .medium, design: .monospaced))
             .foregroundColor(TimelineTheme.text)
             .lineLimit(1)
-            .fixedSize()
+            .frame(minWidth: CGFloat(digits * 2 + 3) * 7.4, alignment: .trailing)
     }
 
     private var loopButton: some View {
@@ -206,6 +210,7 @@ struct TransportBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(playback.movieLoop ? "Looping on" : "Looping off")
+        .help(playback.movieLoop ? "Looping on — tap to turn off" : "Loop the movie")
     }
 
     private var fpsMenu: some View {
@@ -224,6 +229,7 @@ struct TransportBar: View {
                 .font(.system(size: 12))
         }
         .tint(TimelineTheme.accent)
+        .help("Playback frame rate")
     }
 
     // Slim fps control for the packed timeline row (no gauge icon, "30fps").
@@ -250,6 +256,7 @@ struct TransportBar: View {
         }
         .menuIndicator(.hidden)
         .fixedSize()
+        .help("Playback frame rate")
     }
 
     private var overflowMenu: some View {
