@@ -2434,6 +2434,7 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Camera settings")
+        .accessibilityIdentifier("camera")
     }
 
     // Bottom-left viewport chrome: optional scene buttons stacked above the camera

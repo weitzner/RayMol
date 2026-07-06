@@ -216,6 +216,7 @@ enum SceneCatalog {
         default:              return "slider.horizontal.3"
         }
     }
+
     static func param(for setting: String) -> SceneParam? {
         params.first { $0.setting == setting }
     }
@@ -2357,7 +2358,7 @@ struct CameraDock: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
-        .accessibilityLabel("Reset view")
+        .accessibilityLabel(label)
     }
 
     private func shortLabel(_ key: String) -> String {
