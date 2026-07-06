@@ -20,10 +20,13 @@ private let kActBtnH: CGFloat = 40
 private let kRowH: CGFloat = 46
 private let kGutterW: CGFloat = 40
 #else
-private let kActBtnW: CGFloat = 22
-private let kActBtnH: CGFloat = 18
-private let kRowH: CGFloat = 24
-private let kGutterW: CGFloat = 18
+// macOS: match the iPhone's clearly-boxed A/S/H/L/C cells (the old 22×18 was so
+// small the button background barely read as a box). Slightly denser rows than
+// iOS since it's pointer-driven.
+private let kActBtnW: CGFloat = 38
+private let kActBtnH: CGFloat = 30
+private let kRowH: CGFloat = 34
+private let kGutterW: CGFloat = 26
 #endif
 
 // MARK: - Representation inspector: polled state models
@@ -630,8 +633,33 @@ private enum PanelTheme {
     static var selectionTextColor: Color { t.selectionName.color }
     static var buttonBackground: Color { t.panelBackground.blended(with: t.panelText, 0.16).color }
     static var buttonText: Color { t.panelText.color }
+    static var accentColor: Color { t.accent.color }
     static var headerColor: Color { t.panelBackground.blended(with: t.panelText, 0.6).color }
     static var disabledColor: Color { t.panelBackground.blended(with: t.panelText, 0.4).color }
+}
+
+// Chrome for the compact A/S/H/L/C representation menu buttons so they read the
+// SAME on both platforms: a blue glyph on a gray rounded box, hugging its cell.
+// iOS's `.borderlessButton` menu renders the custom label (box + background)
+// verbatim; macOS's `.borderlessButton` instead tints the glyph, DROPS the box,
+// and lays out greedily (the letters spread across the row). So on macOS we use
+// the `.button` menu style + a plain button style, which render the label as-is
+// and size to it. The explicit accent foreground keeps the glyph blue on macOS
+// (a plain button would otherwise inherit the primary text color).
+private extension View {
+    @ViewBuilder func repMenuChrome() -> some View {
+        #if os(iOS)
+        self.menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .foregroundColor(PanelTheme.accentColor)
+        #else
+        self.menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .foregroundColor(PanelTheme.accentColor)
+            .fixedSize()
+        #endif
+    }
 }
 
 // MARK: - ObjectPanel View
@@ -804,9 +832,7 @@ struct ObjectPanel: View {
             }
             .foregroundColor(PanelTheme.headerColor)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
+        .repMenuChrome()
         .fixedSize()
         .help("Selection mode — what a tap selects")
     }
@@ -925,9 +951,7 @@ private struct AllControlsRow: View {
                     .cornerRadius(2)
                     .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()   // hug the cell (matches the S/H/L/C buttons) so the "all" row groups like object rows
+            .repMenuChrome()
             ShowButton(name: "all")
             HideButton(name: "all")
             LabelMenuButton(name: "all")
@@ -1005,9 +1029,7 @@ private struct ActionMenuButton: View {
                 // the "A" glyph — so a tap anywhere on the button opens the menu.
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
+        .repMenuChrome()
     }
 }
 
@@ -1054,9 +1076,7 @@ private struct ShowButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
+        .repMenuChrome()
     }
 }
 
@@ -1088,9 +1108,7 @@ private struct HideButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
+        .repMenuChrome()
     }
 }
 
@@ -1122,9 +1140,7 @@ private struct LabelMenuButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
+        .repMenuChrome()
     }
 }
 
@@ -1167,9 +1183,7 @@ private struct ColorMenuButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
+        .repMenuChrome()
         .popover(isPresented: $showCustom, arrowEdge: .bottom) {
             VStack(spacing: 8) {
                 Text("Custom color").font(.system(size: 11, weight: .semibold))
