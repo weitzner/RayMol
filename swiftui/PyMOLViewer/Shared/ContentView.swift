@@ -430,7 +430,7 @@ struct ContentView: View {
                     .frame(width: 340)
             } else if showObjectPanel {
                 inspectorSwitcher
-                    .frame(width: 400)   // iPhone-ish width so the Movie tab timeline fits
+                    .frame(width: 440)   // roomy enough for the Movie-tab transport (macOS controls are denser than iOS)
             }
         }
         } // end VStack
@@ -1245,7 +1245,7 @@ struct ContentView: View {
     @ViewBuilder
     private func iPadMacStyleLayout(geo: GeometryProxy) -> some View {
         let landscape = geo.size.width > geo.size.height
-        let rightW: CGFloat = 400                          // landscape side column (fits Movie-tab timeline)
+        let rightW: CGFloat = 440                          // landscape side column (roomy for the Movie-tab transport)
         let maxTerm = max(140, geo.size.height * 0.33)
         let clampedTermH = min(max(termH, 60), maxTerm)
         // Effective pane visibility: iPhone landscape uses its minimal-default
