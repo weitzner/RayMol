@@ -195,6 +195,9 @@ struct ContentView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var showThemeStudio = false   // inline Theme studio (replaces a panel region)
     @AppStorage("mouseLegendCollapsed") private var mouseLegendCollapsed = false
+    // Pending auto-minimize of the expanded mouse legend (fires ~1s after the
+    // pointer leaves it); cancelled if the pointer returns.
+    @State private var mouseLegendCollapseWork: DispatchWorkItem?
     @State private var showObjectPanel = true
     @State private var showCommandPanel = true
 
@@ -317,6 +320,16 @@ struct ContentView: View {
                 .help("Minimize")
             }
             .padding(8)
+            .onHover { hovering in
+                mouseLegendCollapseWork?.cancel()
+                guard !hovering else { return }
+                // Auto-minimize ~1s after the pointer leaves the expanded legend.
+                let work = DispatchWorkItem {
+                    withAnimation(.easeInOut(duration: 0.15)) { mouseLegendCollapsed = true }
+                }
+                mouseLegendCollapseWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+            }
         }
     }
 
@@ -390,7 +403,7 @@ struct ContentView: View {
                         }
                         .overlay(alignment: .bottom) {
                             if showCameraPanel && !engine.objects.isEmpty {
-                                CameraDock(engine: engine)
+                                CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
                                     .padding(.horizontal, 10)
                                     .padding(.bottom, engine.hasTimeline ? 84 : 12)
                                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -1457,7 +1470,7 @@ struct ContentView: View {
             // to dismiss.
             .overlay(alignment: .bottom) {
                 if showCameraPanel && !engine.objects.isEmpty {
-                    CameraDock(engine: engine)
+                    CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
                         .padding(.horizontal, 10)
                         .padding(.bottom, engine.hasTimeline ? 84 : 10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))

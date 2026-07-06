@@ -36,7 +36,7 @@ final class CameraOverlayUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
         attach("strip_2_open")
 
-        for id in ["camDock.lens", "camDock.zoom", "camDock.ortho", "camDock.depth", "camDock.reset"] {
+        for id in ["camDock.ortho", "camDock.lens", "camDock.zoom", "camDock.depth", "camDock.close"] {
             XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "Strip icon '\(id)' not found")
         }
         // No surface open yet → no slider present (Objects panel is closed).
@@ -118,20 +118,22 @@ final class CameraOverlayUITests: XCTestCase {
                        "'DOF quality' must not appear in the camera dock")
     }
 
-    // MARK: - Reset does not crash
+    // MARK: - Close button dismisses the dock
 
-    func testResetNoCrash() throws {
+    func testCloseButtonDismissesDock() throws {
         app.launch()
         XCTAssertTrue(waitForRender(timeout: 30), "molecule never rendered")
         cameraChipButton().tap()
         Thread.sleep(forTimeInterval: 1.5)
 
-        let reset = app.buttons["camDock.reset"]
-        XCTAssertTrue(reset.waitForExistence(timeout: 5), "Reset icon not found")
-        reset.tap()
-        Thread.sleep(forTimeInterval: 1.5)
-        XCTAssertEqual(app.state, .runningForeground, "App crashed after Reset")
-        attach("strip_7_reset")
+        let close = app.buttons["camDock.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "Close icon not found")
+        close.tap()
+        Thread.sleep(forTimeInterval: 1.0)
+        // Dock is dismissed: its strip icons are gone.
+        XCTAssertFalse(app.buttons["camDock.lens"].exists, "Dock did not dismiss after Close")
+        XCTAssertEqual(app.state, .runningForeground, "App crashed after Close")
+        attach("strip_7_close")
     }
 
     // MARK: - Zoom slider changes the on-screen molecule size

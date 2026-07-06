@@ -204,7 +204,7 @@ enum SceneCatalog {
     // order. DOF's sub-controls are rendered by DOFSubPanelContent, not as strip
     // icons. metal_dof_quality is intentionally absent — it defaults to best (4)
     // and lives only in the inspector's Scene → Camera group.
-    static let cameraStripKeys = ["field_of_view", "zoom", "ortho", "metal_dof"]
+    static let cameraStripKeys = ["ortho", "field_of_view", "zoom", "metal_dof"]
 
     // SF Symbol for each strip control.
     static func cameraIcon(for setting: String) -> String {
@@ -2264,6 +2264,8 @@ struct DOFSubPanelContent: View {
 // platforms via ContentView's bottom overlay.
 struct CameraDock: View {
     @ObservedObject var engine: PyMOLEngine
+    // Dismisses the whole dock (the ✕ close button).
+    let onClose: () -> Void
     // Which control's surface is open above the strip. nil = strip only.
     // "ortho" toggles instantly and never becomes `open`.
     @State private var open: String? = nil
@@ -2286,8 +2288,8 @@ struct CameraDock: View {
             }
             HStack(spacing: 10) {
                 ForEach(SceneCatalog.cameraStripKeys, id: \.self) { stripIcon($0) }
-                stripAction(icon: "dot.viewfinder", label: "Reset", id: "camDock.reset") {
-                    engine.runCommand("reset")
+                stripAction(icon: "xmark", label: "Close", id: "camDock.close") {
+                    onClose()
                 }
             }
         }
