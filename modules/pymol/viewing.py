@@ -780,6 +780,75 @@ SEE ALSO
                     int(quiet),float(animate),int(hand))
         return r
 
+    def set_fov(fov, framed=1, animate=0, quiet=1, *, _self=cmd):
+        '''
+DESCRIPTION
+
+    "set_fov" changes the vertical field of view. With framed=1 (the default)
+    it also dollies the camera along Z and shifts the clipping slab so the
+    subject at the center of rotation keeps the same on-screen size -- a dolly
+    zoom. Changing the field of view therefore changes the PERSPECTIVE (depth
+    compression vs. exaggeration), like swapping a telephoto/macro lens for a
+    wide-angle/fisheye one, instead of behaving like a zoom.
+
+    With framed=0 it just changes the "field_of_view" setting (old behavior).
+
+USAGE
+
+    set_fov fov [, framed [, animate ]]
+
+ARGUMENTS
+
+    fov = float: new vertical field of view, in degrees.
+
+    framed = 0/1: keep the subject framed by dollying the camera. {default: 1}
+
+PYMOL API
+
+    cmd.set_fov(float fov, int framed=1, float animate=0)
+
+SEE ALSO
+
+    get_view, set_view, zoom
+        '''
+        import math
+        fov = float(fov)
+        if fov < 1.0:
+            fov = 1.0
+        if not int(framed):
+            _self.set('field_of_view', fov, quiet=quiet)
+            return
+
+        view = list(_self.get_view(quiet=1))
+        # view[17] encodes +/-fov; its sign is the orthoscopic flag (negative =
+        # perspective) and abs(value) > 1 means it carries the fov.
+        old_fov = abs(view[17]) if abs(view[17]) > 1.0 \
+            else _self.get_setting_float('field_of_view')
+
+        # A dolly zoom only makes sense in perspective; in orthoscopic mode
+        # (view[17] > 0) or with a degenerate old fov, just set the value.
+        if view[17] > 0.0 or old_fov <= 1.0:
+            _self.set('field_of_view', fov, quiet=quiet)
+            return
+
+        ratio = math.tan(math.radians(fov) / 2.0) / \
+            math.tan(math.radians(old_fov) / 2.0)
+        if ratio <= 0.0:
+            _self.set('field_of_view', fov, quiet=quiet)
+            return
+
+        # Keep |camera_z| * tan(fov/2) constant so the center-of-rotation plane
+        # holds its on-screen size; shift the clip slab by the same camera move
+        # so the subject stays fully in view.
+        z_old = view[11]              # camera Z (negative: camera looks down -Z)
+        z_new = z_old / ratio
+        dD = abs(z_new) - abs(z_old)
+        view[11] = z_new
+        view[15] = view[15] + dD     # front clip tracks the subject
+        view[16] = view[16] + dD     # back clip tracks the subject
+        view[17] = -fov              # perspective + new fov (set_view sets it)
+        _self.set_view(view, animate=animate, quiet=quiet)
+
     def view(key, action='recall', animate=-1, *, _self=cmd):
         '''
 DESCRIPTION

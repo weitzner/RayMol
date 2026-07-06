@@ -189,6 +189,16 @@ struct SceneParam: Identifiable {
 enum SceneCatalog {
     // Ordered sub-groups shown inside the SCENE section (see panel reorg).
     static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Metal optimization", "Effects", "Quality"]
+    // Ordered subset shown in the viewport Camera overlay (a shortcut to the
+    // most-used camera controls). Deliberately omits metal_dof_range and
+    // depth_cue, which remain in the full inspector.
+    static let cameraOverlayKeys = [
+        "field_of_view", "zoom", "ortho", "metal_dof",
+        "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_quality",
+    ]
+    static func param(for setting: String) -> SceneParam? {
+        params.first { $0.setting == setting }
+    }
     static let params: [SceneParam] = [
         // --- Canvas: background + multi-object/state layout ---
         SceneParam(setting: "bg_rgb",     label: "Background", kind: .toggle, group: "Canvas", isColor: true,
@@ -201,16 +211,24 @@ enum SceneCatalog {
                    help: "Show every coordinate state (NMR models / trajectory frames) at once."),
 
         // --- Camera: viewpoint + lens ---
-        SceneParam(setting: "field_of_view", label: "Field of view", kind: .slider, min: 10, max: 60, step: 1, decimals: 0, group: "Camera",
-                   help: "Camera lens angle. Lower = flatter / telephoto; higher = wider with more perspective."),
+        SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 12, max: 135, step: 0.5, decimals: 0, group: "Camera",
+                   help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~12mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Drag for a live, continuous perspective change. Pinch to zoom. No effect in orthoscopic mode."),
+        SceneParam(setting: "zoom", label: "Zoom (×)", kind: .slider, min: 0.5, max: 8, step: 0.1, decimals: 1, group: "Camera",
+                   help: "Apparent magnification — dollies the camera closer/farther. ~1× fits the whole scene; higher zooms in. Independent of the Lens: changing perspective (dolly-zoom) leaves this put, and vice-versa. Pinch to zoom also updates it."),
+        SceneParam(setting: "ortho", label: "Orthographic", kind: .toggle, group: "Camera",
+                   help: "Orthographic (parallel) projection — no perspective. Disables the Lens control."),
         SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
                    help: "Blur objects in front of and behind the focal plane for a photographic bokeh look."),
+        SceneParam(setting: "metal_dof_autofocus", label: "Auto lock focus", kind: .toggle, group: "Camera", dependsOn: "metal_dof",
+                   help: "Lock focus onto the current selection and keep it sharp as you zoom/rotate. Select an element, then turn this on to snapshot it (it stays locked even if you select elsewhere; toggle off→on to re-target). No selection → focuses the center of interest. Overrides the focus slider."),
         SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
-                   help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest."),
+                   help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest. Disabled while Autofocus is on."),
         SceneParam(setting: "metal_dof_range", label: "DOF range", kind: .slider, min: 1, max: 60, step: 0.5, decimals: 1, group: "Camera", dependsOn: "metal_dof",
                    help: "How far beyond focus before blur reaches maximum. Smaller = sharper falloff."),
         SceneParam(setting: "metal_dof_aperture", label: "DOF aperture (blur)", kind: .slider, min: 0, max: 40, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
                    help: "Maximum out-of-focus blur (bokeh radius). Larger = stronger blur."),
+        SceneParam(setting: "metal_dof_quality", label: "DOF quality", kind: .slider, min: 1, max: 4, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
+                   help: "Bokeh quality: higher traces more gather samples (1→16, 2→32, 3→64, 4→96) for denser, cleaner out-of-focus blur; levels 2+ add a de-noise pass. 1 = fastest single-pass, 4 = smoothest (GPU-heavy)."),
 
         // --- Lighting: real-time lighting model + shading ---
         SceneParam(setting: "ambient",   label: "Ambient",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",
@@ -1270,6 +1288,7 @@ private struct LabeledSlider: View {
     @State private var text: String = ""
     @State private var editing = false
     @State private var debounce: DispatchWorkItem?
+    @State private var lastLiveAt: Date = .distantPast
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1310,11 +1329,24 @@ private struct LabeledSlider: View {
     }
 
     private func fmt(_ v: Double) -> String { String(format: "%.\(prop.decimals)f", v) }
+    // Leading-edge throttle (~30 Hz): fire onLive immediately during a
+    // continuous drag, rate-limited, with a trailing call so the final value
+    // always lands. A plain trailing debounce (cancel + reschedule on every
+    // change) starved the update until the finger paused, so the view chased
+    // the drag instead of tracking it — the perceived slider lag.
     private func scheduleLive(_ v: Double) {
+        let interval = 0.033
         debounce?.cancel()
-        let w = DispatchWorkItem { onLive(v) }
-        debounce = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: w)
+        let now = Date()
+        let wait = interval - now.timeIntervalSince(lastLiveAt)
+        if wait <= 0 {
+            lastLiveAt = now
+            onLive(v)
+        } else {
+            let w = DispatchWorkItem { lastLiveAt = Date(); onLive(v) }
+            debounce = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: w)
+        }
     }
 }
 
@@ -1973,7 +2005,7 @@ struct SceneCard: View {
             .buttonStyle(.plain)
             if isOpen {
                 ForEach(SceneCatalog.params.filter { $0.group == group }) { p in
-                    if visible(p) { paramRow(p) }
+                    SceneParamRow(param: p, engine: engine)
                 }
                 if group == "Effects" { resetEffectsButton }
             }
@@ -2004,21 +2036,30 @@ struct SceneCard: View {
     // scene-state poll re-syncs the toggles/sliders after the sets land.
     private func resetEffects() { engine.resetEffects() }
 
-    // Dependent rows (dependsOn set) are hidden while their parent toggle is off.
-    private func visible(_ p: SceneParam) -> Bool {
-        guard let dep = p.dependsOn else { return true }
-        return (engine.sceneState.values[dep] ?? 0) > 0.5
-    }
+}
 
-    @ViewBuilder
-    private func paramRow(_ p: SceneParam) -> some View {
-        // Hardware ray tracing is unavailable on some GPUs (Simulator, A-series
-        // iPads); gray the row out so the toggle doesn't read as a working control.
-        let rtUnavailable = p.setting == "metal_raytrace" && !engine.rayTracingSupported
-        sceneRow(rtUnavailable ? "\(p.label) (unavailable)" : p.label, help: p.help) { sceneControl(p) }
-            .padding(.leading, p.dependsOn != nil ? 12 : 0)   // indent gated sub-settings
+// MARK: - Shared scene-setting row + Camera overlay
+
+// One scene-setting row (label + control + help), shared by the inspector's
+// Scene section (SceneCard) and the viewport Camera overlay (CameraControlsView).
+// Self-hides when its dependsOn parent toggle is off, so callers render it
+// unconditionally.
+struct SceneParamRow: View {
+    let param: SceneParam
+    @ObservedObject var engine: PyMOLEngine
+
+    var body: some View {
+        if let dep = param.dependsOn, (engine.sceneState.values[dep] ?? 0) <= 0.5 {
+            EmptyView()
+        } else {
+            let rtUnavailable = param.setting == "metal_raytrace" && !engine.rayTracingSupported
+            sceneRow(rtUnavailable ? "\(param.label) (unavailable)" : param.label, help: param.help) {
+                sceneControl(param)
+            }
+            .padding(.leading, param.dependsOn != nil ? 12 : 0)
             .disabled(rtUnavailable)
             .opacity(rtUnavailable ? 0.45 : 1)
+        }
     }
 
     @ViewBuilder
@@ -2038,16 +2079,64 @@ struct SceneCard: View {
             let v = engine.sceneState.values[p.setting] ?? 0
             switch p.kind {
             case .toggle:
-                ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
+                if p.setting == "metal_dof_autofocus" {
+                    // Enabling snapshots the current selection into "dof_focus" —
+                    // the locked target the renderer tracks each frame (see the
+                    // SceneRender auto-focus block). Disabling just clears the flag.
+                    ToggleSetting(value: v) { on in
+                        engine.runCommand(on
+                            ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
+                            : "set metal_dof_autofocus, 0")
+                    }
+                } else {
+                    ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
+                }
             case .segmented:
                 SegmentedSetting(prop: RepProperty(setting: p.setting, label: p.label, kind: .segmented, options: p.options),
                                  value: v) { engine.runCommand("set \(p.setting), \(Int($0))") }
             case .slider:
-                LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
-                                                min: p.min, max: p.max, step: p.step, decimals: p.decimals),
-                              value: v,
-                              onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
-                              onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+                if p.setting == "field_of_view" {
+                    // Lens control: the slider is a 35mm-equivalent focal length (mm),
+                    // shown by converting the polled field_of_view, and applied via
+                    // set_fov (a dolly zoom) so it swaps perspective rather than
+                    // zooming. Inert in orthoscopic mode.
+                    let fovDeg = engine.sceneState.values["field_of_view"] ?? 20
+                    let orthoOn = (engine.sceneState.values["ortho"] ?? 0) > 0.5
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: fovToMM(fovDeg),
+                                  onLive: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") },
+                                  onCommit: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") })
+                        .disabled(orthoOn)
+                        .opacity(orthoOn ? 0.4 : 1.0)
+                } else if p.setting == "zoom" {
+                    // Zoom: absolute apparent MAGNIFICATION, independent of the Lens.
+                    // M = scene_radius / (cam_dist * tan(fov/2)) is invariant under
+                    // the Lens dolly-zoom, so the two sliders don't fight. Dragging
+                    // dollies the camera to the target distance.
+                    let camDist = engine.sceneState.values["cam_dist"] ?? 0
+                    let radius = engine.sceneState.values["scene_radius"] ?? 0
+                    let fovDeg = engine.sceneState.values["field_of_view"] ?? 20
+                    let zoomReady = radius > 0 && camDist > 0
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: zoomMag(camDist: camDist, radius: radius, fovDeg: fovDeg),
+                                  onLive: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) },
+                                  onCommit: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) })
+                        .disabled(!zoomReady)
+                        .opacity(zoomReady ? 1.0 : 0.4)
+                } else {
+                    // The DOF focus slider is driven by autofocus while it's on.
+                    let dofAuto = p.setting == "metal_dof_focus"
+                        && (engine.sceneState.values["metal_dof_autofocus"] ?? 0) > 0.5
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: v,
+                                  onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
+                                  onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+                        .disabled(dofAuto)
+                        .opacity(dofAuto ? 0.4 : 1.0)
+                }
             case .color:
                 EmptyView()  // scene colors use p.isColor above, not the .color kind
             }
@@ -2056,6 +2145,26 @@ struct SceneCard: View {
 
     private func fmtScene(_ v: Double, _ p: SceneParam) -> String {
         p.decimals == 0 ? String(Int(v.rounded())) : String(format: "%.4f", v)
+    }
+
+    // Lens control: map PyMOL's vertical field_of_view (degrees) to a 35mm-
+    // equivalent focal length using the full-frame sensor height (24mm):
+    //   fov = 2*atan(12/f)   <->   f = 12/tan(fov/2)
+    // fovToMM clamps into the slider's mm range so the thumb never leaves bounds.
+    private func fovToMM(_ fovDeg: Double) -> Double {
+        let f = 12.0 / tan(fovDeg * .pi / 360.0)
+        return min(max(f, 12.0), 135.0)
+    }
+    private func mmToFOV(_ mm: Double) -> Double {
+        2.0 * atan(12.0 / mm) * 180.0 / .pi
+    }
+
+    // Apparent magnification for the Zoom slider: ~1 when the scene fits the view,
+    // higher when zoomed in. Clamped to the slider's [0.5, 8] range.
+    private func zoomMag(camDist: Double, radius: Double, fovDeg: Double) -> Double {
+        let t = tan(fovDeg * .pi / 360.0)
+        guard camDist > 1e-4, t > 1e-6, radius > 0 else { return 1.0 }
+        return min(max(radius / (camDist * t), 0.5), 8.0)
     }
 
     private func setBackground(_ color: Color) {
@@ -2076,6 +2185,47 @@ struct SceneCard: View {
             content()
             Spacer(minLength: 0)
             if !help.isEmpty { HelpButton(text: help) }
+        }
+    }
+}
+
+// Content of the viewport Camera overlay (popover on macOS/iPad, bottom sheet on
+// iPhone). Reuses SceneParamRow for the curated camera params, then a Reset view
+// action. Reads/writes go through PyMOLEngine exactly as the inspector does.
+struct CameraControlsView: View {
+    @ObservedObject var engine: PyMOLEngine
+
+    var body: some View {
+        // Pure content (no background / outer padding): the macOS popover and the
+        // iOS glassy card each supply their own chrome. Tight spacing keeps it
+        // vertically compact — it hugs its content rather than filling a sheet.
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Image(systemName: "camera")
+                Text("Camera").font(.system(size: 15, weight: .medium))
+                Spacer()
+            }
+            .foregroundColor(PanelTheme.textColor)
+            .padding(.bottom, 2)
+
+            ForEach(SceneCatalog.cameraOverlayKeys, id: \.self) { key in
+                if let p = SceneCatalog.param(for: key) {
+                    SceneParamRow(param: p, engine: engine)
+                }
+            }
+
+            Button { engine.runCommand("reset") } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "dot.viewfinder")
+                    Text("Reset view")
+                    Spacer()
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(PanelTheme.selectionTextColor)
+                .padding(.top, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 }
@@ -2138,10 +2288,22 @@ struct ScenesPane: View {
                 } else {
                     // Per-scene actions, all on one row for vertical efficiency.
                     HStack(spacing: 8) {
-                        sceneActionButton("Update", "arrow.clockwise") { engine.runCommand("scene auto, update") }
-                        sceneActionButton("Prev", "chevron.left") { engine.runCommand("scene auto, previous") }
-                        sceneActionButton("Next", "chevron.right") { engine.runCommand("scene auto, next") }
-                        sceneActionButton("Delete", "trash", danger: true) { engine.runCommand("scene auto, delete") }
+                        sceneActionButton("Update", "arrow.clockwise") {
+                            engine.runCommand("scene auto, update")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.snapshot_current()")
+                        }
+                        sceneActionButton("Prev", "chevron.left") {
+                            engine.runCommand("scene auto, previous")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.apply_current()")
+                        }
+                        sceneActionButton("Next", "chevron.right") {
+                            engine.runCommand("scene auto, next")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.apply_current()")
+                        }
+                        sceneActionButton("Delete", "trash", danger: true) {
+                            engine.runCommand("scene auto, delete")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.prune()")
+                        }
                     }
                 }
 
@@ -2154,7 +2316,10 @@ struct ScenesPane: View {
 
                 Divider().padding(.vertical, 2)
                 actionRow("Build movie from scenes", "film") { onOpenMovie?() }
-                actionRow("Clear all scenes", "xmark", destructive: true) { engine.runCommand("scene *, clear") }
+                actionRow("Clear all scenes", "xmark", destructive: true) {
+                    engine.runCommand("scene *, clear")
+                    engine.runPython("from pymol import raymol_scenes as _rs; _rs.clear_all()")
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
@@ -2167,6 +2332,7 @@ struct ScenesPane: View {
         let sel = name == engine.currentScene
         return Button {
             engine.runCommand("scene \(name), recall, animate=1")
+            engine.runPython("from pymol import raymol_scenes as _rs; _rs.apply('\(name)')")
         } label: {
             Text(name)
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
@@ -2184,7 +2350,10 @@ struct ScenesPane: View {
 
     // Trailing "+" chip in the scene row — stores the current view as a new scene.
     private var addChip: some View {
-        Button { engine.runCommand("scene new, store") } label: {
+        Button {
+            engine.runCommand("scene new, store")
+            engine.runPython("from pymol import raymol_scenes as _rs; _rs.snapshot_current()")
+        } label: {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .bold))
                 .frame(width: 44, height: 38)

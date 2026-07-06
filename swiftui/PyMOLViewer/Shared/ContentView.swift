@@ -384,11 +384,9 @@ struct ContentView: View {
                         // frame (sibling in the VStack), so no transport clearance
                         // is needed as on iOS.
                         .overlay(alignment: .bottomLeading) {
-                            if showSceneButtons && !engine.sceneNames.isEmpty {
-                                sceneButtonsOverlay
-                                    .padding(.leading, 12)
-                                    .padding(.bottom, 12)
-                            }
+                            bottomLeadingViewportChrome
+                                .padding(.leading, 12)
+                                .padding(.bottom, 12)
                         }
                     if engine.hasTimeline {
                         Divider()
@@ -567,6 +565,7 @@ struct ContentView: View {
     // Scenes tab: opt-in glanceable scene buttons overlaid on the viewport.
     // Also outside #if os(iOS) since inspectorSwitcher (shared) binds to it.
     @State private var showSceneButtons = false
+    @State private var showCameraPanel = false   // viewport Camera overlay (shared macOS/iOS)
 
     // Floating scene chips over the viewport (teal/global), shown only when the
     // Scenes tab's "Show scene buttons in viewport" toggle is on. Tap = recall.
@@ -664,6 +663,17 @@ struct ContentView: View {
     @State private var showGestureLegend = false
     @State private var showPanePopover = false
 
+    // Test hook (PYMOL_SKIP_GESTURE_HELP): suppress the first-run gesture-coach
+    // overlay entirely. On a fresh simulator gestureCoachSeen defaults to false,
+    // so the coach auto-appears once a structure loads and its full-screen dimming
+    // background (see gestureCoachOverlay) swallows the very first tap — which
+    // makes XCUITests that tap a viewport chip on launch fail. Setting this env
+    // var to any value keeps the coach from ever appearing; the manual "Gesture
+    // help" button still works.
+    private var skipGestureHelp: Bool {
+        ProcessInfo.processInfo.environment["PYMOL_SKIP_GESTURE_HELP"] != nil
+    }
+
     // iPhone-LANDSCAPE pane visibility. Separate from the iPad bools (showCommand/
     // Object, which default ON) so iPhone landscape starts MINIMAL —
     // Console + Objects OFF, showing just the viewport (+ the sequence
@@ -731,7 +741,7 @@ struct ContentView: View {
                     }
                 }
                 .overlay(alignment: .center) {
-                    if !gestureCoachSeen && !engine.objects.isEmpty { gestureCoachOverlay }
+                    if !gestureCoachSeen && !skipGestureHelp && !engine.objects.isEmpty { gestureCoachOverlay }
                 }
             }
             // Full-bleed on iPhone: the viewport uses every pixel, including under
@@ -1424,11 +1434,19 @@ struct ContentView: View {
             // Opt-in glanceable scene buttons (Scenes tab → "Show scene buttons
             // in viewport"). Sits above the transport when a timeline is present.
             .overlay(alignment: .bottomLeading) {
-                if showSceneButtons && !engine.sceneNames.isEmpty {
-                    sceneButtonsOverlay
-                        .padding(.leading, 12)
-                        // Sit clear ABOVE the transport bar (don't overlap it).
-                        .padding(.bottom, engine.hasTimeline ? 96 : 12)
+                bottomLeadingViewportChrome
+                    .padding(.leading, 12)
+                    // Sit clear ABOVE the transport bar (don't overlap it).
+                    .padding(.bottom, engine.hasTimeline ? 96 : 12)
+            }
+            // iPhone camera overlay: a glassy floating card docked near the bottom
+            // (no dimming scrim, unlike a system sheet). iPad (regular) uses the
+            // popover attached to the chip instead.
+            .overlay(alignment: .bottom) {
+                if showCameraPanel && hSize == .compact && !engine.objects.isEmpty {
+                    cameraGlassCard
+                        .padding(.bottom, engine.hasTimeline ? 84 : 10)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -1937,17 +1955,15 @@ struct ContentView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("RayMol.png")
         try? FileManager.default.removeItem(at: url)
         engine.runHeavy("Rendering image…") {
-            if exportTransparent {
-                // The Metal fast path bakes the background color (its post chain
-                // composites onto bg). For a true transparent PNG, use the CPU
-                // ray-tracer, which honors ray_opaque_background. Slower but correct.
-                engine.runCommand("set ray_opaque_background, 0")
-                engine.runCommand("png \(url.path), width=\(width), height=\(height), ray=1")
-            } else {
-                engine.runCommand("set ray_opaque_background, 1")
-                engine.renderHiResPNG(url.path, width: width, height: height,
-                                      rayTraced: exportRayTraced ? 1 : 0)
-            }
+            // Both opaque and transparent go through the METAL offscreen path (same
+            // as macOS renderExportPNG): it honors ray_opaque_background (transparent
+            // => the post chain rewrites alpha from coverage) and runs the full post
+            // chain — including depth-of-field. The old transparent branch used the
+            // CPU ray-tracer, which is slow and drops every Metal post-effect (DOF,
+            // outline, tone-map). rtFlag still selects hardware-RT AO/shadows.
+            engine.runCommand("set ray_opaque_background, \(exportTransparent ? 0 : 1)")
+            engine.renderHiResPNG(url.path, width: width, height: height,
+                                  rayTraced: exportRayTraced ? 1 : 0)
             done(FileManager.default.fileExists(atPath: url.path) ? url : nil)
         }
     }
@@ -2387,6 +2403,88 @@ struct ContentView: View {
 
     // MARK: - Initialization
 
+    // Bottom-left viewport shortcut to the Camera overlay.
+    private var cameraButton: some View {
+        Button { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel.toggle() } } label: {
+            Image(systemName: "camera")
+                .font(.system(size: 20))
+                .foregroundStyle(.white.opacity(showCameraPanel ? 0.95 : 0.6))
+                .frame(width: 46, height: 46)
+                .background(.white.opacity(showCameraPanel ? 0.22 : 0.12), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Camera settings")
+    }
+
+    // Bottom-left viewport chrome: optional scene buttons stacked above the camera
+    // shortcut. Extracted into its own property so ContentView.body stays within
+    // the Swift type-checker's complexity budget.
+    @ViewBuilder
+    private var bottomLeadingViewportChrome: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showSceneButtons && !engine.sceneNames.isEmpty {
+                sceneButtonsOverlay
+            }
+            if !engine.objects.isEmpty {
+                cameraPanelPresentation(cameraButton)
+            }
+        }
+    }
+
+    // Popover on regular width (macOS always; iPad), bottom sheet on compact
+    // (iPhone). hSize is iOS-only in this file, so it's referenced only in the
+    // iOS branch; macOS always uses a popover.
+    @ViewBuilder
+    private func cameraPanelPresentation<V: View>(_ content: V) -> some View {
+        #if os(macOS)
+        content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
+            CameraControlsView(engine: engine).padding(14).frame(width: 300)
+        }
+        #else
+        // iPad (regular): a popover. iPhone (compact): the chip alone — the glassy
+        // floating card (cameraGlassCard) is presented as a viewport overlay so it
+        // doesn't dim the background and can be translucent, unlike a system sheet.
+        if hSize == .regular {
+            content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
+                CameraControlsView(engine: engine).padding(14).frame(width: 300)
+            }
+        } else {
+            content
+        }
+        #endif
+    }
+
+    // iPhone: the camera controls as a glassy floating card near the bottom — no
+    // dimming scrim (unlike a system sheet), translucent so the molecule shows
+    // through, and content-sized (compact). The grab handle taps or drags down to
+    // dismiss.
+    private var cameraGlassCard: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(.white.opacity(0.45))
+                .frame(width: 40, height: 5)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } }
+            CameraControlsView(engine: engine)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+        .padding(.horizontal, 10)
+        .gesture(
+            DragGesture().onEnded { v in
+                if v.translation.height > 40 {
+                    withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false }
+                }
+            }
+        )
+    }
+
     private func initializeEngine() {
         guard !engine.isReady else { return }
         let resourcePath = Bundle.main.resourcePath ?? ""
@@ -2419,9 +2517,14 @@ struct ContentView: View {
     }
 
     // Push the persisted theme's molecular/viewport defaults into PyMOL once the
-    // engine is ready (chrome already reflects it via @Published `active`).
+    // engine is ready (chrome already reflects it via @Published `active`). When a
+    // session is being restored/opened at this launch, SKIP the theme's render
+    // toggles (metal_outline/raytrace/shadows) — the loaded .pse owns that state,
+    // and re-asserting the theme here would clobber it (the theme apply fires on
+    // the isReady onChange, i.e. AFTER the synchronous autosave restore).
     private func applyPersistedTheme() {
-        themeManager.apply(engine: engine)
+        themeManager.apply(engine: engine,
+                           applyRenderToggles: !engine.suppressLaunchThemeRenderToggles)
     }
 }
 

@@ -329,6 +329,10 @@ public:
   {
   }
 
+  // metal_dof_quality: DOF bokeh quality level (1..4) — higher = more gather
+  // samples, with a de-noise smoothing pass at levels >=2. Default: no-op.
+  virtual void setDofQuality(int level) {}
+
   // PyMOL lighting model (ambient/direct/reflect/specular/shininess). Default:
   // no-op (the GL renderer reads these settings itself). The Metal renderer
   // uploads them into its lit shaders so the Scene lighting sliders take effect.

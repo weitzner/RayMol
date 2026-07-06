@@ -2042,6 +2042,22 @@ void SceneRenderMetal(PyMOLGlobals* G)
     float outlineWidth = SettingGetGlobal_f(G, cSetting_metal_outline_width);
     int dofEnabled = SettingGetGlobal_b(G, cSetting_metal_dof) ? 1 : 0;
     float dofFocus = SettingGetGlobal_f(G, cSetting_metal_dof_focus);
+    if (SettingGetGlobal_b(G, cSetting_metal_dof_autofocus)) {
+      // Autofocus: lock the focal plane onto the "dof_focus" selection (a
+      // snapshot of 'sele' taken when autofocus was enabled). Recompute its
+      // centroid's eye-space depth every frame so the element stays sharp as the
+      // camera zooms/rotates/pans. Overrides the manual focus slider; an empty
+      // selection leaves dofFocus at 0 and falls through to the origin below.
+      dofFocus = 0.0f;
+      float mn[3], mx[3];
+      if (ExecutiveGetExtent(G, "dof_focus", mn, mx, true, -1, false)) {
+        float cx = (mn[0] + mx[0]) * 0.5f, cy = (mn[1] + mx[1]) * 0.5f,
+              cz = (mn[2] + mx[2]) * 0.5f;
+        float ez = mv[2] * cx + mv[6] * cy + mv[10] * cz + mv[14];
+        if (-ez > 0.0f)
+          dofFocus = -ez;
+      }
+    }
     if (dofFocus <= 0.0f) {
       // Auto-focus on the center of interest (the rotation origin) rather than
       // the screen-center pixel. The origin's eye-space distance is
@@ -2071,6 +2087,8 @@ void SceneRenderMetal(PyMOLGlobals* G)
         SettingGetGlobal_f(G, cSetting_metal_rt_ao_radius),
         SettingGetGlobal_f(G, cSetting_metal_rt_ao_intensity),
         SettingGetGlobal_f(G, cSetting_metal_rt_shadow_intensity));
+    G->Renderer->setDofQuality(
+        SettingGetGlobal_i(G, cSetting_metal_dof_quality));
     // Lighting model — the Metal lit shaders read these instead of hard-coded
     // constants, so the Scene-panel lighting sliders take effect. Specular and
     // shininess must go through PyMOL's light-count adjustment (the same path

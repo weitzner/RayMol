@@ -56,8 +56,10 @@ SCENE_SETTINGS = ['metal_raytrace', 'metal_rt_shadows', 'metal_shadows', 'metal_
                   'metal_outline', 'metal_outline_width', 'metal_msaa',
                   'metal_tonemap', 'metal_exposure',
                   'metal_sss_wrap', 'metal_dof', 'metal_dof_focus',
-                  'metal_dof_range', 'metal_dof_aperture', 'metal_temporal_ao', 'metal_upscale',
-                  'depth_cue', 'fog', 'field_of_view', 'surface_quality',
+                  'metal_dof_range', 'metal_dof_aperture', 'metal_dof_quality',
+                  'metal_dof_autofocus',
+                  'metal_temporal_ao', 'metal_upscale',
+                  'depth_cue', 'fog', 'field_of_view', 'ortho', 'surface_quality',
                   'grid_mode', 'all_states', 'mouse_selection_mode',
                   'ambient', 'direct', 'reflect', 'specular', 'shininess',
                   'ray_opaque_background']
@@ -165,6 +167,20 @@ def _build(objs):
     scene = {s: _num(s, '') for s in SCENE_SETTINGS}
     scene['bg'] = _bg_rgb()
     scene['outline_rgb'] = _color_setting_rgb('metal_outline_color')
+    # Camera distance + scene radius drive the Zoom (magnification) control.
+    # cam_dist = |get_view()[11]| (camera→center distance); scene_radius = half the
+    # diagonal of the whole scene's extent. The Swift Zoom slider forms an apparent
+    # magnification M = scene_radius / (cam_dist * tan(fov/2)) that is ~1 at the
+    # fitted framing and invariant under the Lens dolly-zoom.
+    try:
+        import math
+        _v = cmd.get_view()
+        scene['cam_dist'] = abs(_v[11])
+        _mn, _mx = cmd.get_extent('all')
+        scene['scene_radius'] = 0.5 * math.sqrt(sum((_mx[i] - _mn[i]) ** 2 for i in range(3)))
+    except Exception:
+        scene['cam_dist'] = 0.0
+        scene['scene_radius'] = 0.0
     # Per-object state metadata for the inspector STATE row: the effective
     # current state (the object's 'state' setting, which resolves to the global
     # frame's state when not pinned) and whether all states are overlaid.
