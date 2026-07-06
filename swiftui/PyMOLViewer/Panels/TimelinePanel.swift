@@ -71,8 +71,8 @@ struct TimelinePanel: View {
     private var isCompact: Bool { forceCompact }
     #endif
 
-    private let laneH: CGFloat = 44
-    private let rulerH: CGFloat = 24
+    private let laneH: CGFloat = 56
+    private let rulerH: CGFloat = 28
     private var labelW: CGFloat { isCompact ? 34 : 72 }
     private let laneSpace = "timelineLane"   // coord space for drag/tap -> frame
     private let minZoom: CGFloat = 0.05
@@ -503,35 +503,44 @@ struct TimelinePanel: View {
 
     // MARK: - Scene palette (source)
 
-    @ViewBuilder private var scenePaletteStrip: some View {
-        if !engine.sceneNames.isEmpty {
-            HStack(spacing: 0) {
-                HStack(spacing: 6) {
-                    Image(systemName: "photo.stack").font(.system(size: 13)).foregroundColor(TimelineTheme.dim)
-                    if !isCompact {
-                        Text("Scenes").font(.system(size: 11)).foregroundColor(TimelineTheme.text)
-                    }
-                    Spacer(minLength: 0)
+    // Always on screen (even with no saved scenes) so the "drop a scene" affordance
+    // is discoverable; shows a hint until scenes exist.
+    private var scenePaletteStrip: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "photo.stack").font(.system(size: 13)).foregroundColor(TimelineTheme.dim)
+                if !isCompact {
+                    Text("Scenes").font(.system(size: 11)).foregroundColor(TimelineTheme.text)
                 }
-                .frame(width: labelW)
-                .padding(.horizontal, 8)
-                .help("Saved scenes — tap to append to the timeline")
-                .accessibilityLabel("Saved scenes")
+                Spacer(minLength: 0)
+            }
+            .frame(width: labelW)
+            .padding(.horizontal, 8)
+            .help("Saved scenes — tap to append to the timeline")
+            .accessibilityLabel("Saved scenes")
 
-                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
+            Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
 
+            if engine.sceneNames.isEmpty {
+                Text("Store a scene to drop it onto the timeline")
+                    .font(.system(size: 10))
+                    .foregroundColor(TimelineTheme.dim)
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(engine.sceneNames, id: \.self) { name in
                             paletteChip(name)
                         }
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 6)
+                    .padding(.horizontal, 8).padding(.vertical, 7)
                 }
             }
-            .frame(height: 34)
-            .overlay(alignment: .top) { Divider().opacity(0.4) }
         }
+        .frame(height: 40)
+        .overlay(alignment: .top) { Divider().opacity(0.4) }
     }
 
     private func paletteChip(_ name: String) -> some View {
