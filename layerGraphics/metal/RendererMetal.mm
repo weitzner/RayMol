@@ -1736,9 +1736,9 @@ void RendererMetal::setRayTraceParams(int samples, float aoRadius,
       shadowIntensity < 0.0f ? 0.0f : (shadowIntensity > 1.0f ? 1.0f : shadowIntensity);
 }
 
-void RendererMetal::setDofHighQuality(int highQuality)
+void RendererMetal::setDofQuality(int level)
 {
-  _dofHQ = highQuality ? 1 : 0;
+  _dofQuality = level < 1 ? 1 : (level > 4 ? 4 : level);
 }
 
 // ---------------------------------------------------------------------------
@@ -2505,10 +2505,14 @@ void RendererMetal::runPostChain()
     // otherwise the bokeh nearly vanishes in 2x/4K Copy/Save output (#48).
     u.maxRadiusPx = ((_dofAperture > 0.0f) ? _dofAperture : 14.0f) * pixelRadiusScale();
 
-    // metal_dof_hq: two-pass bokeh — scatter-gather (more samples) into _dofTex,
-    // then a de-noise smoothing pass into dst. Single-pass otherwise.
-    bool doTwoPass = _dofHQ && _dofSmoothPipeline && _dofTex;
-    u.nSamples = doTwoPass ? 24.0f : 16.0f;
+    // metal_dof_quality (1..4): higher = more gather samples for denser, cleaner
+    // bokeh. Levels >=2 also run the de-noise smoothing pass (two-pass); level 1
+    // is the fast single-pass gather.
+    int dofSamples = (_dofQuality <= 1) ? 16
+                   : (_dofQuality == 2) ? 32
+                   : (_dofQuality == 3) ? 64 : 96;
+    bool doTwoPass = _dofQuality >= 2 && _dofSmoothPipeline && _dofTex;
+    u.nSamples = (float)dofSamples;
 
     if (doTwoPass) {
       // Pass A: scatter-gather sceneSrc -> _dofTex.

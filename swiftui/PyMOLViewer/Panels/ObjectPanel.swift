@@ -194,7 +194,7 @@ enum SceneCatalog {
     // depth_cue, which remain in the full inspector.
     static let cameraOverlayKeys = [
         "field_of_view", "zoom", "ortho", "metal_dof",
-        "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_hq",
+        "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_quality",
     ]
     static func param(for setting: String) -> SceneParam? {
         params.first { $0.setting == setting }
@@ -227,8 +227,8 @@ enum SceneCatalog {
                    help: "How far beyond focus before blur reaches maximum. Smaller = sharper falloff."),
         SceneParam(setting: "metal_dof_aperture", label: "DOF aperture (blur)", kind: .slider, min: 0, max: 40, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
                    help: "Maximum out-of-focus blur (bokeh radius). Larger = stronger blur."),
-        SceneParam(setting: "metal_dof_hq", label: "High-quality DOF (2-pass)", kind: .toggle, group: "Camera", dependsOn: "metal_dof",
-                   help: "Two-pass bokeh: more gather samples plus a de-noise smoothing pass, for smoother, cleaner out-of-focus blur at some GPU cost. Off = faster single-pass."),
+        SceneParam(setting: "metal_dof_quality", label: "DOF quality", kind: .slider, min: 1, max: 4, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
+                   help: "Bokeh quality: higher traces more gather samples (1→16, 2→32, 3→64, 4→96) for denser, cleaner out-of-focus blur; levels 2+ add a de-noise pass. 1 = fastest single-pass, 4 = smoothest (GPU-heavy)."),
 
         // --- Lighting: real-time lighting model + shading ---
         SceneParam(setting: "ambient",   label: "Ambient",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",

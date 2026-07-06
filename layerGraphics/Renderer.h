@@ -329,9 +329,9 @@ public:
   {
   }
 
-  // Depth-of-field quality: 0 = single-pass gather, 1 = two-pass (more samples
-  // + a de-noise smoothing pass) — metal_dof_hq. Default: no-op.
-  virtual void setDofHighQuality(int highQuality) {}
+  // metal_dof_quality: DOF bokeh quality level (1..4) — higher = more gather
+  // samples, with a de-noise smoothing pass at levels >=2. Default: no-op.
+  virtual void setDofQuality(int level) {}
 
   // PyMOL lighting model (ambient/direct/reflect/specular/shininess). Default:
   // no-op (the GL renderer reads these settings itself). The Metal renderer

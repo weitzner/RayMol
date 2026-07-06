@@ -2087,8 +2087,8 @@ void SceneRenderMetal(PyMOLGlobals* G)
         SettingGetGlobal_f(G, cSetting_metal_rt_ao_radius),
         SettingGetGlobal_f(G, cSetting_metal_rt_ao_intensity),
         SettingGetGlobal_f(G, cSetting_metal_rt_shadow_intensity));
-    G->Renderer->setDofHighQuality(
-        SettingGetGlobal_b(G, cSetting_metal_dof_hq) ? 1 : 0);
+    G->Renderer->setDofQuality(
+        SettingGetGlobal_i(G, cSetting_metal_dof_quality));
     // Lighting model — the Metal lit shaders read these instead of hard-coded
     // constants, so the Scene-panel lighting sliders take effect. Specular and
     // shininess must go through PyMOL's light-count adjustment (the same path

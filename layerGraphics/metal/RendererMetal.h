@@ -163,7 +163,7 @@ public:
       float specular, float shininess, float sssWrap = 0.0f) override;
   void setRayTraceParams(int samples, float aoRadius, float aoIntensity,
       float shadowIntensity) override;
-  void setDofHighQuality(int highQuality) override;
+  void setDofQuality(int level) override;
 
   // Letterbox: render the scene into a centered sub-rect of the given aspect
   // (W/H) so a loaded .pse reproduces its saved-viewport framing. 0 = fill.
@@ -510,7 +510,7 @@ private:
   float _dofFocus = 0.0f;   // eye-space focus distance; <=0 => auto (screen center)
   float _dofRange = 14.0f;  // eye-space distance over which CoC ramps to max blur
   float _dofAperture = 14.0f;  // cSetting_metal_dof_aperture: max blur radius (px)
-  int _dofHQ = 0;              // cSetting_metal_dof_hq: two-pass bokeh
+  int _dofQuality = 1;         // cSetting_metal_dof_quality: 1..4 bokeh quality
   id<MTLRenderPipelineState> _dofPipeline = nil;
   id<MTLRenderPipelineState> _dofSmoothPipeline = nil;  // two-pass B: de-noise
   id<MTLTexture> _dofTex = nil;                         // two-pass A gather target
