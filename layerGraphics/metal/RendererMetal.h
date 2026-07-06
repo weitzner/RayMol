@@ -161,6 +161,8 @@ public:
       int upscaleEnabled = 0, float dofAperture = 14.0f) override;
   void setLightingParams(float ambient, float direct, float reflect,
       float specular, float shininess, float sssWrap = 0.0f) override;
+  void setRayTraceParams(int samples, float aoRadius, float aoIntensity,
+      float shadowIntensity) override;
 
   // Letterbox: render the scene into a centered sub-rect of the given aspect
   // (W/H) so a loaded .pse reproduces its saved-viewport framing. 0 = fill.
@@ -201,6 +203,8 @@ public:
   void beginShadowPass() override;
   void endShadowPass() override;
   void setLightViewProjEye(const float* m) override;
+  void setShadowFrustum(float radius) override;
+  void setShadowBias(float bias) override;
 
 private:
   void buildImpostorPipelines();
@@ -455,6 +459,11 @@ private:
   NSUInteger _cylinderShadowStride = 0;
   bool _shadowMode = false;       // true between begin/endShadowPass
   float _lightViewProjEye[16];    // eye-space light VP, column-major (PostU)
+  float _shadowRadius = 1.0f;     // world half-extent of the shadow ortho box
+                                  // (from SceneBuildLightViewProjEye); lets the
+                                  // receiver bias be expressed in Angstroms.
+  float _shadowBias = 1.0f;       // metal_shadow_bias: user multiplier on the
+                                  // self-shadow depth bias.
   void buildShadowPipelines();
   // Depth-only shadow pipeline for an arbitrary lit vertex layout (e.g. the
   // surface's stride-44), mirroring oitPipelineForVD.
@@ -554,6 +563,12 @@ private:
   uint32_t _rtProtoIndexCount = 0;
   id<MTLRenderPipelineState> _rtAOPipeline = nil;       // pass A: raw AO -> R16Float
   id<MTLRenderPipelineState> _rtResolvePipeline = nil;  // pass B: blur AO + shadow/fog composite
+  bool _rtCompileTried = false;   // latch: attempt the RT library compile at most once
+  // Real-time RT quality knobs (metal_rt_* settings, set via setRayTraceParams).
+  int   _rtSamples = 16;           // AO rays/pixel (live); offscreen uses max(48, this)
+  float _rtAORadius = 5.0f;        // AO hemisphere radius (Angstroms)
+  float _rtAOIntensity = 0.72f;    // AO darkening strength (0..1)
+  float _rtShadowIntensity = 0.45f;// cast-shadow darkening strength (0..1)
   // Label/text rendering (screen-aligned textured glyph quads). Initialized to
   // nil — this is a C++ class under MRC, so id ivars are not zero-initialized.
   id<MTLRenderPipelineState> _labelPipeline = nil;

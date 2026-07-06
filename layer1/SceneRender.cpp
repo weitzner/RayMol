@@ -1844,7 +1844,7 @@ static void SceneRenderPostProcessStack(PyMOLGlobals* G, const GLFramebufferConf
 // scene radius. Loaded as the renderer's PROJECTION while MODELVIEW stays the
 // camera modelview, so vbo_vertex's projection*(modelview*model) yields light
 // clip for model-space vertices.
-static glm::mat4 SceneBuildLightViewProjEye(PyMOLGlobals* G)
+static glm::mat4 SceneBuildLightViewProjEye(PyMOLGlobals* G, float* outRadius = nullptr)
 {
   float mn[3], mx[3];
   glm::vec3 centerEye(0.0f);
@@ -1872,6 +1872,9 @@ static glm::mat4 SceneBuildLightViewProjEye(PyMOLGlobals* G)
   glm::mat4 lightView = glm::lookAt(lightPos, centerEye, up);
   glm::mat4 lightProj =
       glm::ortho(-radius, radius, -radius, radius, 0.05f, radius * 4.0f);
+  if (outRadius)
+    *outRadius = radius; // world half-extent of the ortho box; the renderer
+                         // turns this into a scale-aware shadow bias (Angstroms)
   return lightProj * lightView;
 }
 
@@ -2061,6 +2064,13 @@ void SceneRenderMetal(PyMOLGlobals* G)
         rtShadowEnabled, outlineCol[0], outlineCol[1], outlineCol[2],
         outlineWidth, dofEnabled, dofFocus, dofRange, temporalAO,
         upscaleEnabled, dofAperture);
+    // Real-time RT quality knobs (metal_rt_*): AO rays/pixel, AO radius (A),
+    // AO intensity, cast-shadow intensity — applied in RendererMetal::runPostChain.
+    G->Renderer->setRayTraceParams(
+        SettingGetGlobal_i(G, cSetting_metal_rt_samples),
+        SettingGetGlobal_f(G, cSetting_metal_rt_ao_radius),
+        SettingGetGlobal_f(G, cSetting_metal_rt_ao_intensity),
+        SettingGetGlobal_f(G, cSetting_metal_rt_shadow_intensity));
     // Lighting model — the Metal lit shaders read these instead of hard-coded
     // constants, so the Scene-panel lighting sliders take effect. Specular and
     // shininess must go through PyMOL's light-count adjustment (the same path
@@ -2127,9 +2137,12 @@ void SceneRenderMetal(PyMOLGlobals* G)
   // (an object visible only in cell B darkening an object in cell A). Grid mode
   // therefore renders unshadowed (geometry-only parity for now).
   if (!I->grid.active && SettingGetGlobal_b(G, cSetting_metal_shadows)) {
-    glm::mat4 lightVP_eye = SceneBuildLightViewProjEye(G);
+    float shadowRadius = 1.0f;
+    glm::mat4 lightVP_eye = SceneBuildLightViewProjEye(G, &shadowRadius);
     const float* mvp = SceneGetModelViewMatrixPtr(G);
     G->Renderer->setLightViewProjEye(glm::value_ptr(lightVP_eye));
+    G->Renderer->setShadowFrustum(shadowRadius);
+    G->Renderer->setShadowBias(SettingGetGlobal_f(G, cSetting_metal_shadow_bias));
     G->Renderer->matrixMode(0x1701); // PROJECTION = light VP (eye space)
     G->Renderer->loadMatrixf(glm::value_ptr(lightVP_eye));
     G->Renderer->matrixMode(0x1700); // MODELVIEW = camera modelview

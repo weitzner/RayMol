@@ -930,6 +930,11 @@ enum {
   REC_c( 820, surface_contour_color                   , object    , "-1" ),  /* Metal: surface outer-contour color; -1 = inherit the surface/object color, else a named/hex color. */
   REC_b( 821, surface_contour_opaque                  , object    , true ),  /* Metal: surface outer-contour is fully opaque (crisp); off = the line picks up the surface transparency. */
   REC_b( 822, metal_ssao_cartoon                      , global    , false ), /* Metal: include cartoon/ribbon in the screen-space SSAO (crease/contour) pass. Default off => cartoons are excluded from SSAO darkening (avoids spurious contour lines on ribbon silhouettes/self-folds, #79); they still receive directional shadows, and surface pockets keep their AO. */
+  REC_f( 823, metal_shadow_bias                       , global    , 1.0F ),  /* Metal: multiplier on the self-shadow depth bias. 1.0 = default. Raise (e.g. 2-4) if flat cartoon strands still show striped self-shadow "triangle" acne at steep/grazing angles; lower toward 0 for tighter contact shadows. */
+  REC_i( 824, metal_rt_samples                        , global    , 16 ),    /* Metal real-time RT: ambient-occlusion rays traced per pixel in the LIVE view (quality vs performance). Higher = smoother/less-noisy AO but slower. Offscreen PNG/movie export always traces at least 48. Clamped to 1..256. */
+  REC_f( 825, metal_rt_ao_radius                      , global    , 5.0F ),  /* Metal real-time RT: ambient-occlusion hemisphere radius in Angstroms (occlusion reach). Larger = broader pocket/cavity darkening; smaller = tight contact AO. */
+  REC_f( 826, metal_rt_ao_intensity                   , global    , 0.72F ), /* Metal real-time RT: ambient-occlusion darkening strength (0..1). */
+  REC_f( 827, metal_rt_shadow_intensity               , global    , 0.45F ), /* Metal real-time RT: cast-shadow darkening strength (0..1); still gated by metal_shadows. */
 
 #ifdef SETTINGINFO_IMPLEMENTATION
 #undef SETTINGINFO_IMPLEMENTATION

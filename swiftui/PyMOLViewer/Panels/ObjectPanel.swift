@@ -188,7 +188,7 @@ struct SceneParam: Identifiable {
 
 enum SceneCatalog {
     // Ordered sub-groups shown inside the SCENE section (see panel reorg).
-    static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Effects", "Quality"]
+    static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Metal optimization", "Effects", "Quality"]
     static let params: [SceneParam] = [
         // --- Canvas: background + multi-object/state layout ---
         SceneParam(setting: "bg_rgb",     label: "Background", kind: .toggle, group: "Canvas", isColor: true,
@@ -226,17 +226,31 @@ enum SceneCatalog {
         SceneParam(setting: "metal_sss_wrap", label: "Subsurface wrap", kind: .slider, min: 0, max: 1, step: 0.05, decimals: 2, group: "Lighting",
                    help: "Wraps light past the terminator for a soft, waxy/translucent look. 0 = plain Lambert."),
 
-        // --- Shadows & AO: occlusion + the hardware-RT subsystem ---
+        // --- Shadows & AO: screen-space (non-RT) shadows + occlusion ---
         SceneParam(setting: "metal_shadows", label: "Shadows", kind: .toggle, group: "Shadows & AO",
                    help: "Real-time screen-space directional shadows."),
         SceneParam(setting: "metal_ssao",    label: "Ambient occlusion", kind: .toggle, group: "Shadows & AO",
                    help: "Screen-space ambient occlusion — darkens crevices and contact points for depth."),
-        SceneParam(setting: "metal_raytrace", label: "Ray tracing (AO + shadows)", kind: .toggle, group: "Shadows & AO",
-                   help: "Hardware ray tracing for higher-quality ambient occlusion and shadows. Requires a supported GPU; it powers the two options below."),
-        SceneParam(setting: "metal_rt_shadows", label: "RT hard shadows", kind: .toggle, group: "Shadows & AO", dependsOn: "metal_raytrace",
+
+        // --- Metal optimization: hardware ray tracing + GPU quality/perf knobs ---
+        SceneParam(setting: "metal_raytrace", label: "Ray tracing (AO + shadows)", kind: .toggle, group: "Metal optimization",
+                   help: "Hardware ray tracing for higher-quality ambient occlusion and shadows. Requires a supported GPU; it powers the options below."),
+        SceneParam(setting: "metal_rt_shadows", label: "RT hard shadows", kind: .toggle, group: "Metal optimization", dependsOn: "metal_raytrace",
                    help: "Trace crisp hard shadow rays instead of the shadow-map approximation. Needs ray tracing on."),
-        SceneParam(setting: "metal_temporal_ao", label: "Temporal AO", kind: .toggle, group: "Shadows & AO", dependsOn: "metal_raytrace",
+        SceneParam(setting: "metal_temporal_ao", label: "Temporal AO", kind: .toggle, group: "Metal optimization", dependsOn: "metal_raytrace",
                    help: "Accumulate ray-traced AO across frames while the view is still, for cleaner, smoother occlusion. Needs ray tracing on."),
+        SceneParam(setting: "metal_rt_samples", label: "RT quality (rays)", kind: .slider, min: 4, max: 128, step: 4, decimals: 0, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "Ambient-occlusion rays traced per pixel in the live view. Higher is smoother but slower — lower it on mobile for speed (exports always use at least 48)."),
+        SceneParam(setting: "metal_rt_ao_radius", label: "AO radius (Å)", kind: .slider, min: 1, max: 15, step: 0.5, decimals: 1, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "How far ambient occlusion reaches, in Angstroms. Larger darkens broad pockets and cavities; smaller keeps it to tight contact creases."),
+        SceneParam(setting: "metal_rt_ao_intensity", label: "AO strength", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "Ambient-occlusion darkening amount."),
+        SceneParam(setting: "metal_rt_shadow_intensity", label: "RT shadow strength", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "Cast-shadow darkening amount (still needs Shadows on)."),
+        SceneParam(setting: "metal_msaa",   label: "MSAA 4×", kind: .toggle, group: "Metal optimization",
+                   help: "4× multisample antialiasing — smoother edges at some GPU cost."),
+        SceneParam(setting: "metal_upscale", label: "Reduced-res upscale", kind: .toggle, group: "Metal optimization",
+                   help: "Render at reduced resolution and upscale (MetalFX) for better performance on slower GPUs."),
 
         // --- Effects: stylization + post-processing ---
         SceneParam(setting: "metal_outline", label: "Outline", kind: .toggle, group: "Effects",
@@ -256,11 +270,7 @@ enum SceneCatalog {
         SceneParam(setting: "depth_cue",  label: "Depth cue / fog", kind: .toggle, group: "Effects",
                    help: "Fade distant parts of the scene into the background to convey depth."),
 
-        // --- Quality: antialiasing / perf / tessellation ---
-        SceneParam(setting: "metal_msaa",   label: "MSAA 4×", kind: .toggle, group: "Quality",
-                   help: "4× multisample antialiasing — smoother edges at some GPU cost."),
-        SceneParam(setting: "metal_upscale", label: "Reduced-res upscale", kind: .toggle, group: "Quality",
-                   help: "Render at reduced resolution and upscale (MetalFX) for better performance on slower GPUs."),
+        // --- Quality: tessellation ---
         SceneParam(setting: "surface_quality", label: "Surface quality", kind: .segmented,
                    options: [("0", 0), ("1", 1), ("2", 2)], group: "Quality",
                    help: "Surface mesh detail: 0 = coarse/fast, 2 = fine/slow."),

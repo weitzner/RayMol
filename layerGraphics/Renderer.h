@@ -321,6 +321,14 @@ public:
   {
   }
 
+  // Real-time ray-tracing quality knobs (metal_rt_* settings): AO rays/pixel,
+  // AO hemisphere radius (Angstroms), AO darkening strength, cast-shadow
+  // darkening strength. Fed each frame from SceneRender. Default: no-op.
+  virtual void setRayTraceParams(int samples, float aoRadius, float aoIntensity,
+      float shadowIntensity)
+  {
+  }
+
   // PyMOL lighting model (ambient/direct/reflect/specular/shininess). Default:
   // no-op (the GL renderer reads these settings itself). The Metal renderer
   // uploads them into its lit shaders so the Scene lighting sliders take effect.
@@ -352,6 +360,13 @@ public:
   virtual void beginShadowPass() {}
   virtual void endShadowPass() {}
   virtual void setLightViewProjEye(const float* m) {}
+  // World half-extent of the shadow ortho box, so the receiver can express its
+  // self-shadow bias in Angstroms (scale-invariant) rather than a frustum
+  // fraction. Default: no-op (GL unaffected).
+  virtual void setShadowFrustum(float radius) {}
+  // User multiplier on the self-shadow depth bias (metal_shadow_bias). Default
+  // no-op (GL unaffected).
+  virtual void setShadowBias(float bias) {}
 
   // GPU-tessellated Bezier tubes ("tube cartoon"). controlPoints is a tightly
   // packed array of cubic Bezier patches: 4 Float3 control points each
