@@ -937,7 +937,7 @@ enum {
   REC_f( 827, metal_rt_shadow_intensity               , global    , 0.45F ), /* Metal real-time RT: cast-shadow darkening strength (0..1); still gated by metal_shadows. */
   REC_b( 828, metal_dof_hq                            , global    , false ), /* Metal depth-of-field: high-quality two-pass bokeh (more gather samples + a de-noise smoothing pass) vs the single-pass gather. */
   REC_b( 829, metal_dof_autofocus                     , global    , false ), /* Metal depth-of-field: lock the focal plane onto the "dof_focus" selection's centroid (snapshotted from 'sele' when enabled) and track it each frame as the camera moves; empty selection falls back to the center of interest. */
-  REC_i( 830, metal_dof_quality                       , global    , 1 ),     /* Metal depth-of-field: bokeh quality level 1..4. Higher traces more gather samples (1->16, 2->32, 3->64, 4->96) for denser, cleaner out-of-focus blur; levels >=2 also run a de-noise smoothing pass (two-pass). 1 = fast single-pass. */
+  REC_i( 830, metal_dof_quality                       , global    , 4 ),     /* Metal depth-of-field: bokeh quality level 1..4. Higher traces more gather samples (1->16, 2->32, 3->64, 4->96) for denser, cleaner out-of-focus blur; levels >=2 also run a de-noise smoothing pass (two-pass). 1 = fast single-pass. */
 
 #ifdef SETTINGINFO_IMPLEMENTATION
 #undef SETTINGINFO_IMPLEMENTATION
