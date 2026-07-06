@@ -186,6 +186,17 @@ struct SceneParam: Identifiable {
     var help: String = ""
 }
 
+// Camera-control command strings shared by the inspector row and the camera dock,
+// so the DOF auto-lock action has a single source of truth.
+enum CameraCommands {
+    // Auto-lock focus: enabling snapshots the current selection into "dof_focus"
+    // (the target the renderer tracks each frame); disabling just clears the flag.
+    static func setAutofocus(_ on: Bool) -> String {
+        on ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
+           : "set metal_dof_autofocus, 0"
+    }
+}
+
 enum SceneCatalog {
     // Ordered sub-groups shown inside the SCENE section (see panel reorg).
     static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Metal optimization", "Effects", "Quality"]
@@ -196,6 +207,22 @@ enum SceneCatalog {
         "field_of_view", "zoom", "ortho", "metal_dof",
         "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_quality",
     ]
+    // Viewport camera dock (see CameraDock): the always-visible strip icons, in
+    // order. DOF's sub-controls are rendered by DOFSubPanelContent, not as strip
+    // icons. metal_dof_quality is intentionally absent — it defaults to best (4)
+    // and lives only in the inspector's Scene → Camera group.
+    static let cameraStripKeys = ["field_of_view", "zoom", "ortho", "metal_dof"]
+
+    // SF Symbol for each strip control.
+    static func cameraIcon(for setting: String) -> String {
+        switch setting {
+        case "field_of_view": return "camera.aperture"
+        case "zoom":          return "plus.magnifyingglass"
+        case "ortho":         return "cube"
+        case "metal_dof":     return "camera.metering.center.weighted"
+        default:              return "slider.horizontal.3"
+        }
+    }
     static func param(for setting: String) -> SceneParam? {
         params.first { $0.setting == setting }
     }
@@ -2084,9 +2111,7 @@ struct SceneParamRow: View {
                     // the locked target the renderer tracks each frame (see the
                     // SceneRender auto-focus block). Disabling just clears the flag.
                     ToggleSetting(value: v) { on in
-                        engine.runCommand(on
-                            ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
-                            : "set metal_dof_autofocus, 0")
+                        engine.runCommand(CameraCommands.setAutofocus(on))
                     }
                 } else {
                     ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
