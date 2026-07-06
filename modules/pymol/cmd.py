@@ -53,6 +53,18 @@ def _deferred_init_pymol_internals(_pymol):
     if wizarding.session_save_wizard not in _pymol._session_save_tasks:
         _pymol._session_save_tasks.append(wizarding.session_save_wizard)
 
+    # RayMol: per-scene render-settings snapshot (DOF/lighting/metal_* look).
+    # Imported here (deferred) to avoid a circular import at cmd.py load time.
+    # Wrapped so a fork-module problem can never break core PyMOL startup.
+    try:
+        from pymol import raymol_scenes
+        if raymol_scenes.session_restore not in _pymol._session_restore_tasks:
+            _pymol._session_restore_tasks.append(raymol_scenes.session_restore)
+        if raymol_scenes.session_save not in _pymol._session_save_tasks:
+            _pymol._session_save_tasks.append(raymol_scenes.session_save)
+    except Exception as _rs_e:
+        print("raymol_scenes registration failed: %s" % _rs_e)
+
     # take care of some deferred initialization
 
     _pymol._view_dict_sc = Shortcut()
