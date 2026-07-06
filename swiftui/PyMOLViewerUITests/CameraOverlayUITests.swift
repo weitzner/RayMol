@@ -102,9 +102,9 @@ final class CameraOverlayUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.0)
         attach("cam_ov_3_dof")
 
-        // Four sub-rows must appear as static text labels.
-        // Actual labels observed in AX dump (screenshot confirmed):
-        //   "Auto lock focus", "DOF focus (0=auto)", "DOF aperture (blur)", "High-quality DOF (2-…)"
+        // Four sub-rows must appear as static text labels. (High-quality DOF is now
+        // a "DOF quality" slider rather than a toggle — see metal_dof_quality.)
+        //   "Auto lock focus", "DOF focus (0=auto)", "DOF aperture (blur)", "DOF quality"
         XCTAssertTrue(app.staticTexts["Auto lock focus"].waitForExistence(timeout: 5),
                       "'Auto lock focus' sub-row not found after DOF enabled")
         XCTAssertTrue(
@@ -114,8 +114,8 @@ final class CameraOverlayUITests: XCTestCase {
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'DOF aperture'")).firstMatch.waitForExistence(timeout: 3),
             "'DOF aperture' sub-row not found after DOF enabled")
         XCTAssertTrue(
-            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'High-quality DOF'")).firstMatch.waitForExistence(timeout: 3),
-            "'High-quality DOF' sub-row not found after DOF enabled")
+            app.staticTexts["DOF quality"].waitForExistence(timeout: 3),
+            "'DOF quality' sub-row not found after DOF enabled")
 
         attach("cam_ov_3_dof_verified")
     }
