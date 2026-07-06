@@ -1359,6 +1359,23 @@ final class PyMOLEngine: ObservableObject {
             + "_zc.move('z', (_zv[15] + _zv[16]) * 0.5 * (\(frac)))")
     }
 
+    // Absolute zoom: set the apparent magnification `mag` (independent of the Lens
+    // control). Target camera distance = radius / (mag * tan(fov/2)); dolly the
+    // camera there via move('z', current - target). `radius`/`fovDeg` come from the
+    // scene poll (same values used to display the slider), so the target distance
+    // is consistent with the shown magnification. move z + = camera moves in.
+    func setZoomMagnification(_ mag: Double, radius: Double, fovDeg: Double) {
+        guard isReady, radius > 0, mag > 0 else { return }
+        let t = tan(fovDeg * .pi / 360.0)
+        guard t > 1e-6 else { return }
+        let target = radius / (mag * t)
+        guard target.isFinite, target > 0.01 else { return }
+        runPython("from pymol import cmd as _zc\n"
+            + "_zv = _zc.get_view()\n"
+            + "_cur = abs(_zv[11])\n"
+            + "_zc.move('z', _cur - \(target))")
+    }
+
     func key(_ k: UInt8, x: Int32, y: Int32, modifiers: Int32) {
         guard let inst = instance else { return }
         PyMOLBridge_Key(inst, k, x, y, modifiers)

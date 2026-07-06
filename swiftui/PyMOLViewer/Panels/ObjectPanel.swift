@@ -193,7 +193,7 @@ enum SceneCatalog {
     // most-used camera controls). Deliberately omits metal_dof_range and
     // depth_cue, which remain in the full inspector.
     static let cameraOverlayKeys = [
-        "field_of_view", "ortho", "metal_dof",
+        "field_of_view", "zoom", "ortho", "metal_dof",
         "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_hq",
     ]
     static func param(for setting: String) -> SceneParam? {
@@ -213,6 +213,8 @@ enum SceneCatalog {
         // --- Camera: viewpoint + lens ---
         SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 12, max: 135, step: 0.5, decimals: 0, group: "Camera",
                    help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~12mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Drag for a live, continuous perspective change. Pinch to zoom. No effect in orthoscopic mode."),
+        SceneParam(setting: "zoom", label: "Zoom (×)", kind: .slider, min: 0.5, max: 8, step: 0.1, decimals: 1, group: "Camera",
+                   help: "Apparent magnification — dollies the camera closer/farther. ~1× fits the whole scene; higher zooms in. Independent of the Lens: changing perspective (dolly-zoom) leaves this put, and vice-versa. Pinch to zoom also updates it."),
         SceneParam(setting: "ortho", label: "Orthographic", kind: .toggle, group: "Camera",
                    help: "Orthographic (parallel) projection — no perspective. Disables the Lens control."),
         SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
@@ -2107,6 +2109,22 @@ struct SceneParamRow: View {
                                   onCommit: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") })
                         .disabled(orthoOn)
                         .opacity(orthoOn ? 0.4 : 1.0)
+                } else if p.setting == "zoom" {
+                    // Zoom: absolute apparent MAGNIFICATION, independent of the Lens.
+                    // M = scene_radius / (cam_dist * tan(fov/2)) is invariant under
+                    // the Lens dolly-zoom, so the two sliders don't fight. Dragging
+                    // dollies the camera to the target distance.
+                    let camDist = engine.sceneState.values["cam_dist"] ?? 0
+                    let radius = engine.sceneState.values["scene_radius"] ?? 0
+                    let fovDeg = engine.sceneState.values["field_of_view"] ?? 20
+                    let zoomReady = radius > 0 && camDist > 0
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: zoomMag(camDist: camDist, radius: radius, fovDeg: fovDeg),
+                                  onLive: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) },
+                                  onCommit: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) })
+                        .disabled(!zoomReady)
+                        .opacity(zoomReady ? 1.0 : 0.4)
                 } else {
                     // The DOF focus slider is driven by autofocus while it's on.
                     let dofAuto = p.setting == "metal_dof_focus"
@@ -2139,6 +2157,14 @@ struct SceneParamRow: View {
     }
     private func mmToFOV(_ mm: Double) -> Double {
         2.0 * atan(12.0 / mm) * 180.0 / .pi
+    }
+
+    // Apparent magnification for the Zoom slider: ~1 when the scene fits the view,
+    // higher when zoomed in. Clamped to the slider's [0.5, 8] range.
+    private func zoomMag(camDist: Double, radius: Double, fovDeg: Double) -> Double {
+        let t = tan(fovDeg * .pi / 360.0)
+        guard camDist > 1e-4, t > 1e-6, radius > 0 else { return 1.0 }
+        return min(max(radius / (camDist * t), 0.5), 8.0)
     }
 
     private func setBackground(_ color: Color) {
