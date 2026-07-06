@@ -36,9 +36,11 @@ final class CameraOverlayUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1.5)
         attach("strip_2_open")
 
-        for id in ["camDock.ortho", "camDock.lens", "camDock.zoom", "camDock.depth", "camDock.close"] {
+        for id in ["camDock.lens", "camDock.zoom", "camDock.depth", "camDock.close"] {
             XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "Strip icon '\(id)' not found")
         }
+        // Ortho is no longer a strip icon — it lives in the Lens row.
+        XCTAssertFalse(app.buttons["camDock.ortho"].exists, "Ortho should not be in the strip")
         // No surface open yet → no slider present (Objects panel is closed).
         XCTAssertFalse(app.sliders.firstMatch.exists, "A slider is open before any icon was tapped")
     }
@@ -67,25 +69,29 @@ final class CameraOverlayUITests: XCTestCase {
         attach("strip_4_zoom")
     }
 
-    // MARK: - Ortho toggles and disables Lens
+    // MARK: - Ortho (in the Lens row) greys the Lens slider
 
-    func testOrthoDisablesLens() throws {
+    func testOrthoGreysLensSlider() throws {
         app.launch()
         XCTAssertTrue(waitForRender(timeout: 30), "molecule never rendered")
         cameraChipButton().tap()
         Thread.sleep(forTimeInterval: 1.5)
 
-        let lens = app.buttons["camDock.lens"]
-        XCTAssertTrue(lens.waitForExistence(timeout: 5), "Lens icon not found")
-        XCTAssertTrue(lens.isEnabled, "Lens should be enabled in perspective mode")
+        // Open the Lens row; the Ortho toggle lives there (not in the strip).
+        app.buttons["camDock.lens"].tap()
+        Thread.sleep(forTimeInterval: 0.8)
+        let slider = app.sliders.firstMatch
+        XCTAssertTrue(slider.waitForExistence(timeout: 3), "Lens slider not found")
+        XCTAssertTrue(slider.isEnabled, "Lens slider should be enabled in perspective mode")
 
-        app.buttons["camDock.ortho"].tap()
+        let ortho = app.buttons["camDock.ortho"]
+        XCTAssertTrue(ortho.waitForExistence(timeout: 3), "Ortho toggle not found in the Lens row")
+        ortho.tap()
         Thread.sleep(forTimeInterval: 1.0)
         attach("strip_5_ortho")
-        XCTAssertFalse(lens.isEnabled, "Lens should be disabled in orthographic mode")
+        XCTAssertFalse(slider.isEnabled, "Lens slider should be greyed out in orthographic mode")
 
-        // Turn ortho back off so the run leaves a clean state.
-        app.buttons["camDock.ortho"].tap()
+        ortho.tap()  // restore perspective for a clean state
     }
 
     // MARK: - Depth opens the sub-panel; enabling reveals Focus; no quality control

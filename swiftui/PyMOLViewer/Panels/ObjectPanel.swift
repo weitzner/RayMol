@@ -204,7 +204,7 @@ enum SceneCatalog {
     // order. DOF's sub-controls are rendered by DOFSubPanelContent, not as strip
     // icons. metal_dof_quality is intentionally absent — it defaults to best (4)
     // and lives only in the inspector's Scene → Camera group.
-    static let cameraStripKeys = ["ortho", "field_of_view", "zoom", "metal_dof"]
+    static let cameraStripKeys = ["field_of_view", "zoom", "metal_dof"]
 
     // SF Symbol for each strip control.
     static func cameraIcon(for setting: String) -> String {
@@ -2279,6 +2279,13 @@ struct CameraDock: View {
                 Group {
                     if key == "metal_dof" {
                         DOFSubPanelContent(engine: engine)
+                    } else if key == "field_of_view", let p = SceneCatalog.param(for: key) {
+                        // Lens row: Ortho toggle on the left; the Lens slider greys
+                        // itself out (via SceneParamRow) while Ortho is on.
+                        HStack(spacing: 10) {
+                            orthoToggle
+                            SceneParamRow(param: p, engine: engine)
+                        }
                     } else if let p = SceneCatalog.param(for: key) {
                         SceneParamRow(param: p, engine: engine)
                     }
@@ -2303,22 +2310,35 @@ struct CameraDock: View {
     }
 
     private func tap(_ key: String) {
-        switch key {
-        case "ortho":
-            let newVal = orthoOn ? 0 : 1
-            engine.runCommand("set ortho, \(newVal)")
-            if newVal == 1 && open == "field_of_view" { open = nil }  // Lens is inert in ortho
-        default:
-            open = (open == key) ? nil : key
+        open = (open == key) ? nil : key
+    }
+
+    // Ortho lives in the Lens row (perspective vs orthographic). Toggling it greys
+    // the Lens slider (SceneParamRow self-disables field_of_view while ortho is on).
+    private var orthoToggle: some View {
+        Button {
+            engine.runCommand("set ortho, \(orthoOn ? 0 : 1)")
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "cube")
+                Text("Ortho")
+            }
+            .font(.system(size: 12))
+            .foregroundColor(orthoOn ? .black : PanelTheme.buttonText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(orthoOn ? PanelTheme.selectionTextColor : PanelTheme.buttonBackground,
+                        in: Capsule())
         }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityIdentifier("camDock.ortho")
+        .accessibilityLabel("Orthographic")
     }
 
     @ViewBuilder
     private func stripIcon(_ key: String) -> some View {
-        let selected = (open == key)
-        let on = (key == "ortho" && orthoOn)
-        let active = selected || on
-        let disabled = (key == "field_of_view" && orthoOn)
+        let active = (open == key)
         Button { tap(key) } label: {
             VStack(spacing: 3) {
                 ZStack(alignment: .topTrailing) {
@@ -2340,8 +2360,6 @@ struct CameraDock: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.4 : 1)
         .accessibilityIdentifier(axID(key))
         .accessibilityLabel(fullLabel(key))
     }
