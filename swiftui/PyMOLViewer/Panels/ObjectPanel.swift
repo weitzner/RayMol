@@ -200,13 +200,6 @@ enum CameraCommands {
 enum SceneCatalog {
     // Ordered sub-groups shown inside the SCENE section (see panel reorg).
     static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Metal optimization", "Effects", "Quality"]
-    // Ordered subset shown in the viewport Camera overlay (a shortcut to the
-    // most-used camera controls). Deliberately omits metal_dof_range and
-    // depth_cue, which remain in the full inspector.
-    static let cameraOverlayKeys = [
-        "field_of_view", "zoom", "ortho", "metal_dof",
-        "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_quality",
-    ]
     // Viewport camera dock (see CameraDock): the always-visible strip icons, in
     // order. DOF's sub-controls are rendered by DOFSubPanelContent, not as strip
     // icons. metal_dof_quality is intentionally absent — it defaults to best (4)
@@ -2065,10 +2058,10 @@ struct SceneCard: View {
 
 }
 
-// MARK: - Shared scene-setting row + Camera overlay
+// MARK: - Shared scene-setting row + Camera dock
 
 // One scene-setting row (label + control + help), shared by the inspector's
-// Scene section (SceneCard) and the viewport Camera overlay (CameraControlsView).
+// Scene section (SceneCard) and the viewport camera dock (CameraDock).
 // Self-hides when its dependsOn parent toggle is off, so callers render it
 // unconditionally.
 struct SceneParamRow: View {
@@ -2214,43 +2207,184 @@ struct SceneParamRow: View {
     }
 }
 
-// Content of the viewport Camera overlay (popover on macOS/iPad, bottom sheet on
-// iPhone). Reuses SceneParamRow for the curated camera params, then a Reset view
-// action. Reads/writes go through PyMOLEngine exactly as the inspector does.
-struct CameraControlsView: View {
+// The Depth-of-field sub-panel shown inside the camera dock when "Depth" is
+// selected. Enabled + Auto lock share the top row (both switches); Focus and
+// Aperture reuse the inspector rows and self-hide (dependsOn: metal_dof) until
+// DOF is enabled. Quality is intentionally not here — it lives in the inspector.
+struct DOFSubPanelContent: View {
     @ObservedObject var engine: PyMOLEngine
+    private var dofOn: Bool { (engine.sceneState.values["metal_dof"] ?? 0) > 0.5 }
 
     var body: some View {
-        // Pure content (no background / outer padding): the macOS popover and the
-        // iOS glassy card each supply their own chrome. Tight spacing keeps it
-        // vertically compact — it hugs its content rather than filling a sheet.
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Image(systemName: "camera")
-                Text("Camera").font(.system(size: 15, weight: .medium))
+                Image(systemName: "camera.metering.center.weighted")
+                Text("Depth of field").font(.system(size: 13, weight: .medium))
                 Spacer()
             }
             .foregroundColor(PanelTheme.textColor)
             .padding(.bottom, 2)
 
-            ForEach(SceneCatalog.cameraOverlayKeys, id: \.self) { key in
-                if let p = SceneCatalog.param(for: key) {
-                    SceneParamRow(param: p, engine: engine)
+            HStack(spacing: 20) {
+                dofToggle("Enabled", key: "metal_dof", id: "dof.enabled", enabled: true) { on in
+                    engine.runCommand("set metal_dof, \(on ? 1 : 0)")
                 }
+                dofToggle("Auto lock", key: "metal_dof_autofocus", id: "dof.autolock", enabled: dofOn) { on in
+                    engine.runCommand(CameraCommands.setAutofocus(on))
+                }
+                Spacer()
             }
 
-            Button { engine.runCommand("reset") } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "dot.viewfinder")
-                    Text("Reset view")
-                    Spacer()
-                }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(PanelTheme.selectionTextColor)
-                .padding(.top, 6)
-                .contentShape(Rectangle())
+            if let focus = SceneCatalog.param(for: "metal_dof_focus") {
+                SceneParamRow(param: focus, engine: engine)
             }
-            .buttonStyle(.plain)
+            if let aperture = SceneCatalog.param(for: "metal_dof_aperture") {
+                SceneParamRow(param: aperture, engine: engine)
+            }
+        }
+    }
+
+    private func dofToggle(_ label: String, key: String, id: String,
+                           enabled: Bool, onToggle: @escaping (Bool) -> Void) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 11)).foregroundColor(PanelTheme.textColor)
+            ToggleSetting(value: engine.sceneState.values[key] ?? 0, onToggle: onToggle)
+                .accessibilityIdentifier(id)
+                .accessibilityLabel(label)
+        }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+    }
+}
+
+// Bottom-docked camera control strip (Photos-app "Adjust" model): a row of icon
+// buttons where one control opens at a time above the strip. Reuses SceneParamRow
+// for every slider control so all camera logic stays in one place. Used on all
+// platforms via ContentView's bottom overlay.
+struct CameraDock: View {
+    @ObservedObject var engine: PyMOLEngine
+    // Which control's surface is open above the strip. nil = strip only.
+    // "ortho" toggles instantly and never becomes `open`.
+    @State private var open: String? = nil
+
+    private var orthoOn: Bool { (engine.sceneState.values["ortho"] ?? 0) > 0.5 }
+    private var dofOn: Bool { (engine.sceneState.values["metal_dof"] ?? 0) > 0.5 }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let key = open {
+                Group {
+                    if key == "metal_dof" {
+                        DOFSubPanelContent(engine: engine)
+                    } else if let p = SceneCatalog.param(for: key) {
+                        SceneParamRow(param: p, engine: engine)
+                    }
+                }
+                .padding(.horizontal, 4)
+                Divider().overlay(PanelTheme.textColor.opacity(0.15))
+            }
+            HStack(spacing: 10) {
+                ForEach(SceneCatalog.cameraStripKeys, id: \.self) { stripIcon($0) }
+                stripAction(icon: "dot.viewfinder", label: "Reset", id: "camDock.reset") {
+                    engine.runCommand("reset")
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+        .animation(.easeOut(duration: 0.18), value: open)
+    }
+
+    private func tap(_ key: String) {
+        switch key {
+        case "ortho":
+            let newVal = orthoOn ? 0 : 1
+            engine.runCommand("set ortho, \(newVal)")
+            if newVal == 1 && open == "field_of_view" { open = nil }  // Lens is inert in ortho
+        default:
+            open = (open == key) ? nil : key
+        }
+    }
+
+    @ViewBuilder
+    private func stripIcon(_ key: String) -> some View {
+        let selected = (open == key)
+        let on = (key == "ortho" && orthoOn)
+        let active = selected || on
+        let disabled = (key == "field_of_view" && orthoOn)
+        Button { tap(key) } label: {
+            VStack(spacing: 3) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: SceneCatalog.cameraIcon(for: key))
+                        .font(.system(size: 17))
+                        .foregroundColor(active ? .black : PanelTheme.buttonText)
+                        .frame(width: 42, height: 42)
+                        .background(active ? PanelTheme.selectionTextColor : PanelTheme.buttonBackground,
+                                    in: Circle())
+                    if key == "metal_dof" && dofOn {
+                        Circle().fill(PanelTheme.selectionTextColor)
+                            .frame(width: 9, height: 9)
+                            .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+                            .offset(x: 2, y: -2)
+                    }
+                }
+                Text(shortLabel(key)).font(.system(size: 10))
+                    .foregroundColor(active ? PanelTheme.selectionTextColor : PanelTheme.textColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .accessibilityIdentifier(axID(key))
+        .accessibilityLabel(fullLabel(key))
+    }
+
+    private func stripAction(icon: String, label: String, id: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 17))
+                    .foregroundColor(PanelTheme.buttonText)
+                    .frame(width: 42, height: 42)
+                    .background(PanelTheme.buttonBackground, in: Circle())
+                Text(label).font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
+        .accessibilityLabel("Reset view")
+    }
+
+    private func shortLabel(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "Lens"
+        case "zoom":          return "Zoom"
+        case "ortho":         return "Ortho"
+        case "metal_dof":     return "Depth"
+        default:              return key
+        }
+    }
+    private func fullLabel(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "Lens"
+        case "zoom":          return "Zoom"
+        case "ortho":         return "Orthographic"
+        case "metal_dof":     return "Depth of field"
+        default:              return key
+        }
+    }
+    private func axID(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "camDock.lens"
+        case "zoom":          return "camDock.zoom"
+        case "ortho":         return "camDock.ortho"
+        case "metal_dof":     return "camDock.depth"
+        default:              return "camDock.\(key)"
         }
     }
 }
