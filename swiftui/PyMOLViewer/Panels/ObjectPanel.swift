@@ -806,6 +806,7 @@ struct ObjectPanel: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
         .fixedSize()
         .help("Selection mode — what a tap selects")
     }
@@ -926,6 +927,7 @@ private struct AllControlsRow: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .fixedSize()   // hug the cell (matches the S/H/L/C buttons) so the "all" row groups like object rows
             ShowButton(name: "all")
             HideButton(name: "all")
             LabelMenuButton(name: "all")
@@ -1005,6 +1007,7 @@ private struct ActionMenuButton: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
     }
 }
 
@@ -1053,6 +1056,7 @@ private struct ShowButton: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
     }
 }
 
@@ -1086,6 +1090,7 @@ private struct HideButton: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
     }
 }
 
@@ -1119,6 +1124,7 @@ private struct LabelMenuButton: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
     }
 }
 
@@ -1163,6 +1169,7 @@ private struct ColorMenuButton: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .fixedSize()   // hug the kActBtnW cell — on macOS a borderless Menu otherwise expands greedily and the A/S/H/L/C row spreads across a wide inspector
         .popover(isPresented: $showCustom, arrowEdge: .bottom) {
             VStack(spacing: 8) {
                 Text("Custom color").font(.system(size: 11, weight: .semibold))
