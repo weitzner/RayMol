@@ -514,8 +514,8 @@ struct TimelinePanel: View {
                 }
                 Spacer(minLength: 0)
             }
-            .frame(width: labelW)
             .padding(.horizontal, 8)
+            .frame(width: labelW)   // match the track gutter (padding INSIDE) so the divider lines align
             .help("Saved scenes — tap to append to the timeline")
             .accessibilityLabel("Saved scenes")
 
