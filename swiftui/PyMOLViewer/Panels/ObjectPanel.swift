@@ -2230,8 +2230,11 @@ struct DOFSubPanelContent: View {
                 dofToggle("Enabled", key: "metal_dof", id: "dof.enabled", enabled: true) { on in
                     engine.runCommand("set metal_dof, \(on ? 1 : 0)")
                 }
-                dofToggle("Auto lock", key: "metal_dof_autofocus", id: "dof.autolock", enabled: dofOn) { on in
-                    engine.runCommand(CameraCommands.setAutofocus(on))
+                HStack(spacing: 5) {
+                    dofToggle("Auto lock", key: "metal_dof_autofocus", id: "dof.autolock", enabled: dofOn) { on in
+                        engine.runCommand(CameraCommands.setAutofocus(on))
+                    }
+                    HelpButton(text: "Auto lock focus keeps the current selection in sharp focus. Select the atoms you want sharp, then turn this on — the focus point tracks that selection as the camera moves. Off lets you set the focus distance by hand with the slider below.")
                 }
                 Spacer()
             }

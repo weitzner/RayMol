@@ -2442,8 +2442,8 @@ struct ContentView: View {
                 .font(.system(size: 20))
                 .foregroundStyle(.white.opacity(showCameraPanel ? 0.95 : 0.6))
                 .frame(width: 46, height: 46)
-                .background(.white.opacity(showCameraPanel ? 0.22 : 0.12), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+                .background(.white.opacity(showCameraPanel ? 0.22 : 0.12), in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Camera settings")
