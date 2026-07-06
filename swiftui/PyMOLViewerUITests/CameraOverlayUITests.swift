@@ -29,6 +29,11 @@ final class CameraOverlayUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["PYMOL_AUTOLOAD"] = "1ubq.cif"
         app.launchEnvironment["PYMOL_AUTOPANEL"] = "closed"
+        // Suppress the first-run gesture-coach overlay: on a fresh simulator it
+        // auto-appears once the structure loads and its dimming background swallows
+        // the first tap, so tapping the camera chip would dismiss the coach instead
+        // of opening the panel.
+        app.launchEnvironment["PYMOL_SKIP_GESTURE_HELP"] = "1"
         app.launchEnvironment["PYMOL_AUTOCMD"] = "hide everything; show cartoon; orient"
     }
 

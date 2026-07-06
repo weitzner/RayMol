@@ -663,6 +663,17 @@ struct ContentView: View {
     @State private var showGestureLegend = false
     @State private var showPanePopover = false
 
+    // Test hook (PYMOL_SKIP_GESTURE_HELP): suppress the first-run gesture-coach
+    // overlay entirely. On a fresh simulator gestureCoachSeen defaults to false,
+    // so the coach auto-appears once a structure loads and its full-screen dimming
+    // background (see gestureCoachOverlay) swallows the very first tap — which
+    // makes XCUITests that tap a viewport chip on launch fail. Setting this env
+    // var to any value keeps the coach from ever appearing; the manual "Gesture
+    // help" button still works.
+    private var skipGestureHelp: Bool {
+        ProcessInfo.processInfo.environment["PYMOL_SKIP_GESTURE_HELP"] != nil
+    }
+
     // iPhone-LANDSCAPE pane visibility. Separate from the iPad bools (showCommand/
     // Object, which default ON) so iPhone landscape starts MINIMAL —
     // Console + Objects OFF, showing just the viewport (+ the sequence
@@ -730,7 +741,7 @@ struct ContentView: View {
                     }
                 }
                 .overlay(alignment: .center) {
-                    if !gestureCoachSeen && !engine.objects.isEmpty { gestureCoachOverlay }
+                    if !gestureCoachSeen && !skipGestureHelp && !engine.objects.isEmpty { gestureCoachOverlay }
                 }
             }
             // Full-bleed on iPhone: the viewport uses every pixel, including under
