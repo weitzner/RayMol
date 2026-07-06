@@ -119,7 +119,7 @@ final class CameraOverlayUITests: XCTestCase {
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'DOF aperture'")).firstMatch.waitForExistence(timeout: 3),
             "'DOF aperture' sub-row not found after DOF enabled")
         XCTAssertTrue(
-            app.staticTexts["DOF quality"].waitForExistence(timeout: 3),
+            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'DOF quality'")).firstMatch.waitForExistence(timeout: 3),
             "'DOF quality' sub-row not found after DOF enabled")
 
         attach("cam_ov_3_dof_verified")
