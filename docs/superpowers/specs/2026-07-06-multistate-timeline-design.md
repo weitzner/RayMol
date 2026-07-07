@@ -93,10 +93,17 @@ Rewrite so state is never left to interpolate across mixed keyframes:
    carrying only camera (and `scene=` for scene items). A scene item that was
    stored at a specific state writes that state into the global mset at its frame
    so recall and movie agree (fixes `Scene.cpp:680` suppression).
-5. **Base `mset`:** `1 xTOTAL` (all state 1) *only as the substrate for camera
-   frames*; per-object tracks override each targeted object's state at render, so
-   the "everything is state 1" collapse cannot happen for swept objects. Objects
-   not targeted by any clip legitimately hold state 1.
+5. **Base `mset`:** `1 xTOTAL` as the substrate for camera frames; per-object
+   state tracks override each swept object's state at render, so the "everything
+   is state 1" collapse cannot happen for swept objects.
+6. **Non-destructive default (no explicit clip):** when a movie is authored
+   (any camera/scene item) and multi-state objects are present but NO states clip
+   targets them, **auto-emit a per-object sweep track for every multi-state
+   object across the full movie span**. This is what "adding a camera keyframe
+   never collapses the ensemble" means operationally — the models keep cycling
+   under the camera. An explicit states clip **overrides** this (it defines the
+   span / mode / object subset); a per-item pinned state opts one object out
+   (holds that model).
 6. `mview interpolate` (global, camera) + per-object interpolates; `rewind`.
 
 This is the desktop-PyMOL `add_state_sweep`/`add_roll` combination, generalized to
