@@ -117,6 +117,15 @@ struct TimelinePanel: View {
         }
         .background(TimelineTheme.bar)
         .sheet(isPresented: $showStatesSheet) { statesConfigSheet }
+        .onAppear {
+            // Test affordance: auto-open the "Play models" modal so it can be
+            // screenshotted on the sim (simctl can't tap). PYMOL_AUTOSTATESHEET=1.
+            if ProcessInfo.processInfo.environment["PYMOL_AUTOSTATESHEET"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                    composerKind = "states"; showStatesSheet = true
+                }
+            }
+        }
         .confirmationDialog("Clear the timeline?", isPresented: $showClearConfirm, titleVisibility: .visible) {
             Button("Clear timeline", role: .destructive) { engine.clearMovieItems() }
             Button("Cancel", role: .cancel) {}
@@ -861,17 +870,16 @@ struct TimelinePanel: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            // Range + duration on ONE row.
-            HStack(spacing: 18) {
-                Stepper("Start \(first)",
-                        value: Binding(get: { first }, set: { sheetFirst = min($0, last) }),
-                        in: 1...max(1, n)).fixedSize()
-                Stepper("End \(last)",
-                        value: Binding(get: { last }, set: { sheetLast = max($0, first) }),
-                        in: 1...max(1, n)).fixedSize()
-                Stepper("\(String(format: "%.0f", sheetDuration)) s",
-                        value: $sheetDuration, in: 1...30, step: 1).fixedSize()
-                Spacer(minLength: 0)
+            // Range + duration: one row where it fits (macOS/iPad), wrapping to two
+            // rows on a narrow phone (iOS steppers are wider than macOS controls).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 18) {
+                    rangeStart(first, last, n); rangeEnd(first, last, n); rangeDuration()
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 18) { rangeStart(first, last, n); rangeEnd(first, last, n) }
+                    rangeDuration()
+                }
             }
 
             HStack(spacing: 10) {
@@ -893,8 +901,25 @@ struct TimelinePanel: View {
         #if os(macOS)
         .frame(width: 400)
         #else
-        .presentationDetents([.height(240)])
+        .presentationDetents([.height(300)])
         #endif
+    }
+
+    // Steppers for the "Play models" modal — reused in the one-row and wrapped
+    // (narrow-phone) layouts so both stay in sync.
+    @ViewBuilder private func rangeStart(_ first: Int, _ last: Int, _ n: Int) -> some View {
+        Stepper("Start \(first)",
+                value: Binding(get: { first }, set: { sheetFirst = min($0, last) }),
+                in: 1...max(1, n)).fixedSize()
+    }
+    @ViewBuilder private func rangeEnd(_ first: Int, _ last: Int, _ n: Int) -> some View {
+        Stepper("End \(last)",
+                value: Binding(get: { last }, set: { sheetLast = max($0, first) }),
+                in: 1...max(1, n)).fixedSize()
+    }
+    @ViewBuilder private func rangeDuration() -> some View {
+        Stepper("\(String(format: "%.0f", sheetDuration)) s",
+                value: $sheetDuration, in: 1...30, step: 1).fixedSize()
     }
 
     // MARK: - Playhead / geometry helpers
