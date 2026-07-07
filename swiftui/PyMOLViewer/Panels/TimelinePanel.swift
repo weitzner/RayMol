@@ -63,7 +63,13 @@ struct TimelinePanel: View {
     @State private var composerDuration: Double = 8
     @State private var composerAngle: Double = 30
     @State private var composerSecPerScene: Double = 3
-    @State private var composerStatesMode = "sweep"   // "Play models" clip: sweep | loop
+    @State private var composerStatesObject: String? = nil   // nil = all multi-state objects
+    // "Play models" config modal (opened by Append).
+    @State private var showStatesSheet = false
+    @State private var sheetMode: PyMOLEngine.StatesMode = .sweep
+    @State private var sheetFirst = 1
+    @State private var sheetLast = 0            // 0 = through the last model
+    @State private var sheetDuration: Double = 8
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -110,6 +116,7 @@ struct TimelinePanel: View {
             composer
         }
         .background(TimelineTheme.bar)
+        .sheet(isPresented: $showStatesSheet) { statesConfigSheet }
         .confirmationDialog("Clear the timeline?", isPresented: $showClearConfirm, titleVisibility: .visible) {
             Button("Clear timeline", role: .destructive) { engine.clearMovieItems() }
             Button("Cancel", role: .cancel) {}
@@ -376,9 +383,7 @@ struct TimelinePanel: View {
                 }
             } else {
                 ForEach(items.dropFirst()) { laid in
-                    connector(laid,
-                              prevX: xFor(items[laid.index - 1].frame, pps: pps),
-                              curX: xFor(laid.frame, pps: pps))
+                    connectorIfSequential(laid, items, pps: pps)
                 }
                 ForEach(items) { laid in
                     itemNode(laid, pps: pps)
@@ -424,6 +429,19 @@ struct TimelinePanel: View {
                 engine.seek(to: max(1, min(n, Int((frac * CGFloat(n - 1)).rounded()) + 1)))
             }
         )
+    }
+
+    // A connector only bridges two consecutive SEQUENTIAL items (the transition
+    // bar). Frame-anchored items (a camera dropped inside a states clip) are off
+    // the sequential chain, so they get no connector.
+    @ViewBuilder
+    private func connectorIfSequential(_ laid: Laid, _ items: [Laid], pps: CGFloat) -> some View {
+        let prevAnchored = items[laid.index - 1].item.atFrame != nil
+        if laid.item.atFrame == nil && !prevAnchored {
+            connector(laid,
+                      prevX: xFor(items[laid.index - 1].frame, pps: pps),
+                      curX: xFor(laid.frame, pps: pps))
+        }
     }
 
     // The transition INTO `laid.item` (the gap from the previous item), shown as
@@ -534,15 +552,19 @@ struct TimelinePanel: View {
     // decimated guide ticks (never one per model — a 2000-frame MD stays a block).
     private func statesNode(_ laid: Laid, spec: PyMOLEngine.StatesSpec, pps: CGFloat) -> some View {
         let w = max(30, xFor(laid.endFrame, pps: pps) - xFor(laid.frame, pps: pps))
-        let label: String = spec.objects.map {
+        let who: String = spec.objects.map {
             $0.count == 1 ? $0[0] : "\($0.count) objects"
         } ?? "\(engine.maxStateCount) models"
+        // Show the model range only when it's a subset (e.g. "3–7").
+        let rangeSuffix = (spec.firstModel > 1 || (spec.lastModel > 0 && spec.lastModel < engine.maxStateCount))
+            ? " \(spec.firstModel)–\(spec.lastModel > 0 ? spec.lastModel : engine.maxStateCount)" : ""
+        let label = who + rangeSuffix
         return RoundedRectangle(cornerRadius: 4)
-            .fill(TimelineTheme.accent.opacity(0.28))
+            .fill(TimelineTheme.accent.opacity(0.10))     // discreet — blends with the lane
             .overlay(
-                HStack(spacing: 0) {   // ≤ 10 decimated guide ticks
+                HStack(spacing: 0) {   // ≤ 10 faint guide ticks
                     ForEach(0..<10, id: \.self) { i in
-                        if i > 0 { Rectangle().fill(TimelineTheme.accent.opacity(0.35)).frame(width: 1) }
+                        if i > 0 { Rectangle().fill(TimelineTheme.accent.opacity(0.18)).frame(width: 1) }
                         Spacer(minLength: 0)
                     }
                 }
@@ -552,10 +574,11 @@ struct TimelinePanel: View {
                     Image(systemName: spec.mode == .loop ? "repeat" : "film.stack").font(.system(size: 8))
                     Text(label).font(.system(size: 10, weight: .medium)).lineLimit(1)
                 }
-                .foregroundColor(TimelineTheme.text)
+                .foregroundColor(TimelineTheme.text.opacity(0.85))
                 .padding(.horizontal, 6)
             )
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(TimelineTheme.accent, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 4)
+                .stroke(TimelineTheme.accent.opacity(0.45), lineWidth: 0.75))
             .frame(width: w, height: laneH - 16)
             .accessibilityLabel("Play models clip \(label)")
     }
@@ -581,7 +604,9 @@ struct TimelinePanel: View {
                     ForEach([PyMOLEngine.StatesMode.sweep, .loop, .lockstep], id: \.self) { m in
                         Button {
                             engine.updateStatesClip(laid.item.id, PyMOLEngine.StatesSpec(
-                                objects: spec.objects, mode: m, durationSeconds: spec.durationSeconds))
+                                objects: spec.objects, mode: m,
+                                firstModel: spec.firstModel, lastModel: spec.lastModel,
+                                durationSeconds: spec.durationSeconds))
                         } label: { Label(m.rawValue.capitalized, systemImage: spec.mode == m ? "checkmark" : "circle") }
                     }
                 }
@@ -589,7 +614,9 @@ struct TimelinePanel: View {
                     ForEach([2.0, 4.0, 8.0, 12.0], id: \.self) { d in
                         Button {
                             engine.updateStatesClip(laid.item.id, PyMOLEngine.StatesSpec(
-                                objects: spec.objects, mode: spec.mode, durationSeconds: d))
+                                objects: spec.objects, mode: spec.mode,
+                                firstModel: spec.firstModel, lastModel: spec.lastModel,
+                                durationSeconds: d))
                         } label: { Label("\(Int(d)) s", systemImage: spec.durationSeconds == d ? "checkmark" : "clock") }
                     }
                 }
@@ -611,9 +638,14 @@ struct TimelinePanel: View {
             .onEnded { _ in
                 let dropX = dragX
                 dragItemID = nil
-                let others = engine.itemFrames().enumerated().filter { $0.offset != laid.index }
-                let target = others.filter { xFor($0.element, pps: pps) < dropX }.count
-                engine.moveItem(from: laid.index, to: target)
+                if laid.item.atFrame != nil {
+                    // Frame-anchored (camera inside a clip): drag re-times it.
+                    engine.setItemAtFrame(laid.item.id, frame(atX: dropX, pps: pps))
+                } else {
+                    let others = engine.itemFrames().enumerated().filter { $0.offset != laid.index }
+                    let target = others.filter { xFor($0.element, pps: pps) < dropX }.count
+                    engine.moveItem(from: laid.index, to: target)
+                }
             }
     }
 
@@ -701,15 +733,15 @@ struct TimelinePanel: View {
                     .help("Motion preset to append")
 
                     if composerKind == "states" {
+                        // Just pick which object(s); mode / range / duration are set
+                        // in the modal opened by Append.
                         Menu {
-                            Button("Sweep 1→N") { composerStatesMode = "sweep" }
-                            Button("Loop 1→N→1") { composerStatesMode = "loop" }
-                        } label: { composerChip(composerStatesMode.capitalized, "film.stack") }
-                        .help("How to play the models")
-                        Menu {
-                            ForEach([4, 8, 12], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
-                        } label: { composerChip("\(Int(composerDuration))s", "clock") }
-                        .help("Duration of the model playthrough")
+                            Button("All models") { composerStatesObject = nil }
+                            ForEach(engine.multiStateObjects(), id: \.name) { o in
+                                Button("\(o.name) · \(o.count)") { composerStatesObject = o.name }
+                            }
+                        } label: { composerChip(composerStatesObject ?? "All", "cube.box") }
+                        .help("Which object(s) to play through their models")
                     } else if composerKind == "roll" || composerKind == "rock" {
                         Menu {
                             ForEach(["x", "y", "z"], id: \.self) { a in
@@ -792,10 +824,60 @@ struct TimelinePanel: View {
         case "scenes":
             engine.appendScenesTemplate(secondsPerScene: composerSecPerScene)
         case "states":
-            engine.appendStatesClip(objects: nil,
-                                    mode: composerStatesMode == "loop" ? .loop : .sweep,
-                                    seconds: composerDuration)
+            // Open the config modal (mode / model range / duration).
+            let n = composerStatesObject
+                .flatMap { name in engine.multiStateObjects().first { $0.name == name }?.count }
+                ?? engine.maxStateCount
+            sheetMode = .sweep; sheetFirst = 1; sheetLast = max(2, n); sheetDuration = 8
+            showStatesSheet = true
         default: break
+        }
+    }
+
+    // "Play models" configuration modal. Objects come from the composer dropdown;
+    // here the user picks the motion, the model range, and the duration.
+    private var statesConfigSheet: some View {
+        let n = composerStatesObject
+            .flatMap { name in engine.multiStateObjects().first { $0.name == name }?.count }
+            ?? engine.maxStateCount
+        let target = composerStatesObject ?? "all models"
+        return NavigationStack {
+            Form {
+                Section("Motion") {
+                    Picker("Play", selection: $sheetMode) {
+                        Text("Sweep (1→N)").tag(PyMOLEngine.StatesMode.sweep)
+                        Text("Loop (1→N→1)").tag(PyMOLEngine.StatesMode.loop)
+                        Text("Lockstep (shared)").tag(PyMOLEngine.StatesMode.lockstep)
+                    }
+                }
+                Section("Model range · \(target) (\(n) models)") {
+                    Stepper("Start model: \(sheetFirst)", value: $sheetFirst, in: 1...max(1, n))
+                        .onChange(of: sheetFirst) { _ in if sheetLast < sheetFirst { sheetLast = sheetFirst } }
+                    Stepper("End model: \(sheetLast)", value: $sheetLast, in: 1...max(1, n))
+                        .onChange(of: sheetLast) { _ in if sheetFirst > sheetLast { sheetFirst = sheetLast } }
+                }
+                Section("Duration") {
+                    Stepper("\(String(format: "%.0f", sheetDuration)) s", value: $sheetDuration, in: 1...30, step: 1)
+                }
+            }
+            .navigationTitle("Play models")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showStatesSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        engine.appendStatesClip(
+                            objects: composerStatesObject.map { [$0] },
+                            mode: sheetMode, firstModel: sheetFirst, lastModel: sheetLast,
+                            seconds: sheetDuration)
+                        showStatesSheet = false
+                    }
+                }
+            }
         }
     }
 
