@@ -748,6 +748,13 @@ struct ObjectPanel: View {
 
             Divider()
 
+            // Model playback for the active multi-state object (NMR/MD inspection),
+            // decoupled from the movie timeline. Only when an ensemble is loaded.
+            if !engine.multiStateObjects().isEmpty {
+                ModelPlaybackBar()
+                Divider().opacity(0.5)
+            }
+
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
                     let objects = engine.objects.filter { !$0.isSelection }
@@ -1669,36 +1676,65 @@ private struct ObjectRowContent: View {
 
 // MARK: - Per-object model playback (NMR/MD inspection, detached from the movie)
 
-/// Minimal condensed transport (buttons only, no slider) for stepping a
-/// multi-state object's models. Drives the core frame (shared with the movie),
-/// which is fine for inspecting a loaded ensemble; opening the Movie tab stops it.
-private struct ModelTransportRow: View {
-    let entry: ObjectEntry
+/// A single condensed model transport at the TOP of the Object panel: a dropdown
+/// picks the active multi-state object; buttons only (no slider) step its models.
+/// Drives the core frame (shared with the movie) — fine for inspecting a loaded
+/// ensemble; opening the Movie tab stops it. Renders nothing with no multi-state
+/// objects loaded.
+private struct ModelPlaybackBar: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject var playback: PlaybackState
-    private var cur: Int { min(max(playback.currentFrame, 1), entry.stateCount) }
+    @State private var selected: String?
+
+    private var objs: [(name: String, count: Int)] { engine.multiStateObjects() }
+    private var active: (name: String, count: Int)? {
+        objs.first { $0.name == selected } ?? objs.first
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Spacer().frame(width: 13 + kGutterW - 4)   // indent under the name
-            btn("backward.end.fill", "First model") { engine.rewindMovie() }
-            btn("backward.fill", "Previous model") { engine.stepBackward() }
-            Button { engine.togglePlay() } label: {
-                Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(PanelTheme.accentColor)
-                    .frame(width: 22, height: 20).contentShape(Rectangle())
+        if let a = active {
+            let cur = min(max(playback.currentFrame, 1), a.count)
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(objs, id: \.name) { o in
+                        Button("\(o.name) · \(o.count) models") { selected = o.name }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "cube.box").font(.system(size: 9))
+                        Text(a.name).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 7))
+                    }
+                    .foregroundColor(PanelTheme.textColor)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Capsule().fill(PanelTheme.buttonBackground))
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Which multi-state object to step")
+
+                Spacer(minLength: 4)
+
+                btn("backward.end.fill", "First model") { engine.rewindMovie() }
+                btn("backward.fill", "Previous model") { engine.stepBackward() }
+                Button { engine.togglePlay() } label: {
+                    Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(PanelTheme.accentColor)
+                        .frame(width: 24, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(playback.isPlaying ? "Pause" : "Play models")
+                btn("forward.fill", "Next model") { engine.stepForward() }
+                btn("forward.end.fill", "Last model") { engine.endingMovie() }
+
+                Text("\(cur) / \(a.count)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(PanelTheme.disabledColor)
+                    .frame(minWidth: 42, alignment: .trailing)
             }
-            .buttonStyle(.plain)
-            .help(playback.isPlaying ? "Pause" : "Play models")
-            btn("forward.fill", "Next model") { engine.stepForward() }
-            btn("forward.end.fill", "Last model") { engine.endingMovie() }
-            Spacer(minLength: 6)
-            Text("\(cur) / \(entry.stateCount)")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(PanelTheme.disabledColor)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(PanelTheme.rowAltBackground.opacity(0.5))
         }
-        .padding(.horizontal, 4).padding(.bottom, 4)
     }
 
     private func btn(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
@@ -1754,13 +1790,6 @@ private struct ObjectCard: View {
             .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
             // Long-press (iOS) / right-click (macOS) opens the action menu.
             .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
-
-            // Minimal per-object model playback (buttons only, no slider) — steps
-            // this ensemble's models. Multi-state objects only; always visible.
-            if entry.stateCount > 1 {
-                ModelTransportRow(entry: entry)
-                    .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
-            }
 
             if expanded {
                 VStack(spacing: 3) {

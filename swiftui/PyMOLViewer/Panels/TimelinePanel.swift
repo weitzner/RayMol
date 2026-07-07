@@ -110,8 +110,13 @@ struct TimelinePanel: View {
             Rectangle().fill(TimelineTheme.accent.opacity(0.35)).frame(height: 1)
             tracksSection
             scenePaletteStrip
-            Divider()
-            TransportBar(forceCompact: isCompact, inTimeline: true)
+            // The transport plays ONLY the authored movie — decoupled from model
+            // inspection (that lives in the Object panel). No items = nothing to
+            // play, so the transport is hidden until the timeline has content.
+            if !engine.timelineItems.isEmpty {
+                Divider()
+                TransportBar(forceCompact: isCompact, inTimeline: true)
+            }
             Divider().opacity(0.5)
             composer
         }
