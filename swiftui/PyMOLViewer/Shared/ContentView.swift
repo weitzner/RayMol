@@ -430,7 +430,7 @@ struct ContentView: View {
                     .frame(width: 340)
             } else if showObjectPanel {
                 inspectorSwitcher
-                    .frame(width: 440)   // roomy enough for the Movie-tab transport (macOS controls are denser than iOS)
+                    .frame(width: 340)   // compact; the Movie-tab transport is shrunk (TransportBar kT* consts) to fit rather than widening the column
             }
         }
         } // end VStack

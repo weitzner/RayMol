@@ -25,6 +25,25 @@ enum TimelineTheme {
     static let dim = Color(white: 0.55)
 }
 
+// Transport control sizing. The transport is embedded in the timeline, which on
+// macOS lives in the narrow (~340pt) right inspector. macOS is pointer-driven and
+// its native controls render denser, so it uses smaller buttons + tighter spacing
+// so the single compact row (cluster + loop + fps + counter) fits 340 without
+// clipping. iOS keeps larger touch targets (iPhone/iPad transports are unchanged).
+#if os(iOS)
+private let kTBtnW: CGFloat = 40
+private let kTPlayW: CGFloat = 44
+private let kTBtnH: CGFloat = 36
+private let kTRowSpacing: CGFloat = 6
+private let kTRowHPad: CGFloat = 12
+#else
+private let kTBtnW: CGFloat = 30
+private let kTPlayW: CGFloat = 34
+private let kTBtnH: CGFloat = 30
+private let kTRowSpacing: CGFloat = 4
+private let kTRowHPad: CGFloat = 8
+#endif
+
 struct TransportBar: View {
     @EnvironmentObject var engine: PyMOLEngine
     // Observe the isolated playback object so frame ticks re-render ONLY this
@@ -94,7 +113,7 @@ struct TransportBar: View {
     private var compactFull: some View {
         Group {
             if inTimeline {
-                HStack(spacing: 6) {
+                HStack(spacing: kTRowSpacing) {
                     transportCluster
                     Spacer(minLength: 4)
                     loopButton
@@ -102,7 +121,7 @@ struct TransportBar: View {
                     counter
                 }
                 .tint(TimelineTheme.accent)
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .padding(.horizontal, kTRowHPad).padding(.vertical, 8)
             } else {
                 VStack(spacing: 6) {
                     HStack {
@@ -167,7 +186,7 @@ struct TransportBar: View {
             Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
                 .font(.system(size: size, weight: .semibold))
                 .foregroundColor(TimelineTheme.accent)
-                .frame(width: 44, height: 36)
+                .frame(width: kTPlayW, height: kTBtnH)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -205,7 +224,7 @@ struct TransportBar: View {
             Image(systemName: "repeat")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(playback.movieLoop ? TimelineTheme.accent : TimelineTheme.dim)
-                .frame(width: 40, height: 36)
+                .frame(width: kTBtnW, height: kTBtnH)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -245,18 +264,32 @@ struct TransportBar: View {
                 Text("0.3 fps").tag(0.3)
             }
         } label: {
-            Text("\(fpsLabel) fps")
+            Text(fpsTightLabel)
                 .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
                 .fixedSize()
                 .foregroundColor(TimelineTheme.accent)
-                .frame(height: 36)
+                .frame(height: kTBtnH)
                 .padding(.horizontal, 2)
                 .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
+        #if os(macOS)
+        // Chrome-free so the native pull-down border doesn't widen the narrow row.
+        .menuStyle(.borderlessButton)
+        #endif
         .fixedSize()
         .help("Playback frame rate")
+    }
+
+    // The narrow row shows just the number on macOS ("30") to save width; iOS,
+    // with room to spare, keeps the clearer "30 fps".
+    private var fpsTightLabel: String {
+        #if os(macOS)
+        return fpsLabel
+        #else
+        return "\(fpsLabel) fps"
+        #endif
     }
 
     private var overflowMenu: some View {
@@ -309,7 +342,7 @@ struct TransportBar: View {
             Image(systemName: systemName)
                 .font(.system(size: size, weight: .semibold))
                 .foregroundColor(TimelineTheme.text)
-                .frame(width: 40, height: 36)
+                .frame(width: kTBtnW, height: kTBtnH)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
