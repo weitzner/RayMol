@@ -67,24 +67,26 @@ def _multistate_objects(names=None):
     return out
 
 
-def _emit_state_sweep(obj, nstates, start, end, mode='sweep'):
-    """Store per-object STATE keyframes so `obj` sweeps 1..nstates across movie
+def _emit_state_sweep(obj, lo, hi, start, end, mode='sweep'):
+    """Store per-object STATE keyframes so `obj` sweeps models lo..hi across movie
     frames [start,end], then interpolate that object's own track. Both endpoints
     are flagged (state=) so View.cpp interpolates the state channel; the per-object
     ViewElem sets the object's own `state` at render (independent of the mset and
-    of other objects). mode: 'sweep' (1->N) or 'loop' (1->N->1)."""
+    of other objects). mode: 'sweep' (lo->hi) or 'loop' (lo->hi->lo)."""
     try:
-        s = int(start); e = int(end); n = int(nstates)
+        s = int(start); e = int(end); lo = int(lo); hi = int(hi)
         if e <= s:
             e = s + 1
+        if hi < lo:
+            lo, hi = hi, lo
         if mode == 'loop':
             mid = (s + e) // 2
-            cmd.mview('store', object=obj, first=s,   state=1)
-            cmd.mview('store', object=obj, first=mid, state=n)
-            cmd.mview('store', object=obj, first=e,   state=1)
+            cmd.mview('store', object=obj, first=s,   state=lo)
+            cmd.mview('store', object=obj, first=mid, state=hi)
+            cmd.mview('store', object=obj, first=e,   state=lo)
         else:
-            cmd.mview('store', object=obj, first=s, state=1)
-            cmd.mview('store', object=obj, first=e, state=n)
+            cmd.mview('store', object=obj, first=s, state=lo)
+            cmd.mview('store', object=obj, first=e, state=hi)
         cmd.mview('interpolate', object=obj)
     except Exception as ex:
         print('MOVIE_ERR:' + str(ex))
@@ -416,23 +418,29 @@ def rebuild(spec_json):
             for clip in state_clips:
                 start = int(clip['frame']); end = int(clip.get('end', total))
                 mode = str(clip.get('mode', 'sweep'))
+                req_first = int(clip.get('first', 1) or 1)
+                req_last = int(clip.get('last', 0) or 0)   # 0 = through the last model
                 ms = _multistate_objects(clip.get('objects'))
                 if mode == 'lockstep':
-                    # One global sweep to the max count; shorter objects clamp.
+                    # One global state sweep across [start,end]; shorter objects clamp.
                     mx = max(ms.values()) if ms else 1
+                    lo = max(1, min(req_first, mx))
+                    hi = mx if req_last <= 0 else max(1, min(req_last, mx))
                     span = max(1, end - start)
                     seq = ' '.join(
-                        str(int(1 + round((mx - 1) * (i - start) / span)))
+                        str(int(lo + round((hi - lo) * (i - start) / span)))
                         for i in range(start, end + 1))
                     cmd.mset(seq, start)   # overwrite that span of the global mset
                 else:
                     for obj, n in ms.items():
-                        _emit_state_sweep(obj, n, start, end, mode)
+                        lo = max(1, min(req_first, n))
+                        hi = n if req_last <= 0 else max(1, min(req_last, n))
+                        _emit_state_sweep(obj, lo, hi, start, end, mode)
         else:
             # Non-destructive default: auto-sweep every multi-state object across
             # the whole movie so a camera/scene movie never freezes the ensemble.
             for obj, n in _multistate_objects().items():
-                _emit_state_sweep(obj, n, 1, total, 'sweep')
+                _emit_state_sweep(obj, 1, n, 1, total, 'sweep')
 
         cmd.rewind()
     except Exception as e:

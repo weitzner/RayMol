@@ -204,10 +204,12 @@ final class PyMOLEngine: ObservableObject {
         var linear: Bool = false     // false = smooth (eased) default
     }
     enum StatesMode: String, Equatable { case sweep, loop, lockstep }
-    // A "Play models" clip: sweep one or more multi-state objects across a span.
+    // A "Play models" clip: sweep a model range of one/all multi-state objects.
     struct StatesSpec: Equatable {
         var objects: [String]? = nil          // nil = all multi-state objects
         var mode: StatesMode = .sweep
+        var firstModel: Int = 1               // play models firstModel..lastModel
+        var lastModel: Int = 0                // 0 = through the object's last model
         var durationSeconds: Double = 4.0
     }
     struct TimelineItem: Identifiable, Equatable {
@@ -216,10 +218,14 @@ final class PyMOLEngine: ObservableObject {
         var kind: Kind
         var transition: Transition   // transition INTO this item (item[0]'s ignored)
         var pinnedState: Int? = nil  // camera/scene: hold this model (opt out of auto-sweep)
+        // Explicit timeline frame. When set, the item sits at this absolute frame
+        // (may overlap a states clip) instead of the sequential transition layout —
+        // used for camera keyframes dropped at the playhead during a clip.
+        var atFrame: Int? = nil
         init(id: UUID = UUID(), kind: Kind, transition: Transition = Transition(),
-             pinnedState: Int? = nil) {
+             pinnedState: Int? = nil, atFrame: Int? = nil) {
             self.id = id; self.kind = kind; self.transition = transition
-            self.pinnedState = pinnedState
+            self.pinnedState = pinnedState; self.atFrame = atFrame
         }
     }
     @Published var timelineItems: [TimelineItem] = []
@@ -1405,21 +1411,28 @@ final class PyMOLEngine: ObservableObject {
     func itemSpans() -> [(start: Int, end: Int)] {
         guard !timelineItems.isEmpty else { return [] }
         let fps = max(playback.movieFPS, 1)
-        var out: [(Int, Int)] = []
+        var out = [(start: Int, end: Int)](repeating: (1, 1), count: timelineItems.count)
         var acc = 0.0
+        var lastSeqEnd = 0
+        var seenSeq = false
         for (i, it) in timelineItems.enumerated() {
+            // Positioned items (a camera dropped at the playhead) sit at their
+            // absolute frame and don't participate in the sequential layout.
+            if let af = it.atFrame {
+                out[i] = (max(1, af), max(1, af)); continue
+            }
             let start: Int
-            if i == 0 {
-                start = 1
+            if !seenSeq {
+                start = 1; seenSeq = true
             } else {
                 acc += max(it.transition.seconds, 0.1)
-                start = max((out.last?.1 ?? 0) + 1, 1 + Int((acc * fps).rounded()))
+                start = max(lastSeqEnd + 1, 1 + Int((acc * fps).rounded()))
             }
             var end = start
             if case .states(let spec) = it.kind {
                 end = start + max(1, Int((spec.durationSeconds * fps).rounded()))
             }
-            out.append((start, end))
+            out[i] = (start, end); lastSeqEnd = end
         }
         return out
     }
@@ -1464,7 +1477,8 @@ final class PyMOLEngine: ObservableObject {
                     "[" + $0.map { "\"\($0)\"" }.joined(separator: ",") + "]"
                 } ?? "null"
                 parts.append("{\"frame\":\(start),\"end\":\(end),\"states\":1,"
-                    + "\"objects\":\(objs),\"mode\":\"\(spec.mode.rawValue)\"}")
+                    + "\"objects\":\(objs),\"mode\":\"\(spec.mode.rawValue)\","
+                    + "\"first\":\(spec.firstModel),\"last\":\(spec.lastModel)}")
             }
         }
         let json = "[" + parts.joined(separator: ",") + "]"
@@ -1482,13 +1496,28 @@ final class PyMOLEngine: ObservableObject {
     }
     var maxStateCount: Int { objects.map { $0.stateCount }.max() ?? 1 }
 
-    // Append a "Play models" states clip (sweeps multi-state objects over `seconds`).
-    func appendStatesClip(objects: [String]? = nil,
-                          mode: StatesMode = .sweep, seconds: Double = 4.0) {
+    // Append a "Play models" states clip (sweeps a model range over `seconds`).
+    func appendStatesClip(objects: [String]? = nil, mode: StatesMode = .sweep,
+                          firstModel: Int = 1, lastModel: Int = 0, seconds: Double = 4.0) {
         guard isReady else { return }
-        let spec = StatesSpec(objects: objects, mode: mode, durationSeconds: seconds)
+        let spec = StatesSpec(objects: objects, mode: mode,
+                              firstModel: firstModel, lastModel: lastModel, durationSeconds: seconds)
         timelineItems.append(TimelineItem(kind: .states(spec)))
         rebuildMovie()
+    }
+
+    // Re-position a frame-anchored camera item (dragged along the lane).
+    func setItemAtFrame(_ id: UUID, _ frame: Int) {
+        guard let i = timelineItems.firstIndex(where: { $0.id == id }),
+              timelineItems[i].atFrame != nil else { return }
+        timelineItems[i].atFrame = max(1, frame)
+        rebuildMovie()
+    }
+
+    // True when the lane has a "Play models" clip (camera keyframes then anchor to
+    // the playhead so they can be placed within the clip's span).
+    var hasStatesClip: Bool {
+        timelineItems.contains { if case .states = $0.kind { return true } else { return false } }
     }
 
     // Pin (or clear) the coordinate state a camera/scene item holds.
@@ -1517,7 +1546,11 @@ final class PyMOLEngine: ObservableObject {
     // Append a camera keyframe of the CURRENT view to the end of the lane.
     func captureCameraItem() {
         guard isReady else { return }
-        let item = TimelineItem(kind: .camera)
+        // With a "Play models" clip present, anchor the keyframe at the current
+        // playhead so it can be dropped WITHIN the clip's span (camera moves while
+        // the models cycle). Otherwise append sequentially as before.
+        let at = hasStatesClip ? max(1, playback.currentFrame) : nil
+        let item = TimelineItem(kind: .camera, atFrame: at)
         runPython("from pymol import appkit_movie as _am\n_am.capture_view('\(item.id.uuidString)')")
         timelineItems.append(item)
         rebuildMovie()

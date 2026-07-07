@@ -67,6 +67,20 @@ class TestMultistateTimeline(testing.PyMOLTestCase):
         self.assertEqual(max(ls), 40)            # long reaches its own max
         self.assertGreaterEqual(max(ss), 5)      # and short reaches its own max
 
+    def test_states_clip_model_range(self):
+        cmd.reinitialize()
+        self._ensemble('nmr', 10)
+        spec = [{'frame': 1, 'end': 80, 'states': 1, 'objects': None,
+                 'mode': 'sweep', 'first': 3, 'last': 7}]
+        appkit_movie.rebuild(json.dumps(spec))
+        seen = set()
+        for f in list(range(1, cmd.count_frames() + 1, 6)) + [cmd.count_frames()]:
+            cmd.frame(f); cmd.ray(20, 20)
+            seen.add(int(cmd.get('state', 'nmr')))
+        self.assertGreaterEqual(min(seen), 3)     # never below the requested first
+        self.assertLessEqual(max(seen), 7)        # never above the requested last
+        self.assertEqual(max(seen), 7)
+
     def test_reset_ensemble_restores_all_models(self):
         cmd.reinitialize()
         self._ensemble('nmr', 10)
