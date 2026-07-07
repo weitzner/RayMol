@@ -1316,7 +1316,11 @@ private struct LabeledSlider: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Slider(value: $local, in: prop.min...prop.max, step: prop.step,
+            // Continuous (no `step`): a stepped Slider draws busy tick marks on
+            // macOS. Values are rounded for display (fmt) and when applied
+            // (fmtScene / the mm/zoom mappings), so dropping the step only removes
+            // the ticks, not the effective granularity.
+            Slider(value: $local, in: prop.min...prop.max,
                    onEditingChanged: { began in
                        editing = began
                        if !began { onCommit(local) }
