@@ -1800,11 +1800,14 @@ private struct ObjectCard: View {
                 Button { engine.toggleObjectStates(entry.name) } label: {
                     Image(systemName: engine.playingObjects.contains(entry.name) ? "pause.fill" : "play.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(TimelineTheme.accent)
+                        .foregroundColor(engine.timelineMode ? PanelTheme.disabledColor : TimelineTheme.accent)
                         .frame(width: 24, height: 20).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(engine.playingObjects.contains(entry.name) ? "Pause" : "Play models")
+                .disabled(engine.timelineMode)   // authoring a movie → model playback off
+                .help(engine.timelineMode
+                      ? "Model playback is off while the movie timeline is open — close it to inspect models"
+                      : (engine.playingObjects.contains(entry.name) ? "Pause" : "Play models"))
                 Spacer(minLength: 0)
                 Menu {
                     ForEach([1.0, 5.0, 10.0, 15.0, 30.0], id: \.self) { f in

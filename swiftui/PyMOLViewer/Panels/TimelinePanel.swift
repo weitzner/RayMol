@@ -436,7 +436,7 @@ struct TimelinePanel: View {
         .contentShape(Rectangle())
         .position(x: midX, y: laneH / 2)
         .contextMenu { transitionMenu(laid.item) }
-        .help("Transition · \(fmtSeconds(laid.item.transition.seconds)) · \(linear ? "Linear" : "Smooth") — long-press to change")
+        .help("Transition · \(fmtSeconds(laid.item.transition.seconds)) · \(linear ? "Linear" : "Smooth") — right-click to adjust duration & easing")
         .accessibilityLabel("Transition \(fmtSeconds(laid.item.transition.seconds)) \(linear ? "linear" : "smooth")")
     }
 
