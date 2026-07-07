@@ -63,6 +63,10 @@ struct TransportBar: View {
     /// Make/Export — those live in the top Export menu), regardless of whether the
     /// bottom dock (engine.timelineMode) is open.
     var inTimeline: Bool = false
+    /// When set (movie/timeline transport), the counter + scrubber reflect the
+    /// AUTHORED movie length instead of the core frame count — so the movie
+    /// transport stays decoupled from multi-state model inspection.
+    var movieFrames: Int? = nil
 
     @State private var showBuilder = false
     @State private var showExport = false
@@ -194,13 +198,18 @@ struct TransportBar: View {
         .help(playback.isPlaying ? "Pause" : "Play")
     }
 
+    // Total frames shown/scrubbed: the authored movie length when provided
+    // (timeline transport), else the core frame count.
+    private var totalFrames: Int { max(movieFrames ?? playback.frameCount, 1) }
+    private var shownFrame: Int { min(max(playback.currentFrame, 1), totalFrames) }
+
     private var scrubber: some View {
         Slider(
             value: Binding(
-                get: { Double(min(max(playback.currentFrame, 1), max(playback.frameCount, 1))) },
+                get: { Double(shownFrame) },
                 set: { engine.scrub(to: Int($0.rounded())) }
             ),
-            in: 1...Double(max(playback.frameCount, 2)),
+            in: 1...Double(max(totalFrames, 2)),
             step: 1,
             onEditingChanged: { editing in if !editing { engine.endScrub() } }
         )
@@ -211,8 +220,8 @@ struct TransportBar: View {
     private var counter: some View {
         // Reserve width for the movie's max digit count ("NNN / NNN") so the
         // current frame number growing (1 → N digits) never shifts neighbors.
-        let digits = String(max(playback.frameCount, 1)).count
-        return Text("\(playback.currentFrame) / \(playback.frameCount)")
+        let digits = String(totalFrames).count
+        return Text("\(shownFrame) / \(totalFrames)")
             .font(.system(size: 12, weight: .medium, design: .monospaced))
             .foregroundColor(TimelineTheme.text)
             .lineLimit(1)
