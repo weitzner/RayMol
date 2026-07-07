@@ -352,6 +352,7 @@ final class PyMOLEngine: ObservableObject {
                     case "rock":   self.appendCameraTemplate(kind: "rock", duration: 8, axis: "y", angle: 30)
                     case "scenes": self.appendScenesTemplate(secondsPerScene: 3)
                     case "cam":    self.captureCameraItem()
+                    case "states": self.appendStatesClip(objects: nil, mode: .sweep, seconds: 8)
                     default: break
                     }
                 }
