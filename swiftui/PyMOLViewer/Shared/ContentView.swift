@@ -106,6 +106,15 @@ private enum InspectorTab: String, CaseIterable, Identifiable {
         case .display: return "slider.horizontal.3"
         }
     }
+    /// One-line description shown under the segmented tab picker.
+    var blurb: String {
+        switch self {
+        case .objects: return "Structures, representations & model playback"
+        case .scenes:  return "Store & recall saved views"
+        case .movie:   return "Camera keyframes, scenes & model clips"
+        case .display: return "Background, lighting & effects"
+        }
+    }
 }
 
 private let landscapePanelTabSpecs: [PanelTabSpec] = [
@@ -1064,6 +1073,8 @@ struct ContentView: View {
             if hSize == .compact {
                 withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = (tab == 2) }
             }
+            // Entering the Movie tab = authoring; stop any model-inspection playback.
+            if tab == 2 { engine.pause() }
         }
         // Programmatic entry (test hooks / "Open in movie"): flipping timelineMode
         // on iPhone jumps to the Movie tab that now HOSTS the timeline.
@@ -1558,17 +1569,8 @@ struct ContentView: View {
                 #endif
             }
             .animation(.easeOut(duration: 0.35), value: hasRestoreSnapshot)
-            // Timeline transport: floats over the bottom of the viewport when
-            // there's more than one frame. A collapsing peek on iPhone; a pinned
-            // full-width bar on iPad.
-            .overlay(alignment: .bottom) {
-                // Timeline MODE docks the panel as a sibling (see iosTimelineLayout);
-                // here we only float the compact transport when a movie exists and
-                // we're NOT in timeline mode.
-                if engine.hasTimeline && !engine.timelineMode {
-                    transportOverlay
-                }
-            }
+            // (The floating viewport transport was removed: movie playback lives in
+            // the Movie tab, and multi-state model stepping lives in the Object panel.)
             // Opt-in glanceable scene buttons (Scenes tab → "Show scene buttons
             // in viewport"). Sits above the transport when a timeline is present.
             .overlay(alignment: .bottomLeading) {
@@ -1576,7 +1578,7 @@ struct ContentView: View {
                     .padding(.leading, 12)
                     // Sit clear ABOVE the floating transport (only present when a
                     // movie exists and we're NOT in timeline mode).
-                    .padding(.bottom, (engine.hasTimeline && !engine.timelineMode) ? 96 : 12)
+                    .padding(.bottom, 12)
             }
             // Camera control dock: a bottom-docked icon strip (one control open at
             // a time). Same component on iPhone / iPad. Drag down or tap the chip
@@ -1585,7 +1587,7 @@ struct ContentView: View {
                 if showCameraPanel && !engine.objects.isEmpty {
                     CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
                         .padding(.horizontal, 10)
-                        .padding(.bottom, (engine.hasTimeline && !engine.timelineMode) ? 84 : 10)
+                        .padding(.bottom, 10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .gesture(DragGesture().onEnded { v in
                             if v.translation.height > 40 {
@@ -1604,7 +1606,7 @@ struct ContentView: View {
                 .accessibilityLabel("Gesture help")
                 // Keep the help button clear of the floating transport (timeline mode
                 // docks the panel elsewhere, so the viewport is clear then).
-                .padding(.bottom, (engine.hasTimeline && !engine.timelineMode) ? 56 : 0)
+                .padding(.bottom, 0)
             }
             // Test-only hook (PYMOL_UITEST=1): surface the live selection size
             // so XCUITest can assert tap-to-select / clear behavior. Invisible
@@ -2211,8 +2213,16 @@ struct ContentView: View {
             .labelsHidden()
             .padding(.horizontal, 10)
             .padding(.top, 8)
-            .padding(.bottom, 7)
+            .padding(.bottom, 4)
+            Text(inspectorTab.blurb)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
             Divider()
+            // Model playback (Object-panel controls) is for inspecting an ensemble;
+            // entering the Movie tab means authoring, so stop any inspection playback.
             switch inspectorTab {
             case .objects:
                 ObjectPanel()
@@ -2251,6 +2261,14 @@ struct ContentView: View {
                     .padding(12)
                 }
             }
+        }
+        // Auto-stop model/movie playback when entering the Movie tab or expanding
+        // the timeline dock (you're authoring now, not inspecting the ensemble).
+        .onChange(of: inspectorTab) { tab in
+            if tab == .movie { engine.pause() }
+        }
+        .onChange(of: engine.timelineMode) { on in
+            if on { engine.pause() }
         }
     }
 

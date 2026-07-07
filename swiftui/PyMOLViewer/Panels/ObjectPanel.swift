@@ -1643,6 +1643,16 @@ private struct ObjectRowContent: View {
             .contentShape(Rectangle())
             .onTapGesture { toggleEnabled() }   // tap name = toggle enable
 
+        // Model / state count, right of the name (the structure's "frame count").
+        if entry.stateCount > 1 {
+            Text("\(entry.stateCount)")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundColor(PanelTheme.headerColor)
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(Capsule().fill(PanelTheme.buttonBackground))
+                .help("\(entry.stateCount) models / states")
+        }
+
         Spacer(minLength: 4)
 
         ActionMenuButton(name: entry.name)
@@ -1654,6 +1664,52 @@ private struct ObjectRowContent: View {
 
     private func toggleEnabled() {
         engine.runCommand(entry.isEnabled ? "disable \(entry.name)" : "enable \(entry.name)")
+    }
+}
+
+// MARK: - Per-object model playback (NMR/MD inspection, detached from the movie)
+
+/// Minimal condensed transport (buttons only, no slider) for stepping a
+/// multi-state object's models. Drives the core frame (shared with the movie),
+/// which is fine for inspecting a loaded ensemble; opening the Movie tab stops it.
+private struct ModelTransportRow: View {
+    let entry: ObjectEntry
+    @EnvironmentObject var engine: PyMOLEngine
+    @EnvironmentObject var playback: PlaybackState
+    private var cur: Int { min(max(playback.currentFrame, 1), entry.stateCount) }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Spacer().frame(width: 13 + kGutterW - 4)   // indent under the name
+            btn("backward.end.fill", "First model") { engine.rewindMovie() }
+            btn("backward.fill", "Previous model") { engine.stepBackward() }
+            Button { engine.togglePlay() } label: {
+                Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(PanelTheme.accentColor)
+                    .frame(width: 22, height: 20).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(playback.isPlaying ? "Pause" : "Play models")
+            btn("forward.fill", "Next model") { engine.stepForward() }
+            btn("forward.end.fill", "Last model") { engine.endingMovie() }
+            Spacer(minLength: 6)
+            Text("\(cur) / \(entry.stateCount)")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(PanelTheme.disabledColor)
+        }
+        .padding(.horizontal, 4).padding(.bottom, 4)
+    }
+
+    private func btn(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(PanelTheme.textColor)
+                .frame(width: 20, height: 20).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(label)
     }
 }
 
@@ -1698,6 +1754,13 @@ private struct ObjectCard: View {
             .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
             // Long-press (iOS) / right-click (macOS) opens the action menu.
             .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
+
+            // Minimal per-object model playback (buttons only, no slider) — steps
+            // this ensemble's models. Multi-state objects only; always visible.
+            if entry.stateCount > 1 {
+                ModelTransportRow(entry: entry)
+                    .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
+            }
 
             if expanded {
                 VStack(spacing: 3) {
