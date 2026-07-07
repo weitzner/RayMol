@@ -2315,10 +2315,11 @@ struct CameraDock: View {
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        // A centered, content-scaled card rather than a full-width bar. The bottom
-        // overlay centers it horizontally; this cap keeps it from spanning the
-        // whole viewport (esp. on iPad/macOS). Floor is set by the icon strip.
-        .frame(maxWidth: 320)
+        // Hug the icon strip tightly when collapsed (a compact centered pill); when
+        // a control is open, expand to fit the slider submenu, capped so it never
+        // spans the whole viewport. The bottom overlay centers it either way.
+        .fixedSize(horizontal: open == nil, vertical: false)
+        .frame(maxWidth: open == nil ? nil : 320)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
             .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
