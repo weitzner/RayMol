@@ -137,6 +137,13 @@ struct PyMOLApp: App {
                 Button("Check for Updates…") { updater.checkForUpdates() }
             }
             #endif
+            // Contact Support: opens the user's default mail client, pre-addressed
+            // to support@raymol.io. Lands in the Help menu (the standard macOS spot
+            // for support links). NSWorkspace URL-open works in the sandboxed Mac
+            // App Store build too, so this isn't gated behind RAYMOL_MAS_RESTRICTED.
+            CommandGroup(after: .help) {
+                Button("Contact Support…") { contactSupport() }
+            }
             CommandGroup(after: .newItem) {
                 Button("Open…") {
                     NotificationCenter.default.post(name: .raymolOpenFile, object: nil)
@@ -209,6 +216,12 @@ struct PyMOLApp: App {
         credits.append(NSAttributedString(string: "      ·      ", attributes: base))
         credits.append(link("GitHub", "https://github.com/javierbq/RayMol"))
         NSApplication.shared.orderFrontStandardAboutPanel(options: [.credits: credits])
+    }
+
+    // Open the default mail client with a message pre-addressed to support.
+    private func contactSupport() {
+        guard let url = URL(string: "mailto:support@raymol.io") else { return }
+        _ = NSWorkspace.shared.open(url)
     }
     #endif
 
