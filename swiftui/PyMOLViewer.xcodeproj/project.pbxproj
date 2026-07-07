@@ -52,6 +52,7 @@
 		B84285B5FAD1A429B1FCEDBF /* 1ubq.cif in Resources */ = {isa = PBXBuildFile; fileRef = 1A55383922D69D691CA1BAB1 /* 1ubq.cif */; };
 		BA6C9B288CFD5EB53D0E0057 /* RayMolMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9371B6FFB30D6166234C678B /* RayMolMain.swift */; };
 		CCA9FAAAD0E59CE43443B7DA /* PyMOLGestureUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8EE6573045A81CF52A9CDF5 /* PyMOLGestureUITests.swift */; };
+		AA11BB22CC33DD44EE55FF66 /* CameraOverlayUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF67 /* CameraOverlayUITests.swift */; };
 		CE45D81735E70E8FFFD49875 /* ThemeStudioPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B66833BF167209A47B9C15 /* ThemeStudioPanel.swift */; };
 		D35B766612AA47956AB18A75 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDC5E722722DEF7FBB1D649F /* ThemeManager.swift */; };
 		DA6EB8C81B26582A4F3AB478 /* TimelinePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B820FE9080BF73526A54CD66 /* TimelinePanel.swift */; };
@@ -111,6 +112,7 @@
 		CE692F1547C53D28B5F9A9AD /* MCPConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPConnectSheet.swift; sourceTree = "<group>"; };
 		D965CB609C447033E5DB0046 /* PyMOLApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PyMOLApp.swift; sourceTree = "<group>"; };
 		E8EE6573045A81CF52A9CDF5 /* PyMOLGestureUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PyMOLGestureUITests.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF67 /* CameraOverlayUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraOverlayUITests.swift; sourceTree = "<group>"; };
 		EDC5E722722DEF7FBB1D649F /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		F16058D96E2773BE9A24C323 /* RayMol.svg */ = {isa = PBXFileReference; path = RayMol.svg; sourceTree = "<group>"; };
 		F2078076B68D28457409F7A5 /* RayMol.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RayMol.entitlements; sourceTree = "<group>"; };
@@ -165,6 +167,7 @@
 			isa = PBXGroup;
 			children = (
 				E8EE6573045A81CF52A9CDF5 /* PyMOLGestureUITests.swift */,
+				AA11BB22CC33DD44EE55FF67 /* CameraOverlayUITests.swift */,
 			);
 			path = PyMOLViewerUITests;
 			sourceTree = "<group>";
@@ -776,6 +779,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CCA9FAAAD0E59CE43443B7DA /* PyMOLGestureUITests.swift in Sources */,
+				AA11BB22CC33DD44EE55FF66 /* CameraOverlayUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

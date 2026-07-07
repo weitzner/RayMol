@@ -256,6 +256,7 @@ def get_command_keywords(self_cmd=cmd):
         'set_title'     : [ self_cmd.set_title         , 0 , 0 , ''  , parsing.STRICT ],
         'set_key'       : [ self_cmd.set_key           , 0 , 0 , ''  , parsing.LITERAL1 ], # insecure
         'set_view'      : [ self_cmd.set_view          , 0 , 0 , ''  , parsing.STRICT ],
+        'set_fov'       : [ self_cmd.set_fov           , 0 , 0 , ''  , parsing.STRICT ],
         'show'          : [ self_cmd.show              , 0 , 0 , ''  , parsing.STRICT ],
         'slice_new'     : [ self_cmd.slice_new         , 0 , 0 , ''  , parsing.STRICT ],
         #      'slice_lock'    : [ self_cmd.slice_lock        , 0 , 0 , ''  , parsing.LEGACY ],
