@@ -841,6 +841,10 @@ struct TimelinePanel: View {
             .flatMap { name in engine.multiStateObjects().first { $0.name == name }?.count }
             ?? engine.maxStateCount
         let target = composerStatesObject ?? "all models"
+        // Resolve to a valid range regardless of prior state (0/out-of-range → 1…N),
+        // and drive both the steppers and Add from the resolved values.
+        let last = (sheetLast < 1 || sheetLast > n) ? n : sheetLast
+        let first = min(max(sheetFirst, 1), last)
         return NavigationStack {
             Form {
                 Section("Motion") {
@@ -851,13 +855,16 @@ struct TimelinePanel: View {
                     }
                 }
                 Section("Model range · \(target) (\(n) models)") {
-                    Stepper("Start model: \(sheetFirst)", value: $sheetFirst, in: 1...max(1, n))
-                        .onChange(of: sheetFirst) { _ in if sheetLast < sheetFirst { sheetLast = sheetFirst } }
-                    Stepper("End model: \(sheetLast)", value: $sheetLast, in: 1...max(1, n))
-                        .onChange(of: sheetLast) { _ in if sheetFirst > sheetLast { sheetFirst = sheetLast } }
+                    Stepper("Start model: \(first)",
+                            value: Binding(get: { first }, set: { sheetFirst = min($0, last) }),
+                            in: 1...max(1, n))
+                    Stepper("End model: \(last)",
+                            value: Binding(get: { last }, set: { sheetLast = max($0, first) }),
+                            in: 1...max(1, n))
                 }
                 Section("Duration") {
-                    Stepper("\(String(format: "%.0f", sheetDuration)) s", value: $sheetDuration, in: 1...30, step: 1)
+                    Stepper("\(String(format: "%.0f", sheetDuration)) s",
+                            value: $sheetDuration, in: 1...30, step: 1)
                 }
             }
             .navigationTitle("Play models")
@@ -872,7 +879,7 @@ struct TimelinePanel: View {
                     Button("Add") {
                         engine.appendStatesClip(
                             objects: composerStatesObject.map { [$0] },
-                            mode: sheetMode, firstModel: sheetFirst, lastModel: sheetLast,
+                            mode: sheetMode, firstModel: first, lastModel: last,
                             seconds: sheetDuration)
                         showStatesSheet = false
                     }
