@@ -845,47 +845,56 @@ struct TimelinePanel: View {
         // and drive both the steppers and Add from the resolved values.
         let last = (sheetLast < 1 || sheetLast > n) ? n : sheetLast
         let first = min(max(sheetFirst, 1), last)
-        return NavigationStack {
-            Form {
-                Section("Motion") {
-                    Picker("Play", selection: $sheetMode) {
-                        Text("Sweep (1→N)").tag(PyMOLEngine.StatesMode.sweep)
-                        Text("Loop (1→N→1)").tag(PyMOLEngine.StatesMode.loop)
-                        Text("Lockstep (shared)").tag(PyMOLEngine.StatesMode.lockstep)
-                    }
-                }
-                Section("Model range · \(target) (\(n) models)") {
-                    Stepper("Start model: \(first)",
-                            value: Binding(get: { first }, set: { sheetFirst = min($0, last) }),
-                            in: 1...max(1, n))
-                    Stepper("End model: \(last)",
-                            value: Binding(get: { last }, set: { sheetLast = max($0, first) }),
-                            in: 1...max(1, n))
-                }
-                Section("Duration") {
-                    Stepper("\(String(format: "%.0f", sheetDuration)) s",
-                            value: $sheetDuration, in: 1...30, step: 1)
-                }
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Play models").font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Text("\(target) · \(n) models").font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            .navigationTitle("Play models")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showStatesSheet = false }
+
+            // Motion — a segmented control (no wide dropdown).
+            Picker("", selection: $sheetMode) {
+                Text("Sweep").tag(PyMOLEngine.StatesMode.sweep)
+                Text("Loop").tag(PyMOLEngine.StatesMode.loop)
+                Text("Lockstep").tag(PyMOLEngine.StatesMode.lockstep)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            // Range + duration on ONE row.
+            HStack(spacing: 18) {
+                Stepper("Start \(first)",
+                        value: Binding(get: { first }, set: { sheetFirst = min($0, last) }),
+                        in: 1...max(1, n)).fixedSize()
+                Stepper("End \(last)",
+                        value: Binding(get: { last }, set: { sheetLast = max($0, first) }),
+                        in: 1...max(1, n)).fixedSize()
+                Stepper("\(String(format: "%.0f", sheetDuration)) s",
+                        value: $sheetDuration, in: 1...30, step: 1).fixedSize()
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                Spacer()
+                Button("Cancel") { showStatesSheet = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    engine.appendStatesClip(
+                        objects: composerStatesObject.map { [$0] },
+                        mode: sheetMode, firstModel: first, lastModel: last,
+                        seconds: sheetDuration)
+                    showStatesSheet = false
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        engine.appendStatesClip(
-                            objects: composerStatesObject.map { [$0] },
-                            mode: sheetMode, firstModel: first, lastModel: last,
-                            seconds: sheetDuration)
-                        showStatesSheet = false
-                    }
-                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
             }
         }
+        .padding(20)
+        #if os(macOS)
+        .frame(width: 400)
+        #else
+        .presentationDetents([.height(240)])
+        #endif
     }
 
     // MARK: - Playhead / geometry helpers
