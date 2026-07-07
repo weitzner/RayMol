@@ -2072,8 +2072,10 @@ struct SceneCard: View {
 struct SceneParamRow: View {
     let param: SceneParam
     @ObservedObject var engine: PyMOLEngine
-    // Caps the slider width (camera dock passes a fixed value); nil = fill.
-    var sliderMaxWidth: CGFloat? = nil
+    // Compact layout for the camera dock: natural-width label and no trailing
+    // Spacer, so the slider fills the row instead of splitting the space with a
+    // Spacer (the dock card bounds the overall width). Inspector uses the default.
+    var compact: Bool = false
 
     var body: some View {
         if let dep = param.dependsOn, (engine.sceneState.values[dep] ?? 0) <= 0.5 {
@@ -2131,8 +2133,7 @@ struct SceneParamRow: View {
                                                     min: p.min, max: p.max, step: p.step, decimals: p.decimals),
                                   value: fovToMM(fovDeg),
                                   onLive: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") },
-                                  onCommit: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") },
-                                  sliderMaxWidth: sliderMaxWidth)
+                                  onCommit: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") })
                         .disabled(orthoOn)
                         .opacity(orthoOn ? 0.4 : 1.0)
                 } else if p.setting == "zoom" {
@@ -2148,8 +2149,7 @@ struct SceneParamRow: View {
                                                     min: p.min, max: p.max, step: p.step, decimals: p.decimals),
                                   value: zoomMag(camDist: camDist, radius: radius, fovDeg: fovDeg),
                                   onLive: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) },
-                                  onCommit: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) },
-                                  sliderMaxWidth: sliderMaxWidth)
+                                  onCommit: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) })
                         .disabled(!zoomReady)
                         .opacity(zoomReady ? 1.0 : 0.4)
                 } else {
@@ -2160,8 +2160,7 @@ struct SceneParamRow: View {
                                                     min: p.min, max: p.max, step: p.step, decimals: p.decimals),
                                   value: v,
                                   onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
-                                  onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
-                                  sliderMaxWidth: sliderMaxWidth)
+                                  onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
                         .disabled(dofAuto)
                         .opacity(dofAuto ? 0.4 : 1.0)
                 }
@@ -2209,9 +2208,10 @@ struct SceneParamRow: View {
             Text(label)
                 .font(.system(size: 10))
                 .foregroundColor(PanelTheme.textColor)
-                .frame(width: 110, alignment: .leading)
+                .frame(width: compact ? nil : 110, alignment: .leading)
+                .fixedSize(horizontal: compact, vertical: false)
             content()
-            Spacer(minLength: 0)
+            if !compact { Spacer(minLength: 0) }
             if !help.isEmpty { HelpButton(text: help) }
         }
     }
@@ -2249,10 +2249,10 @@ struct DOFSubPanelContent: View {
             }
 
             if let focus = SceneCatalog.param(for: "metal_dof_focus") {
-                SceneParamRow(param: focus, engine: engine, sliderMaxWidth: 200)
+                SceneParamRow(param: focus, engine: engine, compact: true)
             }
             if let aperture = SceneCatalog.param(for: "metal_dof_aperture") {
-                SceneParamRow(param: aperture, engine: engine, sliderMaxWidth: 200)
+                SceneParamRow(param: aperture, engine: engine, compact: true)
             }
         }
     }
@@ -2296,10 +2296,10 @@ struct CameraDock: View {
                         // itself out (via SceneParamRow) while Ortho is on.
                         HStack(spacing: 10) {
                             orthoToggle
-                            SceneParamRow(param: p, engine: engine, sliderMaxWidth: 200)
+                            SceneParamRow(param: p, engine: engine, compact: true)
                         }
                     } else if let p = SceneCatalog.param(for: key) {
-                        SceneParamRow(param: p, engine: engine, sliderMaxWidth: 200)
+                        SceneParamRow(param: p, engine: engine, compact: true)
                     }
                 }
                 .padding(.horizontal, 4)
@@ -2319,7 +2319,7 @@ struct CameraDock: View {
         // a control is open, expand to fit the slider submenu, capped so it never
         // spans the whole viewport. The bottom overlay centers it either way.
         .fixedSize(horizontal: open == nil, vertical: false)
-        .frame(maxWidth: open == nil ? nil : 320)
+        .frame(maxWidth: open == nil ? nil : 360)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
             .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
