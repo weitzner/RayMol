@@ -20,10 +20,13 @@ private let kActBtnH: CGFloat = 40
 private let kRowH: CGFloat = 46
 private let kGutterW: CGFloat = 40
 #else
-private let kActBtnW: CGFloat = 22
-private let kActBtnH: CGFloat = 18
-private let kRowH: CGFloat = 24
-private let kGutterW: CGFloat = 18
+// macOS: match the iPhone's clearly-boxed A/S/H/L/C cells (the old 22×18 was so
+// small the button background barely read as a box). Slightly denser rows than
+// iOS since it's pointer-driven.
+private let kActBtnW: CGFloat = 38
+private let kActBtnH: CGFloat = 30
+private let kRowH: CGFloat = 34
+private let kGutterW: CGFloat = 26
 #endif
 
 // MARK: - Representation inspector: polled state models
@@ -669,8 +672,33 @@ private enum PanelTheme {
     static var selectionTextColor: Color { t.selectionName.color }
     static var buttonBackground: Color { t.panelBackground.blended(with: t.panelText, 0.16).color }
     static var buttonText: Color { t.panelText.color }
+    static var accentColor: Color { t.accent.color }
     static var headerColor: Color { t.panelBackground.blended(with: t.panelText, 0.6).color }
     static var disabledColor: Color { t.panelBackground.blended(with: t.panelText, 0.4).color }
+}
+
+// Chrome for the compact A/S/H/L/C representation menu buttons so they read the
+// SAME on both platforms: a blue glyph on a gray rounded box, hugging its cell.
+// iOS's `.borderlessButton` menu renders the custom label (box + background)
+// verbatim; macOS's `.borderlessButton` instead tints the glyph, DROPS the box,
+// and lays out greedily (the letters spread across the row). So on macOS we use
+// the `.button` menu style + a plain button style, which render the label as-is
+// and size to it. The explicit accent foreground keeps the glyph blue on macOS
+// (a plain button would otherwise inherit the primary text color).
+private extension View {
+    @ViewBuilder func repMenuChrome() -> some View {
+        #if os(iOS)
+        self.menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .foregroundColor(PanelTheme.accentColor)
+        #else
+        self.menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .foregroundColor(PanelTheme.accentColor)
+            .fixedSize()
+        #endif
+    }
 }
 
 // MARK: - ObjectPanel View
@@ -678,6 +706,9 @@ private enum PanelTheme {
 struct ObjectPanel: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    #endif
     @State private var showSelectionBuilder = false
     @State private var renameText = ""
     // Independent collapse state for the three top-level sections (Scene starts
@@ -711,14 +742,19 @@ struct ObjectPanel: View {
             // so it lives here rather than in any one section header. (The former
             // "Inspector" label was dropped — the bottom tab already names the pane;
             // SCENE moved fully into the Settings tab.)
-            HStack(spacing: 8) {
-                Spacer()
-                selectionModeMenu
+            // Selection mode: on macOS/iPad it lives in the shared inspector chrome
+            // (right of the tab description); on iPhone it stays here in the panel.
+            #if os(iOS)
+            if hSizeClass == .compact {
+                HStack(spacing: 8) {
+                    Spacer()
+                    SelectionModeMenu()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                Divider()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-
-            Divider()
+            #endif
 
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
@@ -823,32 +859,6 @@ struct ObjectPanel: View {
     }
 
     // Pick-granularity menu (mouse_selection_mode): what a viewport tap selects.
-    private var selectionModeMenu: some View {
-        let modes: [(Int, String)] = [(0, "Atoms"), (1, "Residues"), (2, "Chains"),
-                                      (3, "Segments"), (4, "Objects"), (5, "Molecules"), (6, "C-α")]
-        let cur = Int(engine.sceneState.values["mouse_selection_mode"] ?? 1)
-        return Menu {
-            ForEach(modes, id: \.0) { m in
-                Button {
-                    engine.runCommand("set mouse_selection_mode, \(m.0)")
-                } label: {
-                    if m.0 == cur { Label(m.1, systemImage: "checkmark") } else { Text(m.1) }
-                }
-            }
-        } label: {
-            HStack(spacing: 2) {
-                Image(systemName: "hand.tap").font(.system(size: 9))
-                Text(modes.first(where: { $0.0 == cur })?.1 ?? "Residues")
-                    .font(.system(size: 10))
-            }
-            .foregroundColor(PanelTheme.headerColor)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Selection mode — what a tap selects")
-    }
-
     private func refreshObjects() {
         engine.runCommand(
             "python\n"
@@ -863,6 +873,36 @@ struct ObjectPanel: View {
             + "'enabled': list(enabled), 'sel_counts': sel_counts}))\n"
             + "python end"
         )
+    }
+}
+
+// MARK: - Selection mode menu (shared: inspector chrome + iPhone toolbar)
+
+/// The "what does a tap select" mode (atoms / residues / chains / …). Lives in the
+/// inspector chrome (right of the tab description) on macOS/iPad so it's reachable
+/// from every tab; on iPhone it sits in the Object panel's top toolbar.
+struct SelectionModeMenu: View {
+    @EnvironmentObject var engine: PyMOLEngine
+    private let modes: [(Int, String)] = [(0, "Atoms"), (1, "Residues"), (2, "Chains"),
+                                          (3, "Segments"), (4, "Objects"), (5, "Molecules"), (6, "C-α")]
+    var body: some View {
+        let cur = Int(engine.sceneState.values["mouse_selection_mode"] ?? 1)
+        Menu {
+            ForEach(modes, id: \.0) { m in
+                Button { engine.runCommand("set mouse_selection_mode, \(m.0)") } label: {
+                    if m.0 == cur { Label(m.1, systemImage: "checkmark") } else { Text(m.1) }
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: "hand.tap").font(.system(size: 9))
+                Text(modes.first(where: { $0.0 == cur })?.1 ?? "Residues").font(.system(size: 10))
+            }
+            .foregroundColor(PanelTheme.headerColor)
+        }
+        .repMenuChrome()
+        .fixedSize()
+        .help("Selection mode — what a tap selects")
     }
 }
 
@@ -963,8 +1003,7 @@ private struct AllControlsRow: View {
                     .cornerRadius(2)
                     .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .repMenuChrome()
             ShowButton(name: "all")
             HideButton(name: "all")
             LabelMenuButton(name: "all")
@@ -1042,8 +1081,7 @@ private struct ActionMenuButton: View {
                 // the "A" glyph — so a tap anywhere on the button opens the menu.
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1090,8 +1128,7 @@ private struct ShowButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1123,8 +1160,7 @@ private struct HideButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1156,8 +1192,7 @@ private struct LabelMenuButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1200,8 +1235,7 @@ private struct ColorMenuButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
         .popover(isPresented: $showCustom, arrowEdge: .bottom) {
             VStack(spacing: 8) {
                 Text("Custom color").font(.system(size: 11, weight: .semibold))
@@ -1622,6 +1656,16 @@ private struct ObjectRowContent: View {
             .contentShape(Rectangle())
             .onTapGesture { toggleEnabled() }   // tap name = toggle enable
 
+        // Model / state count, right of the name (the structure's "frame count").
+        if entry.stateCount > 1 {
+            Text("\(entry.stateCount)")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundColor(PanelTheme.headerColor)
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(Capsule().fill(PanelTheme.buttonBackground))
+                .help("\(entry.stateCount) models / states")
+        }
+
         Spacer(minLength: 4)
 
         ActionMenuButton(name: entry.name)
@@ -1643,6 +1687,9 @@ private struct ObjectCard: View {
     let isAlt: Bool
     @EnvironmentObject var engine: PyMOLEngine
     @State private var selectedRep: String?
+    // Live state-slider value while dragging (nil = follow the object poll). Keeps
+    // the thumb from snapping back to the last-polled state mid-drag.
+    @State private var scrubState: Int? = nil
 
     private var expanded: Bool { engine.expandedDetail == entry.name }
     private var reps: [RepState] { engine.objectDetails[entry.name] ?? [] }
@@ -1737,21 +1784,26 @@ private struct ObjectCard: View {
         // Use the object's effective state from the poll; default to 1 (avoid
         // depending on playback.currentFrame so the inspector doesn't re-render
         // on every frame tick during playback).
-        let cur = min(max(meta?.state ?? 1, 1), total)
+        // While dragging, show the live scrub value; otherwise follow the poll.
+        let cur = min(max(scrubState ?? meta?.state ?? 1, 1), total)
         VStack(spacing: 3) {
             HStack(spacing: 6) {
                 Text("State")
                     .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
                     .frame(width: 78, alignment: .leading)
-                Button { setState(max(cur - 1, 1)) } label: {
+                Button { scrubState = nil; setState(max(cur - 1, 1)) } label: {
                     Image(systemName: "minus.circle").font(.system(size: 14))
                 }
                 .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)
                 Slider(value: Binding(get: { Double(cur) },
-                                      set: { setState(Int($0.rounded())) }),
-                       in: 1...Double(max(total, 2)), step: 1)
+                                      set: { v in
+                                          let n = min(max(Int(v.rounded()), 1), total)
+                                          if n != cur { scrubState = n; setState(n) }  // apply only on integer change
+                                      }),
+                       in: 1...Double(max(total, 2)), step: 1,
+                       onEditingChanged: { editing in if !editing { scrubState = nil } })
                     .tint(TimelineTheme.accent)
-                Button { setState(min(cur + 1, total)) } label: {
+                Button { scrubState = nil; setState(min(cur + 1, total)) } label: {
                     Image(systemName: "plus.circle").font(.system(size: 14))
                 }
                 .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)
@@ -1759,6 +1811,39 @@ private struct ObjectCard: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(PanelTheme.textColor)
                     .frame(width: 42, alignment: .trailing)
+            }
+            // Play/pause + per-object fps — animates THIS object's models (via a
+            // Swift timer + `set state`), independent of the movie and other objects.
+            HStack(spacing: 6) {
+                Text("Play")
+                    .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+                    .frame(width: 78, alignment: .leading)
+                Button { engine.toggleObjectStates(entry.name) } label: {
+                    Image(systemName: engine.playingObjects.contains(entry.name) ? "pause.fill" : "play.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(engine.timelineMode ? PanelTheme.disabledColor : TimelineTheme.accent)
+                        .frame(width: 24, height: 20).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(engine.timelineMode)   // authoring a movie → model playback off
+                .help(engine.timelineMode
+                      ? "Model playback is off while the movie timeline is open — close it to inspect models"
+                      : (engine.playingObjects.contains(entry.name) ? "Pause" : "Play models"))
+                Spacer(minLength: 0)
+                Menu {
+                    ForEach([1.0, 5.0, 10.0, 15.0, 30.0], id: \.self) { f in
+                        Button("\(Int(f)) fps") { engine.setObjectFPS(entry.name, f) }
+                    }
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "speedometer").font(.system(size: 9))
+                        Text("\(Int(engine.objectPlaybackFPS(entry.name))) fps")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(TimelineTheme.accent)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Playback speed for this object")
             }
             HStack(spacing: 6) {
                 Text("Overlay all")
@@ -2451,6 +2536,9 @@ struct ScenesPane: View {
     // PyMOL via `scene_order`. Synced from engine.sceneNames on add/remove.
     @State private var sceneOrder: [String] = []
     @State private var draggingScene: String?
+    // Scene-chip long-press "Rename…" flow (nil = alert hidden).
+    @State private var sceneRenameTarget: String? = nil
+    @State private var sceneRenameText: String = ""
 
     var body: some View {
         ScrollView {
@@ -2527,6 +2615,16 @@ struct ScenesPane: View {
             .reportPaneHeight(5)    // natural height (before tab-bar clearance)
             .padding(.bottom, 56)   // clear the floating tab-bar pill
         }
+        .alert("Rename scene", isPresented: Binding(
+            get: { sceneRenameTarget != nil },
+            set: { if !$0 { sceneRenameTarget = nil } })) {
+            TextField("Scene name", text: $sceneRenameText)
+            Button("Rename") {
+                if let t = sceneRenameTarget { engine.renameScene(t, to: sceneRenameText) }
+                sceneRenameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { sceneRenameTarget = nil }
+        }
     }
 
     private func sceneChip(_ name: String) -> some View {
@@ -2547,6 +2645,12 @@ struct ScenesPane: View {
                 )
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Text(name)
+            Button { engine.updateScene(name) } label: { Label("Reset to current view", systemImage: "arrow.clockwise") }
+            Button { sceneRenameText = name; sceneRenameTarget = name } label: { Label("Rename…", systemImage: "pencil") }
+            Button(role: .destructive) { engine.deleteScene(name) } label: { Label("Delete", systemImage: "trash") }
+        }
     }
 
     // Trailing "+" chip in the scene row — stores the current view as a new scene.
