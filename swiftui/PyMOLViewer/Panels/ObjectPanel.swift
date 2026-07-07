@@ -1115,7 +1115,9 @@ private struct ShowButton: View {
             ForEach(Array(showHideOptions.enumerated()), id: \.offset) { _, opt in
                 if opt.label == "---" {
                     Divider()
-                } else if let rep = opt.rep {
+                } else if let rep = opt.rep, rep != "everything" {
+                    // "everything" is meaningful for Hide but not Show — you
+                    // can't turn on every representation at once sensibly.
                     Button(opt.label) {
                         engine.runCommand("show \(rep), \(name)")
                     }
