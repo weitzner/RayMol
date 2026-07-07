@@ -314,16 +314,29 @@ struct ContentView: View {
             .help("Show mouse controls")
             .padding(8)
         } else {
+            // The minimize button lives in a reserved trailing gutter (top-right),
+            // NOT overlaid on the panel: MousePanel's mode Picker uses
+            // `maxWidth: .infinity`, so its `.menu` chevron would otherwise run
+            // into the corner and blend with / hide the "−" (issue #111). The
+            // gutter guarantees the button is a distinct, clearly-separated
+            // affordance the picker can't reach.
             ZStack(alignment: .topTrailing) {
                 MousePanel()
                     .frame(width: 220)
+                    // Reserve space on the right so the picker chevron stops short
+                    // of the corner where the minimize button sits.
+                    .padding(.trailing, 22)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
                 Button { withAnimation(.easeInOut(duration: 0.15)) { mouseLegendCollapsed = true } } label: {
+                    // Two-tone: a strong (primary) minus glyph over a subtly tinted
+                    // circle. The old single-tone `.secondary` fill was nearly
+                    // invisible against the translucent header (issue #111).
                     Image(systemName: "minus.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.primary, Color.primary.opacity(0.18))
                         .padding(4)
                 }
                 .buttonStyle(.plain)
@@ -2268,6 +2281,11 @@ struct ContentView: View {
                 }
             }
         }
+        // Shared panel background so every tab (Objects / Scenes / Movie / Display)
+        // matches. ObjectPanel/TimelinePanel paint their own opaque background on
+        // top; the Scenes/Display ScrollViews are transparent, so without this they
+        // fell through to the window's default chrome (a mismatched dark gray).
+        .background(themeManager.active.panelBackground.color)
         // Auto-stop model/movie playback when entering the Movie tab or expanding
         // the timeline dock (you're authoring now, not inspecting the ensemble).
         .onChange(of: inspectorTab) { tab in
