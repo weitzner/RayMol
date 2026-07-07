@@ -34,8 +34,9 @@ WhatsNewRelease {
 WhatsNewPage {
     title:       String
     body:        String
+    videoName:   String?   // bundled .mp4 name; optional; takes precedence
     imageName:   String?   // asset-catalog name; optional
-    systemImage: String?   // SF Symbol fallback when imageName is nil/missing
+    systemImage: String?   // SF Symbol fallback when neither video nor image resolves
 }
 ```
 
@@ -84,10 +85,17 @@ A single shared `WhatsNewModal` view:
   gesture added on iOS.
 - Each page: hero image area on top, centered title + body beneath.
 - Last page's primary button reads **Get Started** and dismisses (marks seen).
-- `✕` / "Skip" dismisses anytime (also marks seen).
-- Presented as a centered `.sheet` on macOS (fixed ~380–420pt wide) and a `.sheet`
-  on iOS. Attached **once** via a `WhatsNewPresenter` view modifier wrapped around
-  `ContentView.body`, so both `macOSLayout` and `iPadOSLayout` are covered.
+- `✕` dismisses anytime (also marks seen).
+- Presented as a centered `.sheet` on macOS (fixed ~420pt wide) and a `.sheet` on
+  iOS using **standard** detents (`[.medium, .large]`). The `.sheet` + the
+  auto-show `onAppear` + the `.raymolShowWhatsNew` `onReceive` are attached
+  **once**, inlined directly on `ContentView.body` (bound to the `whatsNew`
+  `@StateObject`), so both `macOSLayout` and `iPadOSLayout` are covered.
+- Implementation notes (learned while getting the XCUITest green): (a) a custom
+  `.height()` detent is not reliably traversable by XCUITest on newer iOS — use
+  standard detents; (b) do NOT put an `.accessibilityIdentifier` on the modal's
+  container view — SwiftUI propagates it to every descendant and shadows the
+  per-button ids (`whatsNewPrimary` / `whatsNewClose`) the tests rely on.
 
 ## Entry points
 
@@ -97,37 +105,64 @@ A single shared `WhatsNewModal` view:
 - **iOS/iPadOS:** a prominent "What's New in RayMol" row at the top of
   `SettingsSheet`. It dismisses the settings sheet, then posts
   `.raymolShowWhatsNew` (avoids nested-sheet presentation issues).
-- The `WhatsNewPresenter` listens for `.raymolShowWhatsNew` and presents the
-  modal on all current content (manual open ignores `lastSeenVersion`).
+- `ContentView.body` observes `.raymolShowWhatsNew` and presents the modal on the
+  current content (manual open ignores `lastSeenVersion`).
 
 ## Files
 
 New:
-- `Shared/WhatsNewModel.swift` — data model, catalog loader, version logic.
-- `Shared/WhatsNewModal.swift` — the carousel view + `WhatsNewPresenter` modifier.
+- `Shared/WhatsNewLogic.swift` — pure, Foundation-only data model + version logic.
+- `Shared/WhatsNewModel.swift` — `ObservableObject` controller (presentation
+  state, last-seen persistence, bundled-catalog loader).
+- `Shared/WhatsNewModal.swift` — the carousel view.
 - `Resources/WhatsNew.json` — seed content (current release).
-- `Assets.xcassets/WhatsNew/…` — seed images (optional; systemImage fallbacks OK).
+- `Resources/WhatsNew.README.md` — authoring guide for maintainers (not bundled).
+- `tests/whats_new_logic_test.swift` + `tests/run_whats_new_logic_test.sh` —
+  standalone unit test for the pure logic.
+- `PyMOLViewerUITests/WhatsNewUITests.swift` — XCUITest driving the carousel.
 
 Edited:
-- `Shared/ContentView.swift` — `.raymolShowWhatsNew` notification name; wrap
-  `body` with the presenter; own the `WhatsNewModel` `@StateObject`.
+- `Shared/ContentView.swift` — `.raymolShowWhatsNew` notification name; own the
+  `WhatsNewModel` `@StateObject`; inline the auto-show + notification + `.sheet` on
+  `body`; `PYMOL_AUTOSHEET=whatsnew` + `PYMOL_SKIP_FIRSTBOOT_THEME` test hooks.
 - `Shared/PyMOLApp.swift` — app-menu item posting `.raymolShowWhatsNew`.
 - `Panels/ObjectPanel.swift` — "What's New" row in `SettingsSheet`.
 
 ## Testing
 
-- **Unit (pure logic):** standalone `swift` script exercising
-  `WhatsNewModel.pagesToShow(current:lastSeen:releases:)` and the semver compare —
-  cumulative across skipped versions, empty on fresh install, empty on downgrade,
-  correct ordering. (Same pattern as the CartoonLOD math test.)
-- **Functional:** build both targets; on macOS (via `raymol-mac-vm`) and the iOS
-  simulator: bump version / clear `whatsNewLastSeenVersion` to confirm auto-show;
-  confirm manual open from menu + settings; confirm fresh-install skip; confirm
-  cumulative content across a skipped version.
+- **Unit (pure logic):** `swiftui/tests/run_whats_new_logic_test.sh` compiles
+  `WhatsNewLogic.swift` with `tests/whats_new_logic_test.swift` and runs 14
+  assertions — semver compare, cumulative across skipped versions, empty on fresh
+  install / downgrade / nothing-newer, defensive cap at current, manual-page
+  fallbacks. **Passing.**
+- **UI (XCUITest):** `PyMOLViewerUITests/WhatsNewUITests` launches with
+  `PYMOL_AUTOSHEET=whatsnew` and drives the carousel: Next → Next → **Get
+  Started** → dismiss, and the ✕ close. **Passing on the iOS simulator.**
+- **Builds:** macOS (`PyMOLViewer_macOS`) and iOS (`PyMOLViewer_iOS`) both build
+  Debug clean; `WhatsNew.json` is confirmed bundled, `WhatsNew.README.md` excluded.
+- **Visual:** confirmed on the iOS simulator via `PYMOL_AUTOSHEET=whatsnew`
+  (eyebrow, hero, title/body, dot pager, Next/Get Started, ✕).
+
+## Test hooks added
+
+- `PYMOL_SKIP_WHATS_NEW` — suppress the auto-show entirely.
+- `PYMOL_AUTOSHEET=whatsnew` — present the splash on launch (screenshot harness).
+- `PYMOL_SKIP_FIRSTBOOT_THEME` — suppress the one-time first-boot Theme Studio so
+  it doesn't contend for the presentation slot in a UI test.
+
+## Hero media
+
+The hero resolves **video → image → SF Symbol → gradient** (first that exists).
+A bundled `.mp4` (`videoName`) plays muted, looping, aspect-fill, with no
+transport controls, via a small AVKit-backed `LoopingVideoView`
+(`UIViewRepresentable`/`NSViewRepresentable` over an `AVPlayerLayer`). It
+autoplays on appear and pauses/cleans up when its page leaves the carousel (each
+page has a distinct `.id`). Hero height: 238pt macOS / 220pt iOS.
 
 ## Out of scope (YAGNI)
 
 - Remote/fetched content (bundled only).
 - A user "don't show automatically" preference (auto-show is already once-per-
   version; can be added later if wanted).
-- Per-page rich media beyond a single image (video, GIF).
+- Animated GIF / APNG heroes (use an `.mp4` instead — SwiftUI `Image` doesn't
+  animate GIFs).
