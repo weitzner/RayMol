@@ -706,6 +706,9 @@ private extension View {
 struct ObjectPanel: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    #endif
     @State private var showSelectionBuilder = false
     @State private var renameText = ""
     // Independent collapse state for the three top-level sections (Scene starts
@@ -739,14 +742,19 @@ struct ObjectPanel: View {
             // so it lives here rather than in any one section header. (The former
             // "Inspector" label was dropped — the bottom tab already names the pane;
             // SCENE moved fully into the Settings tab.)
-            HStack(spacing: 8) {
-                Spacer()
-                selectionModeMenu
+            // Selection mode: on macOS/iPad it lives in the shared inspector chrome
+            // (right of the tab description); on iPhone it stays here in the panel.
+            #if os(iOS)
+            if hSizeClass == .compact {
+                HStack(spacing: 8) {
+                    Spacer()
+                    SelectionModeMenu()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                Divider()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-
-            Divider()
+            #endif
 
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
@@ -851,31 +859,6 @@ struct ObjectPanel: View {
     }
 
     // Pick-granularity menu (mouse_selection_mode): what a viewport tap selects.
-    private var selectionModeMenu: some View {
-        let modes: [(Int, String)] = [(0, "Atoms"), (1, "Residues"), (2, "Chains"),
-                                      (3, "Segments"), (4, "Objects"), (5, "Molecules"), (6, "C-α")]
-        let cur = Int(engine.sceneState.values["mouse_selection_mode"] ?? 1)
-        return Menu {
-            ForEach(modes, id: \.0) { m in
-                Button {
-                    engine.runCommand("set mouse_selection_mode, \(m.0)")
-                } label: {
-                    if m.0 == cur { Label(m.1, systemImage: "checkmark") } else { Text(m.1) }
-                }
-            }
-        } label: {
-            HStack(spacing: 2) {
-                Image(systemName: "hand.tap").font(.system(size: 9))
-                Text(modes.first(where: { $0.0 == cur })?.1 ?? "Residues")
-                    .font(.system(size: 10))
-            }
-            .foregroundColor(PanelTheme.headerColor)
-        }
-        .repMenuChrome()
-        .fixedSize()
-        .help("Selection mode — what a tap selects")
-    }
-
     private func refreshObjects() {
         engine.runCommand(
             "python\n"
@@ -890,6 +873,36 @@ struct ObjectPanel: View {
             + "'enabled': list(enabled), 'sel_counts': sel_counts}))\n"
             + "python end"
         )
+    }
+}
+
+// MARK: - Selection mode menu (shared: inspector chrome + iPhone toolbar)
+
+/// The "what does a tap select" mode (atoms / residues / chains / …). Lives in the
+/// inspector chrome (right of the tab description) on macOS/iPad so it's reachable
+/// from every tab; on iPhone it sits in the Object panel's top toolbar.
+struct SelectionModeMenu: View {
+    @EnvironmentObject var engine: PyMOLEngine
+    private let modes: [(Int, String)] = [(0, "Atoms"), (1, "Residues"), (2, "Chains"),
+                                          (3, "Segments"), (4, "Objects"), (5, "Molecules"), (6, "C-α")]
+    var body: some View {
+        let cur = Int(engine.sceneState.values["mouse_selection_mode"] ?? 1)
+        Menu {
+            ForEach(modes, id: \.0) { m in
+                Button { engine.runCommand("set mouse_selection_mode, \(m.0)") } label: {
+                    if m.0 == cur { Label(m.1, systemImage: "checkmark") } else { Text(m.1) }
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: "hand.tap").font(.system(size: 9))
+                Text(modes.first(where: { $0.0 == cur })?.1 ?? "Residues").font(.system(size: 10))
+            }
+            .foregroundColor(PanelTheme.headerColor)
+        }
+        .repMenuChrome()
+        .fixedSize()
+        .help("Selection mode — what a tap selects")
     }
 }
 
@@ -1674,6 +1687,9 @@ private struct ObjectCard: View {
     let isAlt: Bool
     @EnvironmentObject var engine: PyMOLEngine
     @State private var selectedRep: String?
+    // Live state-slider value while dragging (nil = follow the object poll). Keeps
+    // the thumb from snapping back to the last-polled state mid-drag.
+    @State private var scrubState: Int? = nil
 
     private var expanded: Bool { engine.expandedDetail == entry.name }
     private var reps: [RepState] { engine.objectDetails[entry.name] ?? [] }
@@ -1768,21 +1784,26 @@ private struct ObjectCard: View {
         // Use the object's effective state from the poll; default to 1 (avoid
         // depending on playback.currentFrame so the inspector doesn't re-render
         // on every frame tick during playback).
-        let cur = min(max(meta?.state ?? 1, 1), total)
+        // While dragging, show the live scrub value; otherwise follow the poll.
+        let cur = min(max(scrubState ?? meta?.state ?? 1, 1), total)
         VStack(spacing: 3) {
             HStack(spacing: 6) {
                 Text("State")
                     .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
                     .frame(width: 78, alignment: .leading)
-                Button { setState(max(cur - 1, 1)) } label: {
+                Button { scrubState = nil; setState(max(cur - 1, 1)) } label: {
                     Image(systemName: "minus.circle").font(.system(size: 14))
                 }
                 .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)
                 Slider(value: Binding(get: { Double(cur) },
-                                      set: { setState(Int($0.rounded())) }),
-                       in: 1...Double(max(total, 2)), step: 1)
+                                      set: { v in
+                                          let n = min(max(Int(v.rounded()), 1), total)
+                                          if n != cur { scrubState = n; setState(n) }  // apply only on integer change
+                                      }),
+                       in: 1...Double(max(total, 2)), step: 1,
+                       onEditingChanged: { editing in if !editing { scrubState = nil } })
                     .tint(TimelineTheme.accent)
-                Button { setState(min(cur + 1, total)) } label: {
+                Button { scrubState = nil; setState(min(cur + 1, total)) } label: {
                     Image(systemName: "plus.circle").font(.system(size: 14))
                 }
                 .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)

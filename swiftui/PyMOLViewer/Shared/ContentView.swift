@@ -1119,7 +1119,8 @@ struct ContentView: View {
         }
         switch selectedTab {
         case 0:  return total * 0.5                              // Console — fixed tall
-        case 1:  return hug(1, cap: total / 3, extra: 44)        // Objects — +toolbar; cap 1/3
+        case 1:  // Objects — hug compact; grow to half-screen when a card is expanded.
+            return engine.expandedDetail != nil ? total * 0.5 : hug(1, cap: total / 3, extra: 44)
         case 5:  return hug(5, cap: total * 0.5)                 // Scenes
         case 2:  return hug(2, cap: total * 0.72)               // Movie — timeline studio
         case 4:  return total * 0.42                             // Settings root — compact
@@ -2214,12 +2215,17 @@ struct ContentView: View {
             .padding(.horizontal, 10)
             .padding(.top, 8)
             .padding(.bottom, 4)
-            Text(inspectorTab.blurb)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
+            HStack(spacing: 8) {
+                Text(inspectorTab.blurb)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                // Selection mode — here (shared chrome) so it's reachable from every tab.
+                SelectionModeMenu()
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
             Divider()
             // Model playback (Object-panel controls) is for inspecting an ensemble;
             // entering the Movie tab means authoring, so stop any inspection playback.
