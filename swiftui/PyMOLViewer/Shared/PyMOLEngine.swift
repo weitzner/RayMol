@@ -134,7 +134,19 @@ final class PyMOLEngine: ObservableObject {
     // The single detail view that is currently open (accordion: at most one).
     // nil = none, `sceneDetailKey` = the SCENE card, otherwise an object name.
     // Drives which object the detail poll queries (collapsed = cheap).
-    @Published var expandedDetail: String? = nil
+    // Poll the just-expanded object's rep detail IMMEDIATELY here (at the source)
+    // rather than waiting up to ~500ms for the next pollObjects tick — a heavy
+    // surface build can starve that timer and the card lingers on "No
+    // representations shown" / renders empty (#107). Doing it in didSet (instead
+    // of a per-layout view .onChange) guarantees EVERY expand path fires the
+    // refresh: iOS, macOS (whose layout had no such observer — the empty-panel
+    // bug), session restore, and the PYMOL_AUTOEXPAND test hook.
+    @Published var expandedDetail: String? = nil {
+        didSet {
+            guard expandedDetail != oldValue, expandedDetail != nil else { return }
+            refreshExpandedDetail()
+        }
+    }
     // Sentinel for "the SCENE card is the open detail view" — a control char so
     // it can never collide with a real object name.
     static let sceneDetailKey = "\u{1}scene"
