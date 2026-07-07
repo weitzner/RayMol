@@ -74,9 +74,6 @@ struct WhatsNewModal: View {
     private func page(_ p: WhatsNewPage) -> some View {
         VStack(spacing: 0) {
             hero(p)
-                .frame(height: heroHeight)
-                .frame(maxWidth: .infinity)
-                .clipped()
                 .overlay(alignment: .topLeading) {
                     Text("New in RayMol \(versionLabel)")
                         .font(.caption2.weight(.bold))
@@ -109,23 +106,30 @@ struct WhatsNewModal: View {
     // want of media.
     @ViewBuilder
     private func hero(_ p: WhatsNewPage) -> some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.23, green: 0.36, blue: 0.56),
-                         Color(red: 0.06, green: 0.09, blue: 0.14)],
-                startPoint: .topLeading, endPoint: .bottomTrailing)
-
-            if let videoURL = Self.loadedVideoURL(p.videoName) {
-                LoopingVideoView(url: videoURL)
-            } else if let img = Self.loadedImage(p.imageName) {
-                img.resizable().scaledToFill()
-            } else if let symbol = p.systemImage {
-                Image(systemName: symbol)
-                    .font(.system(size: 56, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .shadow(radius: 8)
+        // The gradient is the flexible BASE: it takes the proposed width (bounded by
+        // the modal frame) and the fixed hero height. The media is an OVERLAY, so a
+        // wide image/video fills-and-crops WITHIN this box and can never impose its
+        // scaled width on the layout (which previously ballooned the whole card past
+        // its frame — clipping text and pushing the ✕ / button off-screen).
+        LinearGradient(
+            colors: [Color(red: 0.23, green: 0.36, blue: 0.56),
+                     Color(red: 0.06, green: 0.09, blue: 0.14)],
+            startPoint: .topLeading, endPoint: .bottomTrailing)
+            .frame(maxWidth: .infinity)
+            .frame(height: heroHeight)
+            .overlay {
+                if let videoURL = Self.loadedVideoURL(p.videoName) {
+                    LoopingVideoView(url: videoURL)
+                } else if let img = Self.loadedImage(p.imageName) {
+                    img.resizable().scaledToFill()
+                } else if let symbol = p.systemImage {
+                    Image(systemName: symbol)
+                        .font(.system(size: 56, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .shadow(radius: 8)
+                }
             }
-        }
+            .clipped()
     }
 
     private var footer: some View {
