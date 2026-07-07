@@ -2440,10 +2440,13 @@ struct ContentView: View {
         Button { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel.toggle() } } label: {
             Image(systemName: "camera")
                 .font(.system(size: 20))
-                .foregroundStyle(.white.opacity(showCameraPanel ? 0.95 : 0.6))
+                // Frosted disc (like the mouse-legend button / toolbars) so the chip
+                // stays visible on any viewport background. The old translucent-white
+                // fill vanished against bright, busy scenes (e.g. dense orange sticks).
+                .foregroundStyle(showCameraPanel ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
                 .frame(width: 46, height: 46)
-                .background(.white.opacity(showCameraPanel ? 0.22 : 0.12), in: Circle())
-                .overlay(Circle().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(showCameraPanel ? 0.5 : 0.18), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Camera settings")
