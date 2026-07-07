@@ -63,6 +63,7 @@ struct TimelinePanel: View {
     @State private var composerDuration: Double = 8
     @State private var composerAngle: Double = 30
     @State private var composerSecPerScene: Double = 3
+    @State private var composerStatesMode = "sweep"   // "Play models" clip: sweep | loop
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -234,8 +235,14 @@ struct TimelinePanel: View {
         .accessibilityLabel(open ? "Collapse timeline editor" : "Expand timeline editor")
     }
 
-    // The current movie length, from the sum of transition durations.
+    // True when nothing is authored but a multi-state object is loaded — the
+    // timeline should REPRESENT the ensemble (its models) rather than read "Empty".
+    private var bareEnsemble: Bool { engine.timelineItems.isEmpty && engine.maxStateCount > 1 }
+
+    // The current movie length, from the sum of transition durations. For a bare
+    // ensemble it reads the model count instead of a meaningless seconds value.
     private var lengthLabel: String {
+        if bareEnsemble { return "\(engine.maxStateCount) models" }
         guard !engine.timelineItems.isEmpty else { return "Empty" }
         let secs = Double(engine.timelineTotalFrames) / max(playback.movieFPS, 1)
         return secs >= 10 ? String(format: "%.0fs", secs) : String(format: "%.1fs", secs)
@@ -288,7 +295,7 @@ struct TimelinePanel: View {
                                 ruler(contentW: cW, pps: pps)
                                 itemLane(contentW: cW, pps: pps)
                             }
-                            playhead(pps: pps)
+                            if !bareEnsemble { playhead(pps: pps) }
                             // Invisible follow-anchor centered on the playhead.
                             Color.clear
                                 .frame(width: 1, height: rulerH + laneH)
@@ -298,6 +305,8 @@ struct TimelinePanel: View {
                         .frame(width: cW, height: rulerH + laneH, alignment: .topLeading)
                         .coordinateSpace(name: laneSpace)
                     }
+                    // (the seconds playhead is suppressed for a bare ensemble; the
+                    // model band carries its own current-model marker)
                     // Bound the scroll view's own height — a horizontal ScrollView is
                     // otherwise vertically greedy and would absorb the panel's slack,
                     // opening gaps above the ruler / below the lane.
@@ -324,7 +333,9 @@ struct TimelinePanel: View {
         let count = max(1, Int((Double(contentW / pps) / step).rounded(.up)))
         return ZStack(alignment: .bottomLeading) {
             Rectangle().fill(Color.white.opacity(0.03))
-            ForEach(0...count, id: \.self) { i in
+            // A bare ensemble uses the model band (below) for scrubbing; a seconds
+            // ruler is meaningless for N discrete models, so suppress its ticks.
+            ForEach(bareEnsemble ? [] : Array(0...count), id: \.self) { i in
                 let t = Double(i) * step
                 let x = CGFloat(t) * pps
                 if x <= contentW + 1 {
@@ -354,11 +365,15 @@ struct TimelinePanel: View {
         ZStack(alignment: .topLeading) {
             Rectangle().fill(TimelineTheme.accent.opacity(0.05))
             if items.isEmpty {
-                Text("Tap ◆ to add a camera keyframe, or a scene below")
-                    .font(.system(size: 10))
-                    .foregroundColor(TimelineTheme.dim)
-                    .padding(.leading, 10)
-                    .frame(height: laneH, alignment: .leading)
+                if bareEnsemble {
+                    modelBand(contentW: contentW)
+                } else {
+                    Text("Tap ◆ to add a camera keyframe, or a scene below")
+                        .font(.system(size: 10))
+                        .foregroundColor(TimelineTheme.dim)
+                        .padding(.leading, 10)
+                        .frame(height: laneH, alignment: .leading)
+                }
             } else {
                 ForEach(items.dropFirst()) { laid in
                     connector(laid,
@@ -372,6 +387,43 @@ struct TimelinePanel: View {
         }
         .frame(width: contentW, height: laneH)
         .overlay(alignment: .bottom) { Divider().opacity(0.4) }
+    }
+
+    // A bare multi-state object (no authored movie): spread its N models evenly
+    // across the lane (NOT the seconds axis — a 10-model NMR isn't "10 seconds"),
+    // highlight the current model, tap to scrub. ≤40 → discrete ticks; more → band.
+    private func modelBand(contentW: CGFloat, pps: CGFloat = 0) -> some View {
+        let n = max(engine.maxStateCount, 1)
+        let cur = max(1, min(playback.currentFrame, n))
+        return ZStack(alignment: .topLeading) {
+            Text("\(n) models — tap to scrub · ▶ to play")
+                .font(.system(size: 10)).foregroundColor(TimelineTheme.dim)
+                .padding(.leading, 10).frame(height: 16, alignment: .leading)
+            GeometryReader { geo in
+                let w = geo.size.width
+                if n <= 40 {
+                    ForEach(1...n, id: \.self) { i in
+                        Rectangle()
+                            .fill(i == cur ? TimelineTheme.accent : TimelineTheme.dim.opacity(0.55))
+                            .frame(width: i == cur ? 3 : 1, height: i == cur ? 20 : 11)
+                            .position(x: w * CGFloat(i) / CGFloat(n + 1), y: laneH * 0.62)
+                    }
+                } else {
+                    Capsule().fill(TimelineTheme.dim.opacity(0.25))
+                        .frame(width: max(w - 20, 1), height: 4).position(x: w / 2, y: laneH * 0.62)
+                    Rectangle().fill(TimelineTheme.accent).frame(width: 3, height: 20)
+                        .position(x: 10 + (w - 20) * CGFloat(cur - 1) / CGFloat(max(n - 1, 1)), y: laneH * 0.62)
+                }
+            }
+        }
+        .frame(width: contentW, height: laneH)
+        .contentShape(Rectangle())
+        .gesture(
+            SpatialTapGesture(coordinateSpace: .named(laneSpace)).onEnded { e in
+                let frac = max(0, min(1, e.location.x / max(contentW, 1)))
+                engine.seek(to: max(1, min(n, Int((frac * CGFloat(n - 1)).rounded()) + 1)))
+            }
+        )
     }
 
     // The transition INTO `laid.item` (the gap from the previous item), shown as
@@ -641,10 +693,24 @@ struct TimelinePanel: View {
                         Button("Camera Roll") { composerKind = "roll" }
                         Button("Camera Rock") { composerKind = "rock" }
                         Button("Scene loop")  { composerKind = "scenes" }
+                        // Only meaningful when a multi-state object (NMR/MD) is loaded.
+                        if engine.maxStateCount > 1 {
+                            Button("Play models") { composerKind = "states" }
+                        }
                     } label: { composerChip(composerLabel, composerIcon) }
                     .help("Motion preset to append")
 
-                    if composerKind == "roll" || composerKind == "rock" {
+                    if composerKind == "states" {
+                        Menu {
+                            Button("Sweep 1→N") { composerStatesMode = "sweep" }
+                            Button("Loop 1→N→1") { composerStatesMode = "loop" }
+                        } label: { composerChip(composerStatesMode.capitalized, "film.stack") }
+                        .help("How to play the models")
+                        Menu {
+                            ForEach([4, 8, 12], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
+                        } label: { composerChip("\(Int(composerDuration))s", "clock") }
+                        .help("Duration of the model playthrough")
+                    } else if composerKind == "roll" || composerKind == "rock" {
                         Menu {
                             ForEach(["x", "y", "z"], id: \.self) { a in
                                 Button(a.uppercased()) { composerAxis = a }
@@ -705,6 +771,7 @@ struct TimelinePanel: View {
         switch composerKind {
         case "rock": return "Rock"
         case "scenes": return "Scenes"
+        case "states": return "Models"
         default: return "Roll"
         }
     }
@@ -712,6 +779,7 @@ struct TimelinePanel: View {
     private var composerIcon: String {
         switch composerKind {
         case "scenes": return "photo.stack"
+        case "states": return "film.stack"
         default: return "video"
         }
     }
@@ -723,6 +791,10 @@ struct TimelinePanel: View {
                                         axis: composerAxis, angle: composerAngle)
         case "scenes":
             engine.appendScenesTemplate(secondsPerScene: composerSecPerScene)
+        case "states":
+            engine.appendStatesClip(objects: nil,
+                                    mode: composerStatesMode == "loop" ? .loop : .sweep,
+                                    seconds: composerDuration)
         default: break
         }
     }
