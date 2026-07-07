@@ -415,7 +415,7 @@ struct ContentView: View {
                             if showCameraPanel && !engine.objects.isEmpty {
                                 CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
                                     .padding(.horizontal, 10)
-                                    .padding(.bottom, engine.hasTimeline ? 84 : 12)
+                                    .padding(.bottom, 12)
                                     .transition(.move(edge: .bottom).combined(with: .opacity))
                                     .gesture(DragGesture().onEnded { v in
                                         if v.translation.height > 40 {
@@ -427,12 +427,12 @@ struct ContentView: View {
                         // Empty-state CTA centered in the VIEWPORT (not over the
                         // docked timeline below it).
                         .overlay { if engine.objects.isEmpty && !showThemeStudio { macEmptyState } }
+                    // The docked bottom transport was removed: movie playback lives
+                    // in the Movie tab, model stepping in the Object panel. Only the
+                    // full timeline editor still docks here (when expanded).
                     if engine.timelineMode {
                         Divider()
                         TimelinePanel()
-                    } else if engine.hasTimeline {
-                        Divider()
-                        TransportBar()
                     }
                 }
                 // Drag a .pdb/.cif/.pse/etc. onto the viewport to load it (same
