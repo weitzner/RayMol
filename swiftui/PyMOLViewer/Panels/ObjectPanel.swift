@@ -2315,6 +2315,10 @@ struct CameraDock: View {
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 12)
+        // A centered, content-scaled card rather than a full-width bar. The bottom
+        // overlay centers it horizontally; this cap keeps it from spanning the
+        // whole viewport (esp. on iPad/macOS). Floor is set by the icon strip.
+        .frame(maxWidth: 320)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
             .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
