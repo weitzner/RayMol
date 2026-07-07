@@ -195,6 +195,9 @@ struct ContentView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var showThemeStudio = false   // inline Theme studio (replaces a panel region)
     @AppStorage("mouseLegendCollapsed") private var mouseLegendCollapsed = false
+    // Pending auto-minimize of the expanded mouse legend (fires ~1s after the
+    // pointer leaves it); cancelled if the pointer returns.
+    @State private var mouseLegendCollapseWork: DispatchWorkItem?
     @State private var showObjectPanel = true
     @State private var showCommandPanel = true
 
@@ -317,6 +320,16 @@ struct ContentView: View {
                 .help("Minimize")
             }
             .padding(8)
+            .onHover { hovering in
+                mouseLegendCollapseWork?.cancel()
+                guard !hovering else { return }
+                // Auto-minimize ~1s after the pointer leaves the expanded legend.
+                let work = DispatchWorkItem {
+                    withAnimation(.easeInOut(duration: 0.15)) { mouseLegendCollapsed = true }
+                }
+                mouseLegendCollapseWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+            }
         }
     }
 
@@ -387,6 +400,19 @@ struct ContentView: View {
                             bottomLeadingViewportChrome
                                 .padding(.leading, 12)
                                 .padding(.bottom, 12)
+                        }
+                        .overlay(alignment: .bottom) {
+                            if showCameraPanel && !engine.objects.isEmpty {
+                                CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
+                                    .padding(.horizontal, 10)
+                                    .padding(.bottom, engine.hasTimeline ? 84 : 12)
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                                    .gesture(DragGesture().onEnded { v in
+                                        if v.translation.height > 40 {
+                                            withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false }
+                                        }
+                                    })
+                            }
                         }
                     if engine.hasTimeline {
                         Divider()
@@ -1439,14 +1465,20 @@ struct ContentView: View {
                     // Sit clear ABOVE the transport bar (don't overlap it).
                     .padding(.bottom, engine.hasTimeline ? 96 : 12)
             }
-            // iPhone camera overlay: a glassy floating card docked near the bottom
-            // (no dimming scrim, unlike a system sheet). iPad (regular) uses the
-            // popover attached to the chip instead.
+            // Camera control dock: a bottom-docked icon strip (one control open at
+            // a time). Same component on iPhone / iPad. Drag down or tap the chip
+            // to dismiss.
             .overlay(alignment: .bottom) {
-                if showCameraPanel && hSize == .compact && !engine.objects.isEmpty {
-                    cameraGlassCard
+                if showCameraPanel && !engine.objects.isEmpty {
+                    CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
+                        .padding(.horizontal, 10)
                         .padding(.bottom, engine.hasTimeline ? 84 : 10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .gesture(DragGesture().onEnded { v in
+                            if v.translation.height > 40 {
+                                withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false }
+                            }
+                        })
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -2408,13 +2440,17 @@ struct ContentView: View {
         Button { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel.toggle() } } label: {
             Image(systemName: "camera")
                 .font(.system(size: 20))
-                .foregroundStyle(.white.opacity(showCameraPanel ? 0.95 : 0.6))
+                // Frosted disc (like the mouse-legend button / toolbars) so the chip
+                // stays visible on any viewport background. The old translucent-white
+                // fill vanished against bright, busy scenes (e.g. dense orange sticks).
+                .foregroundStyle(showCameraPanel ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
                 .frame(width: 46, height: 46)
-                .background(.white.opacity(showCameraPanel ? 0.22 : 0.12), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(showCameraPanel ? 0.5 : 0.18), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Camera settings")
+        .accessibilityIdentifier("camera")
     }
 
     // Bottom-left viewport chrome: optional scene buttons stacked above the camera
@@ -2427,62 +2463,9 @@ struct ContentView: View {
                 sceneButtonsOverlay
             }
             if !engine.objects.isEmpty {
-                cameraPanelPresentation(cameraButton)
+                cameraButton
             }
         }
-    }
-
-    // Popover on regular width (macOS always; iPad), bottom sheet on compact
-    // (iPhone). hSize is iOS-only in this file, so it's referenced only in the
-    // iOS branch; macOS always uses a popover.
-    @ViewBuilder
-    private func cameraPanelPresentation<V: View>(_ content: V) -> some View {
-        #if os(macOS)
-        content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
-            CameraControlsView(engine: engine).padding(14).frame(width: 300)
-        }
-        #else
-        // iPad (regular): a popover. iPhone (compact): the chip alone — the glassy
-        // floating card (cameraGlassCard) is presented as a viewport overlay so it
-        // doesn't dim the background and can be translucent, unlike a system sheet.
-        if hSize == .regular {
-            content.popover(isPresented: $showCameraPanel, arrowEdge: .bottom) {
-                CameraControlsView(engine: engine).padding(14).frame(width: 300)
-            }
-        } else {
-            content
-        }
-        #endif
-    }
-
-    // iPhone: the camera controls as a glassy floating card near the bottom — no
-    // dimming scrim (unlike a system sheet), translucent so the molecule shows
-    // through, and content-sized (compact). The grab handle taps or drags down to
-    // dismiss.
-    private var cameraGlassCard: some View {
-        VStack(spacing: 0) {
-            Capsule()
-                .fill(.white.opacity(0.45))
-                .frame(width: 40, height: 5)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-                .onTapGesture { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } }
-            CameraControlsView(engine: engine)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
-        }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-        .padding(.horizontal, 10)
-        .gesture(
-            DragGesture().onEnded { v in
-                if v.translation.height > 40 {
-                    withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false }
-                }
-            }
-        )
     }
 
     private func initializeEngine() {

@@ -186,16 +186,37 @@ struct SceneParam: Identifiable {
     var help: String = ""
 }
 
+// Camera-control command strings shared by the inspector row and the camera dock,
+// so the DOF auto-lock action has a single source of truth.
+enum CameraCommands {
+    // Auto-lock focus: enabling snapshots the current selection into "dof_focus"
+    // (the target the renderer tracks each frame); disabling just clears the flag.
+    static func setAutofocus(_ on: Bool) -> String {
+        on ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
+           : "set metal_dof_autofocus, 0"
+    }
+}
+
 enum SceneCatalog {
     // Ordered sub-groups shown inside the SCENE section (see panel reorg).
     static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Metal optimization", "Effects", "Quality"]
-    // Ordered subset shown in the viewport Camera overlay (a shortcut to the
-    // most-used camera controls). Deliberately omits metal_dof_range and
-    // depth_cue, which remain in the full inspector.
-    static let cameraOverlayKeys = [
-        "field_of_view", "zoom", "ortho", "metal_dof",
-        "metal_dof_autofocus", "metal_dof_focus", "metal_dof_aperture", "metal_dof_quality",
-    ]
+    // Viewport camera dock (see CameraDock): the always-visible strip icons, in
+    // order. DOF's sub-controls are rendered by DOFSubPanelContent, not as strip
+    // icons. metal_dof_quality is intentionally absent — it defaults to best (4)
+    // and lives only in the inspector's Scene → Camera group.
+    static let cameraStripKeys = ["field_of_view", "zoom", "metal_dof"]
+
+    // SF Symbol for each strip control.
+    static func cameraIcon(for setting: String) -> String {
+        switch setting {
+        case "field_of_view": return "camera.aperture"
+        case "zoom":          return "plus.magnifyingglass"
+        case "ortho":         return "cube"
+        case "metal_dof":     return "camera.metering.center.weighted"
+        default:              return "slider.horizontal.3"
+        }
+    }
+
     static func param(for setting: String) -> SceneParam? {
         params.first { $0.setting == setting }
     }
@@ -1283,6 +1304,9 @@ private struct LabeledSlider: View {
     let value: Double
     let onLive: (Double) -> Void
     let onCommit: (Double) -> Void
+    // When set, caps the slider's width (used by the camera dock); nil = fill the
+    // available width, the inspector's default.
+    var sliderMaxWidth: CGFloat? = nil
 
     @State private var local: Double = 0
     @State private var text: String = ""
@@ -1292,7 +1316,11 @@ private struct LabeledSlider: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Slider(value: $local, in: prop.min...prop.max, step: prop.step,
+            // Continuous (no `step`): a stepped Slider draws busy tick marks on
+            // macOS. Values are rounded for display (fmt) and when applied
+            // (fmtScene / the mm/zoom mappings), so dropping the step only removes
+            // the ticks, not the effective granularity.
+            Slider(value: $local, in: prop.min...prop.max,
                    onEditingChanged: { began in
                        editing = began
                        if !began { onCommit(local) }
@@ -1306,6 +1334,7 @@ private struct LabeledSlider: View {
             .controlSize(.mini)
             #endif
                 #endif
+            .frame(maxWidth: sliderMaxWidth)
             TextField("", text: $text)
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.trailing)
@@ -2038,15 +2067,19 @@ struct SceneCard: View {
 
 }
 
-// MARK: - Shared scene-setting row + Camera overlay
+// MARK: - Shared scene-setting row + Camera dock
 
 // One scene-setting row (label + control + help), shared by the inspector's
-// Scene section (SceneCard) and the viewport Camera overlay (CameraControlsView).
+// Scene section (SceneCard) and the viewport camera dock (CameraDock).
 // Self-hides when its dependsOn parent toggle is off, so callers render it
 // unconditionally.
 struct SceneParamRow: View {
     let param: SceneParam
     @ObservedObject var engine: PyMOLEngine
+    // Compact layout for the camera dock: natural-width label and no trailing
+    // Spacer, so the slider fills the row instead of splitting the space with a
+    // Spacer (the dock card bounds the overall width). Inspector uses the default.
+    var compact: Bool = false
 
     var body: some View {
         if let dep = param.dependsOn, (engine.sceneState.values[dep] ?? 0) <= 0.5 {
@@ -2084,9 +2117,7 @@ struct SceneParamRow: View {
                     // the locked target the renderer tracks each frame (see the
                     // SceneRender auto-focus block). Disabling just clears the flag.
                     ToggleSetting(value: v) { on in
-                        engine.runCommand(on
-                            ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
-                            : "set metal_dof_autofocus, 0")
+                        engine.runCommand(CameraCommands.setAutofocus(on))
                     }
                 } else {
                     ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
@@ -2181,51 +2212,221 @@ struct SceneParamRow: View {
             Text(label)
                 .font(.system(size: 10))
                 .foregroundColor(PanelTheme.textColor)
-                .frame(width: 110, alignment: .leading)
+                .frame(width: compact ? nil : 110, alignment: .leading)
+                .fixedSize(horizontal: compact, vertical: false)
             content()
-            Spacer(minLength: 0)
+            if !compact { Spacer(minLength: 0) }
             if !help.isEmpty { HelpButton(text: help) }
         }
     }
 }
 
-// Content of the viewport Camera overlay (popover on macOS/iPad, bottom sheet on
-// iPhone). Reuses SceneParamRow for the curated camera params, then a Reset view
-// action. Reads/writes go through PyMOLEngine exactly as the inspector does.
-struct CameraControlsView: View {
+// The Depth-of-field sub-panel shown inside the camera dock when "Depth" is
+// selected. Enabled + Auto lock share the top row (both switches); Focus and
+// Aperture reuse the inspector rows and self-hide (dependsOn: metal_dof) until
+// DOF is enabled. Quality is intentionally not here — it lives in the inspector.
+struct DOFSubPanelContent: View {
     @ObservedObject var engine: PyMOLEngine
+    private var dofOn: Bool { (engine.sceneState.values["metal_dof"] ?? 0) > 0.5 }
 
     var body: some View {
-        // Pure content (no background / outer padding): the macOS popover and the
-        // iOS glassy card each supply their own chrome. Tight spacing keeps it
-        // vertically compact — it hugs its content rather than filling a sheet.
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Image(systemName: "camera")
-                Text("Camera").font(.system(size: 15, weight: .medium))
+                Image(systemName: "camera.metering.center.weighted")
+                Text("Depth of field").font(.system(size: 13, weight: .medium))
                 Spacer()
             }
             .foregroundColor(PanelTheme.textColor)
             .padding(.bottom, 2)
 
-            ForEach(SceneCatalog.cameraOverlayKeys, id: \.self) { key in
-                if let p = SceneCatalog.param(for: key) {
-                    SceneParamRow(param: p, engine: engine)
+            HStack(spacing: 20) {
+                dofToggle("Enabled", key: "metal_dof", id: "dof.enabled", enabled: true) { on in
+                    engine.runCommand("set metal_dof, \(on ? 1 : 0)")
                 }
+                HStack(spacing: 5) {
+                    dofToggle("Auto lock", key: "metal_dof_autofocus", id: "dof.autolock", enabled: dofOn) { on in
+                        engine.runCommand(CameraCommands.setAutofocus(on))
+                    }
+                    HelpButton(text: "Auto lock focus keeps the current selection in sharp focus. Select the atoms you want sharp, then turn this on — the focus point tracks that selection as the camera moves. Off lets you set the focus distance by hand with the slider below.")
+                }
+                Spacer()
             }
 
-            Button { engine.runCommand("reset") } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "dot.viewfinder")
-                    Text("Reset view")
-                    Spacer()
-                }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(PanelTheme.selectionTextColor)
-                .padding(.top, 6)
-                .contentShape(Rectangle())
+            if let focus = SceneCatalog.param(for: "metal_dof_focus") {
+                SceneParamRow(param: focus, engine: engine, compact: true)
             }
-            .buttonStyle(.plain)
+            if let aperture = SceneCatalog.param(for: "metal_dof_aperture") {
+                SceneParamRow(param: aperture, engine: engine, compact: true)
+            }
+        }
+    }
+
+    private func dofToggle(_ label: String, key: String, id: String,
+                           enabled: Bool, onToggle: @escaping (Bool) -> Void) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 11)).foregroundColor(PanelTheme.textColor)
+            ToggleSetting(value: engine.sceneState.values[key] ?? 0, onToggle: onToggle)
+                .accessibilityIdentifier(id)
+                .accessibilityLabel(label)
+        }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+    }
+}
+
+// Bottom-docked camera control strip (Photos-app "Adjust" model): a row of icon
+// buttons where one control opens at a time above the strip. Reuses SceneParamRow
+// for every slider control so all camera logic stays in one place. Used on all
+// platforms via ContentView's bottom overlay.
+struct CameraDock: View {
+    @ObservedObject var engine: PyMOLEngine
+    // Dismisses the whole dock (the ✕ close button).
+    let onClose: () -> Void
+    // Which control's surface is open above the strip. nil = strip only.
+    // "ortho" toggles instantly and never becomes `open`.
+    @State private var open: String? = nil
+
+    private var orthoOn: Bool { (engine.sceneState.values["ortho"] ?? 0) > 0.5 }
+    private var dofOn: Bool { (engine.sceneState.values["metal_dof"] ?? 0) > 0.5 }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let key = open {
+                Group {
+                    if key == "metal_dof" {
+                        DOFSubPanelContent(engine: engine)
+                    } else if key == "field_of_view", let p = SceneCatalog.param(for: key) {
+                        // Lens row: Ortho toggle on the left; the Lens slider greys
+                        // itself out (via SceneParamRow) while Ortho is on.
+                        HStack(spacing: 10) {
+                            orthoToggle
+                            SceneParamRow(param: p, engine: engine, compact: true)
+                        }
+                    } else if let p = SceneCatalog.param(for: key) {
+                        SceneParamRow(param: p, engine: engine, compact: true)
+                    }
+                }
+                .padding(.horizontal, 4)
+                Divider().overlay(PanelTheme.textColor.opacity(0.15))
+            }
+            HStack(spacing: 10) {
+                ForEach(SceneCatalog.cameraStripKeys, id: \.self) { stripIcon($0) }
+                stripAction(icon: "xmark", label: "Close", id: "camDock.close") {
+                    onClose()
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        // Hug the icon strip tightly when collapsed (a compact centered pill); when
+        // a control is open, expand to fit the slider submenu, capped so it never
+        // spans the whole viewport. The bottom overlay centers it either way.
+        .fixedSize(horizontal: open == nil, vertical: false)
+        .frame(maxWidth: open == nil ? nil : 360)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+        .animation(.easeOut(duration: 0.18), value: open)
+    }
+
+    private func tap(_ key: String) {
+        open = (open == key) ? nil : key
+    }
+
+    // Ortho lives in the Lens row (perspective vs orthographic). Toggling it greys
+    // the Lens slider (SceneParamRow self-disables field_of_view while ortho is on).
+    private var orthoToggle: some View {
+        Button {
+            engine.runCommand("set ortho, \(orthoOn ? 0 : 1)")
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "cube")
+                Text("Ortho")
+            }
+            .font(.system(size: 12))
+            .foregroundColor(orthoOn ? .black : PanelTheme.buttonText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(orthoOn ? PanelTheme.selectionTextColor : PanelTheme.buttonBackground,
+                        in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityIdentifier("camDock.ortho")
+        .accessibilityLabel("Orthographic")
+    }
+
+    @ViewBuilder
+    private func stripIcon(_ key: String) -> some View {
+        let active = (open == key)
+        Button { tap(key) } label: {
+            VStack(spacing: 3) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: SceneCatalog.cameraIcon(for: key))
+                        .font(.system(size: 17))
+                        .foregroundColor(active ? .black : PanelTheme.buttonText)
+                        .frame(width: 42, height: 42)
+                        .background(active ? PanelTheme.selectionTextColor : PanelTheme.buttonBackground,
+                                    in: Circle())
+                    if key == "metal_dof" && dofOn {
+                        Circle().fill(PanelTheme.selectionTextColor)
+                            .frame(width: 9, height: 9)
+                            .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+                            .offset(x: 2, y: -2)
+                    }
+                }
+                Text(shortLabel(key)).font(.system(size: 10))
+                    .foregroundColor(active ? PanelTheme.selectionTextColor : PanelTheme.textColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(axID(key))
+        .accessibilityLabel(fullLabel(key))
+    }
+
+    private func stripAction(icon: String, label: String, id: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 17))
+                    .foregroundColor(PanelTheme.buttonText)
+                    .frame(width: 42, height: 42)
+                    .background(PanelTheme.buttonBackground, in: Circle())
+                Text(label).font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
+        .accessibilityLabel(label)
+    }
+
+    private func shortLabel(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "Lens"
+        case "zoom":          return "Zoom"
+        case "ortho":         return "Ortho"
+        case "metal_dof":     return "Depth"
+        default:              return key
+        }
+    }
+    private func fullLabel(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "Lens"
+        case "zoom":          return "Zoom"
+        case "ortho":         return "Orthographic"
+        case "metal_dof":     return "Depth of field"
+        default:              return key
+        }
+    }
+    private func axID(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "camDock.lens"
+        case "zoom":          return "camDock.zoom"
+        case "ortho":         return "camDock.ortho"
+        case "metal_dof":     return "camDock.depth"
+        default:              return "camDock.\(key)"
         }
     }
 }
