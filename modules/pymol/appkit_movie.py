@@ -49,6 +49,58 @@ def _ease(linear):
     return v, v
 
 
+def _multistate_objects(names=None):
+    """{objname: nstates} for objects with >1 coordinate state. `names` (list)
+    restricts to those objects; None = every object in the session."""
+    out = {}
+    try:
+        objs = names if names else cmd.get_object_list()
+    except Exception:
+        objs = []
+    for o in (objs or []):
+        try:
+            ns = int(cmd.count_states(o))
+            if ns > 1:
+                out[o] = ns
+        except Exception:
+            pass
+    return out
+
+
+def _emit_state_sweep(obj, nstates, start, end, mode='sweep'):
+    """Store per-object STATE keyframes so `obj` sweeps 1..nstates across movie
+    frames [start,end], then interpolate that object's own track. Both endpoints
+    are flagged (state=) so View.cpp interpolates the state channel; the per-object
+    ViewElem sets the object's own `state` at render (independent of the mset and
+    of other objects). mode: 'sweep' (1->N) or 'loop' (1->N->1)."""
+    try:
+        s = int(start); e = int(end); n = int(nstates)
+        if e <= s:
+            e = s + 1
+        if mode == 'loop':
+            mid = (s + e) // 2
+            cmd.mview('store', object=obj, first=s,   state=1)
+            cmd.mview('store', object=obj, first=mid, state=n)
+            cmd.mview('store', object=obj, first=e,   state=1)
+        else:
+            cmd.mview('store', object=obj, first=s, state=1)
+            cmd.mview('store', object=obj, first=e, state=n)
+        cmd.mview('interpolate', object=obj)
+    except Exception as ex:
+        print('MOVIE_ERR:' + str(ex))
+
+
+def reset_ensemble():
+    """Drop all movie authoring and rewind so a multi-state object plays its raw
+    models again (count_frames falls back to the state count)."""
+    try:
+        cmd.mview('reset')
+        cmd.mset('')
+        cmd.rewind()
+    except Exception as e:
+        print('MOVIE_ERR:' + str(e))
+
+
 def capture_keyframe(linear=0):
     """Store a camera keyframe at the current frame and (re)interpolate all
     stored keyframes with the chosen easing. 'reinterpolate' redoes every
@@ -321,14 +373,18 @@ def rebuild(spec_json):
     try:
         spec = json.loads(spec_json)
         if not spec:
-            cmd.mview('reset')
-            cmd.mset('')
-            cmd.rewind()
+            reset_ensemble()
             return
-        total = max(2, max(int(it['frame']) for it in spec))
         cmd.mview('reset')
+        total = max(2, max(int(it.get('end', it['frame'])) for it in spec))
         cmd.mset('1 x%d' % total)
-        for it in spec:
+
+        state_clips = [it for it in spec if it.get('states')]
+        cam_scene = [it for it in spec if not it.get('states')]
+
+        # Camera + scene keyframes on the GLOBAL track (camera view / scene reps),
+        # plus an optional pinned global state for non-swept objects.
+        for it in cam_scene:
             f = int(it['frame'])
             power = float(it.get('power', 0.0))
             linear = int(it.get('linear', 0))
@@ -338,13 +394,46 @@ def rebuild(spec_json):
                 name = base64.b64decode(sc).decode('utf-8')
                 cmd.scene(name, 'recall')       # live view+reps become the scene
                 cmd.mview('store', first=f, scene=name, power=power, linear=linear)
+                # Preserve the scene's stored state for non-swept objects.
+                try:
+                    cmd.mview('store', first=f, state=int(cmd.get_state()))
+                except Exception:
+                    pass
             else:
                 cam = it.get('cam')
                 v = _views.get(str(cam)) if cam is not None else None
                 if v:
                     cmd.set_view(v)
                 cmd.mview('store', first=f, power=power, linear=linear)
-        cmd.mview('interpolate')
+            ps = it.get('state')
+            if ps is not None:
+                cmd.mview('store', first=f, state=int(ps))
+        if cam_scene:
+            cmd.mview('interpolate')
+
+        # State sweeps — per-object tracks (independent; no clamping between objects).
+        if state_clips:
+            for clip in state_clips:
+                start = int(clip['frame']); end = int(clip.get('end', total))
+                mode = str(clip.get('mode', 'sweep'))
+                ms = _multistate_objects(clip.get('objects'))
+                if mode == 'lockstep':
+                    # One global sweep to the max count; shorter objects clamp.
+                    mx = max(ms.values()) if ms else 1
+                    span = max(1, end - start)
+                    seq = ' '.join(
+                        str(int(1 + round((mx - 1) * (i - start) / span)))
+                        for i in range(start, end + 1))
+                    cmd.mset(seq, start)   # overwrite that span of the global mset
+                else:
+                    for obj, n in ms.items():
+                        _emit_state_sweep(obj, n, start, end, mode)
+        else:
+            # Non-destructive default: auto-sweep every multi-state object across
+            # the whole movie so a camera/scene movie never freezes the ensemble.
+            for obj, n in _multistate_objects().items():
+                _emit_state_sweep(obj, n, 1, total, 'sweep')
+
         cmd.rewind()
     except Exception as e:
         print('MOVIE_ERR:' + str(e))
