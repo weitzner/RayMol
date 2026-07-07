@@ -198,11 +198,16 @@ struct WhatsNewModal: View {
     static func loadedImage(_ name: String?) -> Image? {
         guard let name, !name.isEmpty else { return nil }
         let stem = (name as NSString).deletingPathExtension
-        // 1) Asset catalog (asset names carry no extension).
+        // 1) Asset catalog (asset names carry no extension). Build the SwiftUI
+        // Image from the resolved platform image rather than Image(name:): on
+        // iOS `UIImage(named:)` also finds LOOSE bundle files, so returning
+        // Image(name:) — which only searches the asset catalog — would render a
+        // blank hero for a Resources/ file. Image(uiImage:)/Image(nsImage:)
+        // works for both an asset set and a loose file.
         #if os(macOS)
-        if NSImage(named: stem) != nil { return Image(stem) }
+        if let img = NSImage(named: stem) { return Image(nsImage: img) }
         #else
-        if UIImage(named: stem) != nil { return Image(stem) }
+        if let img = UIImage(named: stem) { return Image(uiImage: img) }
         #endif
         // 2) Bundled image file (with or without an explicit extension).
         let givenExt = (name as NSString).pathExtension

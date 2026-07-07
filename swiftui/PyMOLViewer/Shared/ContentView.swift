@@ -995,6 +995,15 @@ struct ContentView: View {
                     if s == "whatsnew" { whatsNew.presentManually() }
                 }
             }
+            // Test affordance (screenshot harness): auto-open the Camera control
+            // dock so its layout can be captured without a tap (simctl can't
+            // synthesize one). Delayed so an AUTOLOAD/AUTOCMD structure is present
+            // (the dock only shows when an object exists). PYMOL_AUTOCAMERA=1.
+            if ProcessInfo.processInfo.environment["PYMOL_AUTOCAMERA"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                    withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = true }
+                }
+            }
             autoSelectThemeFromEnv()
             if let m = ProcessInfo.processInfo.environment["PYMOL_AUTOMEASURE"] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
