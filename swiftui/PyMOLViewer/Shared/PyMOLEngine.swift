@@ -1163,6 +1163,60 @@ final class PyMOLEngine: ObservableObject {
     func stepForward() { movieCmd("forward()") }
     func stepBackward() { movieCmd("backward()") }
 
+    // MARK: - Per-object model (state) playback — NMR/MD inspection, independent
+    // of the movie. Each object animates its OWN coordinate state at its OWN fps
+    // via a Swift timer (`set state, k, obj`), so ensembles can play at different
+    // rates without touching the global movie frame. The state-row slider follows
+    // via the object poll. Opening the Movie tab stops all of these.
+    @Published var playingObjects: Set<String> = []
+    @Published var objectFPS: [String: Double] = [:]
+    private var objectStateTimers: [String: Timer] = [:]
+
+    func objectPlaybackFPS(_ name: String) -> Double { objectFPS[name] ?? 15 }
+
+    func setObjectFPS(_ name: String, _ fps: Double) {
+        objectFPS[name] = fps
+        if playingObjects.contains(name) { startObjectStates(name) }   // re-time
+    }
+
+    func toggleObjectStates(_ name: String) {
+        playingObjects.contains(name) ? stopObjectStates(name) : startObjectStates(name)
+    }
+
+    func startObjectStates(_ name: String) {
+        stopObjectStates(name)
+        guard let total = objects.first(where: { $0.name == name })?.stateCount, total > 1 else { return }
+        let fps = objectPlaybackFPS(name)
+        var k = min(max(objectMeta[name]?.state ?? 1, 1), total)
+        playingObjects.insert(name)
+        let t = Timer(timeInterval: 1.0 / max(fps, 0.1), repeats: true) { [weak self] _ in
+            guard let self else { return }
+            k = k >= total ? 1 : k + 1
+            self.runCommand("set state, \(k), \(name)")
+        }
+        RunLoop.main.add(t, forMode: .common)   // keeps ticking during scroll/interaction
+        objectStateTimers[name] = t
+    }
+
+    func stopObjectStates(_ name: String) {
+        objectStateTimers[name]?.invalidate(); objectStateTimers[name] = nil
+        playingObjects.remove(name)
+    }
+
+    func stopAllObjectStates() {
+        objectStateTimers.values.forEach { $0.invalidate() }
+        objectStateTimers.removeAll()
+        if !playingObjects.isEmpty { playingObjects.removeAll() }
+    }
+
+    func stepObjectState(_ name: String, by delta: Int) {
+        guard let total = objects.first(where: { $0.name == name })?.stateCount, total > 1 else { return }
+        let cur = min(max(objectMeta[name]?.state ?? 1, 1), total)
+        var n = cur + delta
+        if n < 1 { n = total } else if n > total { n = 1 }
+        runCommand("set state, \(n), \(name)")
+    }
+
     // Live scrub: clamp, set immediately for snappy UI, throttle the core call.
     func scrub(to frame: Int) {
         let f = max(1, min(frame, max(playback.frameCount, 1)))

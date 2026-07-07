@@ -748,13 +748,6 @@ struct ObjectPanel: View {
 
             Divider()
 
-            // Model playback for the active multi-state object (NMR/MD inspection),
-            // decoupled from the movie timeline. Only when an ensemble is loaded.
-            if !engine.multiStateObjects().isEmpty {
-                ModelPlaybackBar()
-                Divider().opacity(0.5)
-            }
-
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
                     let objects = engine.objects.filter { !$0.isSelection }
@@ -1674,81 +1667,6 @@ private struct ObjectRowContent: View {
     }
 }
 
-// MARK: - Per-object model playback (NMR/MD inspection, detached from the movie)
-
-/// A single condensed model transport at the TOP of the Object panel: a dropdown
-/// picks the active multi-state object; buttons only (no slider) step its models.
-/// Drives the core frame (shared with the movie) — fine for inspecting a loaded
-/// ensemble; opening the Movie tab stops it. Renders nothing with no multi-state
-/// objects loaded.
-private struct ModelPlaybackBar: View {
-    @EnvironmentObject var engine: PyMOLEngine
-    @EnvironmentObject var playback: PlaybackState
-    @State private var selected: String?
-
-    private var objs: [(name: String, count: Int)] { engine.multiStateObjects() }
-    private var active: (name: String, count: Int)? {
-        objs.first { $0.name == selected } ?? objs.first
-    }
-
-    var body: some View {
-        if let a = active {
-            let cur = min(max(playback.currentFrame, 1), a.count)
-            HStack(spacing: 8) {
-                Menu {
-                    ForEach(objs, id: \.name) { o in
-                        Button("\(o.name) · \(o.count) models") { selected = o.name }
-                    }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "cube.box").font(.system(size: 9))
-                        Text(a.name).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.system(size: 7))
-                    }
-                    .foregroundColor(PanelTheme.textColor)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Capsule().fill(PanelTheme.buttonBackground))
-                }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .help("Which multi-state object to step")
-
-                Spacer(minLength: 4)
-
-                btn("backward.end.fill", "First model") { engine.rewindMovie() }
-                btn("backward.fill", "Previous model") { engine.stepBackward() }
-                Button { engine.togglePlay() } label: {
-                    Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(PanelTheme.accentColor)
-                        .frame(width: 24, height: 22).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(playback.isPlaying ? "Pause" : "Play models")
-                btn("forward.fill", "Next model") { engine.stepForward() }
-                btn("forward.end.fill", "Last model") { engine.endingMovie() }
-
-                Text("\(cur) / \(a.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundColor(PanelTheme.disabledColor)
-                    .frame(minWidth: 42, alignment: .trailing)
-            }
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(PanelTheme.rowAltBackground.opacity(0.5))
-        }
-    }
-
-    private func btn(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(PanelTheme.textColor)
-                .frame(width: 20, height: 20).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(label)
-    }
-}
-
 // MARK: - Expandable object card
 
 private struct ObjectCard: View {
@@ -1872,6 +1790,36 @@ private struct ObjectCard: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(PanelTheme.textColor)
                     .frame(width: 42, alignment: .trailing)
+            }
+            // Play/pause + per-object fps — animates THIS object's models (via a
+            // Swift timer + `set state`), independent of the movie and other objects.
+            HStack(spacing: 6) {
+                Text("Play")
+                    .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+                    .frame(width: 78, alignment: .leading)
+                Button { engine.toggleObjectStates(entry.name) } label: {
+                    Image(systemName: engine.playingObjects.contains(entry.name) ? "pause.fill" : "play.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(TimelineTheme.accent)
+                        .frame(width: 24, height: 20).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(engine.playingObjects.contains(entry.name) ? "Pause" : "Play models")
+                Spacer(minLength: 0)
+                Menu {
+                    ForEach([1.0, 5.0, 10.0, 15.0, 30.0], id: \.self) { f in
+                        Button("\(Int(f)) fps") { engine.setObjectFPS(entry.name, f) }
+                    }
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "speedometer").font(.system(size: 9))
+                        Text("\(Int(engine.objectPlaybackFPS(entry.name))) fps")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(TimelineTheme.accent)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Playback speed for this object")
             }
             HStack(spacing: 6) {
                 Text("Overlay all")

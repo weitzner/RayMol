@@ -110,13 +110,17 @@ struct TimelinePanel: View {
             Rectangle().fill(TimelineTheme.accent.opacity(0.35)).frame(height: 1)
             tracksSection
             scenePaletteStrip
-            // The transport plays ONLY the authored movie — decoupled from model
-            // inspection (that lives in the Object panel). No items = nothing to
-            // play, so the transport is hidden until the timeline has content.
-            if !engine.timelineItems.isEmpty {
-                Divider()
-                TransportBar(forceCompact: isCompact, inTimeline: true)
-            }
+            // The transport plays ONLY the authored movie (decoupled from model
+            // inspection, which lives in the Object panel). Visible but disabled
+            // when the timeline is empty, with a hint on how to build a movie.
+            Divider()
+            TransportBar(forceCompact: isCompact, inTimeline: true,
+                         movieFrames: engine.timelineTotalFrames)
+                .disabled(engine.timelineItems.isEmpty)
+                .opacity(engine.timelineItems.isEmpty ? 0.45 : 1)
+                .help(engine.timelineItems.isEmpty
+                      ? "Add a camera keyframe (◆), a scene, or a Play-models clip to build a movie"
+                      : "Play the movie")
             Divider().opacity(0.5)
             composer
         }
