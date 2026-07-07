@@ -84,13 +84,16 @@ struct TimelinePanel: View {
     private struct Laid: Identifiable {
         let item: PyMOLEngine.TimelineItem
         let index: Int
-        let frame: Int
+        let frame: Int        // start frame
+        let endFrame: Int     // == frame for camera/scene; span end for a states clip
         var id: UUID { item.id }
     }
     private var laidOut: [Laid] {
-        let frames = engine.itemFrames()
+        let spans = engine.itemSpans()
         return engine.timelineItems.enumerated().compactMap { i, it in
-            frames.indices.contains(i) ? Laid(item: it, index: i, frame: frames[i]) : nil
+            spans.indices.contains(i)
+                ? Laid(item: it, index: i, frame: spans[i].start, endFrame: spans[i].end)
+                : nil
         }
     }
 
@@ -420,19 +423,26 @@ struct TimelinePanel: View {
     // A camera keyframe (diamond) or scene marker (chip) at its timeline frame.
     private func itemNode(_ laid: Laid, pps: CGFloat) -> some View {
         let dragging = dragItemID == laid.item.id
-        let x = dragging ? dragX : xFor(laid.frame, pps: pps)
+        let startX = dragging ? dragX : xFor(laid.frame, pps: pps)
+        let w = nodeHitWidth(laid, pps: pps)
+        // A states clip is a BLOCK: left edge at its start frame (center = start+w/2).
+        // Camera/scene are points centered on their frame.
+        let isStates: Bool = { if case .states = laid.item.kind { return true } else { return false } }()
+        let cx = isStates ? startX + w / 2 : startX
         return Group {
             switch laid.item.kind {
             case .camera:
                 cameraNode(laid, current: laid.frame == playback.currentFrame)
             case .scene(let name):
                 sceneNode(name)
+            case .states(let spec):
+                statesNode(laid, spec: spec, pps: pps)
             }
         }
         .scaleEffect(dragging ? 1.25 : 1)
-        .frame(width: nodeHitWidth(laid), height: laneH)
+        .frame(width: w, height: laneH)
         .contentShape(Rectangle())
-        .position(x: max(x, 7), y: laneH / 2)
+        .position(x: max(cx, 7), y: laneH / 2)
         // highPriority so a drag on an item reorders instead of scrolling the lane.
         .highPriorityGesture(reorderDrag(laid, pps: pps))
         .onTapGesture { engine.seekToItem(laid.item.id) }
@@ -460,9 +470,42 @@ struct TimelinePanel: View {
         .accessibilityLabel("Scene marker \(name)")
     }
 
-    private func nodeHitWidth(_ laid: Laid) -> CGFloat {
+    private func nodeHitWidth(_ laid: Laid, pps: CGFloat) -> CGFloat {
+        if case .states = laid.item.kind {
+            return max(30, xFor(laid.endFrame, pps: pps) - xFor(laid.frame, pps: pps))
+        }
         if case .scene = laid.item.kind { return 88 }
         return 30
+    }
+
+    // A "Play models" ensemble clip: a block spanning its duration with a few
+    // decimated guide ticks (never one per model — a 2000-frame MD stays a block).
+    private func statesNode(_ laid: Laid, spec: PyMOLEngine.StatesSpec, pps: CGFloat) -> some View {
+        let w = max(30, xFor(laid.endFrame, pps: pps) - xFor(laid.frame, pps: pps))
+        let label: String = spec.objects.map {
+            $0.count == 1 ? $0[0] : "\($0.count) objects"
+        } ?? "\(engine.maxStateCount) models"
+        return RoundedRectangle(cornerRadius: 4)
+            .fill(TimelineTheme.accent.opacity(0.28))
+            .overlay(
+                HStack(spacing: 0) {   // ≤ 10 decimated guide ticks
+                    ForEach(0..<10, id: \.self) { i in
+                        if i > 0 { Rectangle().fill(TimelineTheme.accent.opacity(0.35)).frame(width: 1) }
+                        Spacer(minLength: 0)
+                    }
+                }
+            )
+            .overlay(
+                HStack(spacing: 3) {
+                    Image(systemName: spec.mode == .loop ? "repeat" : "film.stack").font(.system(size: 8))
+                    Text(label).font(.system(size: 10, weight: .medium)).lineLimit(1)
+                }
+                .foregroundColor(TimelineTheme.text)
+                .padding(.horizontal, 6)
+            )
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(TimelineTheme.accent, lineWidth: 1))
+            .frame(width: w, height: laneH - 16)
+            .accessibilityLabel("Play models clip \(label)")
     }
 
     private func itemMenu(_ laid: Laid) -> some View {
@@ -477,6 +520,27 @@ struct TimelinePanel: View {
             case .scene(let name):
                 Text("Scene · \(name) · frame \(laid.frame)")
                 Button { engine.recallScene(name) } label: { Label("Recall (preview)", systemImage: "eye") }
+                Button(role: .destructive) { engine.deleteItem(laid.item.id) } label: {
+                    Label("Remove from timeline", systemImage: "trash")
+                }
+            case .states(let spec):
+                Text("Play models · \(spec.objects?.count.description ?? "all") · frame \(laid.frame)")
+                Menu("Motion") {
+                    ForEach([PyMOLEngine.StatesMode.sweep, .loop, .lockstep], id: \.self) { m in
+                        Button {
+                            engine.updateStatesClip(laid.item.id, PyMOLEngine.StatesSpec(
+                                objects: spec.objects, mode: m, durationSeconds: spec.durationSeconds))
+                        } label: { Label(m.rawValue.capitalized, systemImage: spec.mode == m ? "checkmark" : "circle") }
+                    }
+                }
+                Menu("Duration") {
+                    ForEach([2.0, 4.0, 8.0, 12.0], id: \.self) { d in
+                        Button {
+                            engine.updateStatesClip(laid.item.id, PyMOLEngine.StatesSpec(
+                                objects: spec.objects, mode: spec.mode, durationSeconds: d))
+                        } label: { Label("\(Int(d)) s", systemImage: spec.durationSeconds == d ? "checkmark" : "clock") }
+                    }
+                }
                 Button(role: .destructive) { engine.deleteItem(laid.item.id) } label: {
                     Label("Remove from timeline", systemImage: "trash")
                 }

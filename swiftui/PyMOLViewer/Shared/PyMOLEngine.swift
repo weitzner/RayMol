@@ -203,13 +203,23 @@ final class PyMOLEngine: ObservableObject {
         var seconds: Double = 2.0    // gap from the previous item to this one
         var linear: Bool = false     // false = smooth (eased) default
     }
+    enum StatesMode: String, Equatable { case sweep, loop, lockstep }
+    // A "Play models" clip: sweep one or more multi-state objects across a span.
+    struct StatesSpec: Equatable {
+        var objects: [String]? = nil          // nil = all multi-state objects
+        var mode: StatesMode = .sweep
+        var durationSeconds: Double = 4.0
+    }
     struct TimelineItem: Identifiable, Equatable {
-        enum Kind: Equatable { case camera; case scene(name: String) }
+        enum Kind: Equatable { case camera; case scene(name: String); case states(StatesSpec) }
         let id: UUID
         var kind: Kind
         var transition: Transition   // transition INTO this item (item[0]'s ignored)
-        init(id: UUID = UUID(), kind: Kind, transition: Transition = Transition()) {
+        var pinnedState: Int? = nil  // camera/scene: hold this model (opt out of auto-sweep)
+        init(id: UUID = UUID(), kind: Kind, transition: Transition = Transition(),
+             pinnedState: Int? = nil) {
             self.id = id; self.kind = kind; self.transition = transition
+            self.pinnedState = pinnedState
         }
     }
     @Published var timelineItems: [TimelineItem] = []
@@ -1388,21 +1398,34 @@ final class PyMOLEngine: ObservableObject {
     // durations: item[0] sits at frame 1 (its inbound transition is ignored);
     // each later item is `transition.seconds` (× fps) past the previous, forced
     // strictly increasing so mview keyframes never collide. [] when empty.
-    func itemFrames() -> [Int] {
+    // Each item's (startFrame, endFrame). Camera/scene are zero-width points
+    // (end == start); a states clip occupies its own span (end = start + its
+    // duration × fps), so later items begin after it.
+    func itemSpans() -> [(start: Int, end: Int)] {
         guard !timelineItems.isEmpty else { return [] }
         let fps = max(playback.movieFPS, 1)
-        var frames: [Int] = []
+        var out: [(Int, Int)] = []
         var acc = 0.0
         for (i, it) in timelineItems.enumerated() {
-            if i == 0 { frames.append(1); continue }
-            acc += max(it.transition.seconds, 0.1)
-            let f = 1 + Int((acc * fps).rounded())
-            frames.append(max((frames.last ?? 0) + 1, f))
+            let start: Int
+            if i == 0 {
+                start = 1
+            } else {
+                acc += max(it.transition.seconds, 0.1)
+                start = max((out.last?.1 ?? 0) + 1, 1 + Int((acc * fps).rounded()))
+            }
+            var end = start
+            if case .states(let spec) = it.kind {
+                end = start + max(1, Int((spec.durationSeconds * fps).rounded()))
+            }
+            out.append((start, end))
         }
-        return frames
+        return out
     }
 
-    var timelineTotalFrames: Int { itemFrames().last ?? 1 }
+    func itemFrames() -> [Int] { itemSpans().map { $0.start } }
+
+    var timelineTotalFrames: Int { itemSpans().map { $0.end }.max() ?? 1 }
 
     // Rebuild the whole core movie from `timelineItems`. Serializes an ordered
     // spec (camera → UUID into _views; scene → base64 name) with each item's
@@ -1418,26 +1441,75 @@ final class PyMOLEngine: ObservableObject {
             playback.currentFrame = 1
             return
         }
-        let frames = itemFrames()
+        let spans = itemSpans()
         var parts: [String] = []
         for (i, it) in timelineItems.enumerated() {
-            let f = frames[i]
+            let (start, end) = spans[i]
             let ease = it.transition.linear
                 ? "\"power\":1.0,\"linear\":1"
                 : "\"power\":0.0,\"linear\":0"
             switch it.kind {
             case .camera:
-                parts.append("{\"frame\":\(f),\"cam\":\"\(it.id.uuidString)\",\(ease)}")
+                var s = "{\"frame\":\(start),\"cam\":\"\(it.id.uuidString)\",\(ease)"
+                if let ps = it.pinnedState { s += ",\"state\":\(ps)" }
+                parts.append(s + "}")
             case .scene(let name):
                 let b64 = Data(name.utf8).base64EncodedString()
-                parts.append("{\"frame\":\(f),\"scene\":\"\(b64)\",\(ease)}")
+                var s = "{\"frame\":\(start),\"scene\":\"\(b64)\",\(ease)"
+                if let ps = it.pinnedState { s += ",\"state\":\(ps)" }
+                parts.append(s + "}")
+            case .states(let spec):
+                let objs = spec.objects.map {
+                    "[" + $0.map { "\"\($0)\"" }.joined(separator: ",") + "]"
+                } ?? "null"
+                parts.append("{\"frame\":\(start),\"end\":\(end),\"states\":1,"
+                    + "\"objects\":\(objs),\"mode\":\"\(spec.mode.rawValue)\"}")
             }
         }
         let json = "[" + parts.joined(separator: ",") + "]"
         let jb64 = Data(json.utf8).base64EncodedString()
         runPython("import base64 as _b64\nfrom pymol import appkit_movie as _am\n"
             + "_am.rebuild(_b64.b64decode('\(jb64)').decode('utf-8'))")
-        playback.frameCount = frames.last ?? 1
+        playback.frameCount = timelineTotalFrames
+        playback.currentFrame = 1
+    }
+
+    // Multi-state objects currently loaded (name, state count), and the max — used
+    // by the timeline to represent a bare ensemble and to target "Play models".
+    func multiStateObjects() -> [(name: String, count: Int)] {
+        objects.filter { $0.stateCount > 1 }.map { ($0.name, $0.stateCount) }
+    }
+    var maxStateCount: Int { objects.map { $0.stateCount }.max() ?? 1 }
+
+    // Append a "Play models" states clip (sweeps multi-state objects over `seconds`).
+    func appendStatesClip(objects: [String]? = nil,
+                          mode: StatesMode = .sweep, seconds: Double = 4.0) {
+        guard isReady else { return }
+        let spec = StatesSpec(objects: objects, mode: mode, durationSeconds: seconds)
+        timelineItems.append(TimelineItem(kind: .states(spec)))
+        rebuildMovie()
+    }
+
+    // Pin (or clear) the coordinate state a camera/scene item holds.
+    func setItemPinnedState(_ id: UUID, _ state: Int?) {
+        guard let i = timelineItems.firstIndex(where: { $0.id == id }) else { return }
+        timelineItems[i].pinnedState = state
+        rebuildMovie()
+    }
+
+    // Update a states clip's spec (mode / duration / objects) in place.
+    func updateStatesClip(_ id: UUID, _ spec: StatesSpec) {
+        guard let i = timelineItems.firstIndex(where: { $0.id == id }) else { return }
+        timelineItems[i].kind = .states(spec)
+        rebuildMovie()
+    }
+
+    // Drop all movie authoring so a multi-state object plays its raw models again.
+    func resetToPlainEnsemble() {
+        guard isReady else { return }
+        timelineItems.removeAll()
+        runPython("from pymol import appkit_movie as _am\n_am.reset_ensemble()")
+        playback.frameCount = max(maxStateCount, 1)
         playback.currentFrame = 1
     }
 
