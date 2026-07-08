@@ -32,6 +32,10 @@ xcuserdata
 .claude/*
 !.claude/skills/
 !.claude/agents/
+# Agent working memory is machine-specific (device UDIDs, signing team ID, local
+# absolute paths) and must never be tracked — including in nested checkouts like
+# swiftui/ that the root `.claude/*` rule above does not reach.
+**/.claude/agent-memory/
 .superpowers/
 *-this-session-is-being-continued-*.txt
 build_ios_dd/
