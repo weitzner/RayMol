@@ -727,73 +727,92 @@ struct TimelinePanel: View {
 
     // MARK: - Template composer (folded-in preset builders → Append)
     //
-    // The parameter chips scroll horizontally so their labels never wrap; Append
-    // stays pinned on the right.
+    // Chips + Append lay out on one row where the panel is wide enough; on the
+    // narrow docked column (~400pt) they wrap — the chips scroll horizontally on
+    // their own line above a full-width Append — so nothing clips (#143).
 
     private var composer: some View {
-        HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    Menu {
-                        Button("Camera Roll") { composerKind = "roll" }
-                        Button("Camera Rock") { composerKind = "rock" }
-                        Button("Scene loop")  { composerKind = "scenes" }
-                        // Only meaningful when a multi-state object (NMR/MD) is loaded.
-                        if engine.maxStateCount > 1 {
-                            Button("Play models") { composerKind = "states" }
-                        }
-                    } label: { composerChip(composerLabel, composerIcon) }
-                    .help("Motion preset to append")
-
-                    if composerKind == "states" {
-                        // Just pick which object(s); mode / range / duration are set
-                        // in the modal opened by Append.
-                        Menu {
-                            Button("All models") { composerStatesObject = nil }
-                            ForEach(engine.multiStateObjects(), id: \.name) { o in
-                                Button("\(o.name) · \(o.count)") { composerStatesObject = o.name }
-                            }
-                        } label: { composerChip(composerStatesObject ?? "All", "cube.box") }
-                        .help("Which object(s) to play through their models")
-                    } else if composerKind == "roll" || composerKind == "rock" {
-                        Menu {
-                            ForEach(["x", "y", "z"], id: \.self) { a in
-                                Button(a.uppercased()) { composerAxis = a }
-                            }
-                        } label: { composerChip(composerAxis.uppercased(), "arrow.triangle.2.circlepath") }
-                        .help("Rotation axis")
-                        Menu {
-                            ForEach([4, 8, 16], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
-                        } label: { composerChip("\(Int(composerDuration))s", "clock") }
-                        .help("Duration of the motion")
-                        if composerKind == "rock" {
-                            Menu {
-                                ForEach([30, 60, 90], id: \.self) { a in Button("\(a)°") { composerAngle = Double(a) } }
-                            } label: { composerChip("\(Int(composerAngle))°", "angle") }
-                            .help("Rock angle (± degrees)")
-                        }
-                    } else if composerKind == "scenes" {
-                        Menu {
-                            ForEach([2, 3, 5], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
-                        } label: { composerChip("\(Int(composerSecPerScene))s", "clock") }
-                        .help("Seconds per scene")
-                    }
+        ViewThatFits(in: .horizontal) {
+            // Wide: chips + Append share one row, Append pinned on the right.
+            HStack(spacing: 8) {
+                composerChips
+                appendButton
+            }
+            // Narrow: chips scroll on their own line above a full-width Append so
+            // the last parameter (e.g. Duration) is never clipped behind Append.
+            VStack(alignment: .leading, spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    composerChips.padding(.trailing, 4)
                 }
-                .padding(.vertical, 1).padding(.trailing, 4)
+                appendButton.frame(maxWidth: .infinity)
             }
-
-            Button(action: appendComposer) {
-                Label("Append", systemImage: "plus.rectangle.on.rectangle")
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(TimelineTheme.accent)
-            .help("Append this motion to the end of the timeline")
-            .disabled(composerKind == "scenes" && engine.sceneNames.isEmpty)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    // The parameter chips for the current preset. `.fixedSize()` so ViewThatFits
+    // measures their true (un-truncated) width when deciding row vs. wrap.
+    private var composerChips: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Button("Camera Roll") { composerKind = "roll" }
+                Button("Camera Rock") { composerKind = "rock" }
+                Button("Scene loop")  { composerKind = "scenes" }
+                // Only meaningful when a multi-state object (NMR/MD) is loaded.
+                if engine.maxStateCount > 1 {
+                    Button("Play models") { composerKind = "states" }
+                }
+            } label: { composerChip(composerLabel, composerIcon) }
+            .help("Motion preset to append")
+
+            if composerKind == "states" {
+                // Just pick which object(s); mode / range / duration are set
+                // in the modal opened by Append.
+                Menu {
+                    Button("All models") { composerStatesObject = nil }
+                    ForEach(engine.multiStateObjects(), id: \.name) { o in
+                        Button("\(o.name) · \(o.count)") { composerStatesObject = o.name }
+                    }
+                } label: { composerChip(composerStatesObject ?? "All", "cube.box") }
+                .help("Which object(s) to play through their models")
+            } else if composerKind == "roll" || composerKind == "rock" {
+                Menu {
+                    ForEach(["x", "y", "z"], id: \.self) { a in
+                        Button(a.uppercased()) { composerAxis = a }
+                    }
+                } label: { composerChip(composerAxis.uppercased(), "arrow.triangle.2.circlepath") }
+                .help("Rotation axis")
+                Menu {
+                    ForEach([4, 8, 16], id: \.self) { s in Button("\(s) s") { composerDuration = Double(s) } }
+                } label: { composerChip("\(Int(composerDuration))s", "clock") }
+                .help("Duration of the motion")
+                if composerKind == "rock" {
+                    Menu {
+                        ForEach([30, 60, 90], id: \.self) { a in Button("\(a)°") { composerAngle = Double(a) } }
+                    } label: { composerChip("\(Int(composerAngle))°", "angle") }
+                    .help("Rock angle (± degrees)")
+                }
+            } else if composerKind == "scenes" {
+                Menu {
+                    ForEach([2, 3, 5], id: \.self) { s in Button("\(s) s / scene") { composerSecPerScene = Double(s) } }
+                } label: { composerChip("\(Int(composerSecPerScene))s", "clock") }
+                .help("Seconds per scene")
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var appendButton: some View {
+        Button(action: appendComposer) {
+            Label("Append", systemImage: "plus.rectangle.on.rectangle")
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(TimelineTheme.accent)
+        .help("Append this motion to the end of the timeline")
+        .disabled(composerKind == "scenes" && engine.sceneNames.isEmpty)
     }
 
     private func composerChip(_ text: String, _ icon: String) -> some View {
