@@ -767,6 +767,7 @@ struct ObjectPanel: View {
             if hSizeClass == .compact {
                 HStack(spacing: 8) {
                     Spacer()
+                    ClearSelectionButton()
                     SelectionModeMenu()
                 }
                 .padding(.horizontal, 8)
@@ -922,6 +923,31 @@ struct SelectionModeMenu: View {
         .repMenuChrome()
         .fixedSize()
         .help("Selection mode — what a tap selects")
+    }
+}
+
+/// One-tap "clear selection" — runs `deselect`, which hides the active
+/// selection markers (the pink `sele` indicators) without deleting any named
+/// selections. Lives right next to `SelectionModeMenu` in the shared inspector
+/// chrome (macOS/iPad) and the iPhone Object-panel header, so it's reachable
+/// from every tab. Dimmed and non-interactive when nothing is selected.
+struct ClearSelectionButton: View {
+    @EnvironmentObject var engine: PyMOLEngine
+    private var hasActiveSelection: Bool {
+        engine.objects.contains { $0.isSelection && $0.isEnabled }
+    }
+    var body: some View {
+        Button { engine.runCommand("deselect") } label: {
+            Image(systemName: "xmark.circle")
+                .font(.system(size: 10))
+                // Accent (blue) when there's something to clear — matches the
+                // panel's action buttons (A/S/H/L/C) — else dimmed grey.
+                .foregroundColor(hasActiveSelection ? PanelTheme.accentColor : PanelTheme.disabledColor)
+        }
+        .buttonStyle(.plain)
+        .disabled(!hasActiveSelection)
+        .fixedSize()
+        .help("Clear selection — hide the current selection markers")
     }
 }
 
