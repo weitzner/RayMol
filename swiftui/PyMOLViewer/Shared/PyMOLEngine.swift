@@ -891,6 +891,16 @@ final class PyMOLEngine: ObservableObject {
         PyMOLBridge_RenderHiResPNG(inst, path, Int32(width), Int32(height), Int32(rayTraced))
     }
 
+    // Rebuild dirty object representations for the current frame on the MAIN
+    // thread. Movie export calls this before its off-main renderHiResPNG so the
+    // rep rebuild — which reaches the Python C-API via the busy-status callback —
+    // runs where the embedded interpreter's GIL is held, not on the render queue.
+    // MUST be called on the main thread.
+    func updateScene() {
+        guard let inst = instance else { return }
+        PyMOLBridge_UpdateScene(inst)
+    }
+
     // Whether the active GPU supports hardware ray tracing. The UI gates the
     // metal_raytrace toggle on this so it isn't offered where it has no effect
     // (iOS Simulator, A-series iPads). Defaults to true when unknown (renderer
