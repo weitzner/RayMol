@@ -1884,9 +1884,17 @@ private struct ObjectCard: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(engine.timelineMode)   // authoring a movie → model playback off
-                .help(engine.timelineMode
-                      ? "Model playback is off while the movie timeline is open — close it to inspect models"
-                      : (engine.playingObjects.contains(entry.name) ? "Pause" : "Play models"))
+                // A disabled Button swallows its own hover events, so `.help()` on
+                // it never fires. Wrap it so the tooltip lives on a non-disabled
+                // container that still receives hover while playback is off.
+                .allowsHitTesting(!engine.timelineMode)
+                .overlay {
+                    if engine.timelineMode {
+                        Color.clear.contentShape(Rectangle())
+                            .help("Model playback is off while the movie timeline is open — close it to inspect models")
+                    }
+                }
+                .help(engine.playingObjects.contains(entry.name) ? "Pause" : "Play models")
                 Spacer(minLength: 0)
                 Menu {
                     ForEach([1.0, 5.0, 10.0, 15.0, 30.0], id: \.self) { f in
