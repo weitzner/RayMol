@@ -2631,25 +2631,24 @@ struct ScenesPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 // Scene chips with an inline "+" chip that stores the current
-                // view as a new scene (in line with the existing scenes).
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(sceneOrder, id: \.self) { name in
-                            sceneChip(name)
-                                .opacity(draggingScene == name ? 0.35 : 1)
-                                .onDrag {
-                                    draggingScene = name
-                                    return NSItemProvider(object: name as NSString)
-                                }
-                                .onDrop(of: ["public.text"],
-                                        delegate: SceneDropDelegate(item: name, order: $sceneOrder,
-                                                                    dragging: $draggingScene,
-                                                                    onReorder: applySceneOrder))
-                        }
-                        addChip
+                // view as a new scene (in line with the existing scenes). Chips
+                // wrap onto multiple rows rather than overflowing (issue #114).
+                FlowLayout(spacing: 8) {
+                    ForEach(sceneOrder, id: \.self) { name in
+                        sceneChip(name)
+                            .opacity(draggingScene == name ? 0.35 : 1)
+                            .onDrag {
+                                draggingScene = name
+                                return NSItemProvider(object: name as NSString)
+                            }
+                            .onDrop(of: ["public.text"],
+                                    delegate: SceneDropDelegate(item: name, order: $sceneOrder,
+                                                                dragging: $draggingScene,
+                                                                onReorder: applySceneOrder))
                     }
-                    .padding(.vertical, 4)
+                    addChip
                 }
+                .padding(.vertical, 4)
                 .onAppear { sceneOrder = engine.sceneNames }
                 .onChange(of: engine.sceneNames) { newNames in
                     // Resync only when the SET changes (scene added/removed); a
@@ -2821,6 +2820,60 @@ private struct SceneDropDelegate: DropDelegate {
         dragging = nil
         onReorder()
         return true
+    }
+}
+
+/// Left-aligned wrapping layout: places subviews left-to-right and wraps to a
+/// new row when the next subview would overflow the proposed width. Used for
+/// the scene-chip row so chips flow onto multiple rows instead of overflowing
+/// or requiring horizontal scrolling (issue #114).
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0 && rowWidth + spacing + size.width > maxWidth {
+                // wrap to next row
+                totalWidth = max(totalWidth, rowWidth)
+                totalHeight += rowHeight + spacing
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+        totalWidth = max(totalWidth, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let maxWidth = bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.minX + maxWidth {
+                // wrap to next row
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                          proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 

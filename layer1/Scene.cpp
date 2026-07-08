@@ -2061,16 +2061,26 @@ bool ScenePNG(PyMOLGlobals* G, pymol::zstring_view png, float dpi, int quiet,
       dpi = SettingGetGlobal_f(G, cSetting_image_dots_per_inch);
     auto screen_gamma = SettingGetGlobal_f(G, cSetting_png_screen_gamma);
     auto file_gamma = SettingGetGlobal_f(G, cSetting_png_file_gamma);
+    // outbuf != nullptr means we're capturing to an in-memory buffer (e.g.
+    // scene thumbnails) rather than a file, so there is no path to report and
+    // the "check directory" hint would be misleading (issue #113).
+    const bool to_buffer = (outbuf != nullptr);
     if(MyPNGWrite(png, *saveImage, dpi, format, quiet, screen_gamma, file_gamma, outbuf)) {
-      if(!quiet) {
+      if(!quiet && !to_buffer) {
         PRINTFB(G, FB_Scene, FB_Actions)
           " %s: wrote %dx%d pixel image to file \"%s\".\n", __func__,
           width, I->Image->getHeight(), png.c_str() ENDFB(G);
       }
-    } else {
+    } else if(!to_buffer) {
       PRINTFB(G, FB_Scene, FB_Errors)
         " %s-Error: error writing \"%s\"! Please check directory...\n", __func__,
         png.c_str() ENDFB(G);
+    } else if(!quiet) {
+      // In-memory capture failed (e.g. build without libpng). Callers that want
+      // this silent (scene thumbnails) pass quiet, so don't spam the console.
+      PRINTFB(G, FB_Scene, FB_Errors)
+        " %s-Error: error encoding %dx%d pixel image to memory buffer.\n",
+        __func__, width, I->Image->getHeight() ENDFB(G);
     }
   }
   return I->Image.get() != nullptr;
