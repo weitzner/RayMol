@@ -2939,6 +2939,33 @@ struct SettingsSheet: View {
                 Button("Done") { dismiss() }
             }.padding(16)
 
+            #if os(iOS)
+            // "What's New" entry point. Close Settings first, then open the splash
+            // (a slight delay avoids presenting one sheet on top of another).
+            Button {
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    NotificationCenter.default.post(name: .raymolShowWhatsNew, object: nil)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                    Text("What's New in RayMol")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 10).padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.gray.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+            .accessibilityIdentifier("whatsNewSettingsRow")
+            #endif
+
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search \(engine.settingsCatalog.count) settings…", text: $search)

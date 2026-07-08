@@ -130,6 +130,14 @@ struct PyMOLApp: App {
             CommandGroup(replacing: .appInfo) {
                 Button("About RayMol") { showAboutPanel() }
             }
+            // "What's New" splash, on demand. Ungated so it's present on every
+            // macOS build (incl. Mac App Store); posts .raymolShowWhatsNew, which
+            // ContentView's body observes to present the sheet.
+            CommandGroup(after: .appInfo) {
+                Button("What's New in RayMol") {
+                    NotificationCenter.default.post(name: .raymolShowWhatsNew, object: nil)
+                }
+            }
             #if os(macOS) && !RAYMOL_MAS_RESTRICTED
             // Sparkle auto-update (Developer-ID/DMG build only; the Mac App Store
             // build updates through Apple). Placed in the app menu next to About.

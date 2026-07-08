@@ -49,6 +49,9 @@ extension Notification.Name {
     static let raymolExportImage  = Notification.Name("raymol.menu.exportImage")
     static let raymolToggleTimeline = Notification.Name("raymol.menu.toggleTimeline")
     static let mcpOpenConnectSheet = Notification.Name("raymol.mcp.openConnectSheet")
+    // Posted by the macOS app-menu item and the iOS Settings row to open the
+    // "What's New" splash on demand; observed in ContentView.body.
+    static let raymolShowWhatsNew = Notification.Name("raymol.menu.showWhatsNew")
 }
 
 #if os(iOS)
@@ -203,6 +206,9 @@ private extension View {
 struct ContentView: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager
+    // "What's New" splash: auto-shows once after a version bump; also opened on
+    // demand via the app menu / Settings (see WhatsNewModel / WhatsNewModal).
+    @StateObject private var whatsNew = WhatsNewModel()
     @State private var showThemeStudio = false   // inline Theme studio (replaces a panel region)
     @AppStorage("mouseLegendCollapsed") private var mouseLegendCollapsed = false
     // Pending auto-minimize of the expanded mouse legend (fires ~1s after the
@@ -245,6 +251,26 @@ struct ContentView: View {
     }
 
     var body: some View {
+        layout
+            // What's New splash (both platforms, single hook): once-per-launch
+            // auto-show, the manual-open notification, and the sheet itself.
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                    whatsNew.presentAutoIfNeeded()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .raymolShowWhatsNew)) { _ in
+                whatsNew.presentManually()
+            }
+            .sheet(isPresented: $whatsNew.isPresented, onDismiss: { whatsNew.didDismiss() }) {
+                WhatsNewModal(pages: whatsNew.pages,
+                              versionLabel: whatsNew.currentVersion) {
+                    whatsNew.isPresented = false
+                }
+            }
+    }
+
+    @ViewBuilder private var layout: some View {
         #if os(macOS)
         macOSLayout
         #else
@@ -1047,6 +1073,16 @@ struct ContentView: View {
                     if s == "export" { showExportSheet = true }
                     if s == "settings" { showSettingsSheet = true }
                     if s == "theme" { withAnimation { showThemeStudio = true } }
+                    if s == "whatsnew" { whatsNew.presentManually() }
+                }
+            }
+            // Test affordance (screenshot harness): auto-open the Camera control
+            // dock so its layout can be captured without a tap (simctl can't
+            // synthesize one). Delayed so an AUTOLOAD/AUTOCMD structure is present
+            // (the dock only shows when an object exists). PYMOL_AUTOCAMERA=1.
+            if ProcessInfo.processInfo.environment["PYMOL_AUTOCAMERA"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                    withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = true }
                 }
             }
             autoSelectThemeFromEnv()
@@ -2687,6 +2723,13 @@ struct ContentView: View {
         // PYMOL_SKIP_FIRSTBOOT_THEME=1.
         if ProcessInfo.processInfo.environment["PYMOL_SKIP_FIRSTBOOT_THEME"] != nil { return }
         guard themeManager.firstBoot else { return }
+        // Test affordance: suppress the one-time first-boot Theme Studio so a
+        // screenshot/UI test that drives another sheet (e.g. What's New) isn't
+        // fighting a second modal for the presentation slot. Still mark it done.
+        if ProcessInfo.processInfo.environment["PYMOL_SKIP_FIRSTBOOT_THEME"] != nil {
+            themeManager.markFirstBootDone()
+            return
+        }
         themeManager.markFirstBootDone()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             withAnimation(.easeInOut(duration: 0.2)) {
