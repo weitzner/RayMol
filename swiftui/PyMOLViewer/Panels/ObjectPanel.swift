@@ -40,6 +40,17 @@ struct RepState: Equatable {
     var values: [String: Double]    // setting name → current value
     var color: String               // "inherit" or "#rrggbb"
     var settingColors: [String: String] = [:]  // extra color settings → "inherit"/"#rrggbb"
+    // Present when this rep has per-atom transparency overriding the object-level
+    // slider; carries the transparency setting name and the effective min–max range.
+    var atomTransp: AtomTransp? = nil
+}
+
+/// Effective per-atom transparency range for a rep whose object-level slider is
+/// overridden by atom-level settings (from appkit_inspector's `atom_transp`).
+struct AtomTransp: Equatable {
+    let setting: String   // e.g. "cartoon_transparency"
+    let min: Double
+    let max: Double
 }
 
 /// Global "Scene" parameters.
@@ -331,6 +342,10 @@ struct ObjectEntry: Identifiable, Equatable {
     // Number of coordinate states (NMR models / trajectory frames). >1 surfaces
     // the per-object STATE controls in the inspector. Defaults to 1.
     var stateCount: Int = 1
+    // True when an active rep has per-atom transparency overrides — drives the
+    // discoverability badge, since the object-level transparency slider then
+    // doesn't reflect what's rendered. See appkit_inspector.object_has_atom_transp.
+    var hasAtomTransp: Bool = false
 
     var displayName: String {
         if isSelection, let count = atomCount {
@@ -675,6 +690,10 @@ private enum PanelTheme {
     static var accentColor: Color { t.accent.color }
     static var headerColor: Color { t.panelBackground.blended(with: t.panelText, 0.6).color }
     static var disabledColor: Color { t.panelBackground.blended(with: t.panelText, 0.4).color }
+    // Amber accent for the per-atom transparency badge / detail row — a fixed hue
+    // (not the blue theme accent) that reads as "transparency" and stays legible
+    // on both light and dark panel themes.
+    static var atomTranspColor: Color { Color(.sRGB, red: 0.90, green: 0.66, blue: 0.30, opacity: 1) }
 }
 
 // Chrome for the compact A/S/H/L/C representation menu buttons so they read the
@@ -1666,6 +1685,17 @@ private struct ObjectRowContent: View {
                 .help("\(entry.stateCount) models / states")
         }
 
+        // Discoverability badge: this object has per-atom transparency overrides,
+        // so the object-level transparency slider doesn't reflect what's rendered.
+        // Visible even when the card is collapsed. Expand to see the range + Clear.
+        if entry.hasAtomTransp {
+            Image(systemName: "drop.halffull")
+                .font(.system(size: 10))
+                .foregroundColor(PanelTheme.atomTranspColor)
+                .help("Per-atom transparency is set — the object-level transparency slider won’t fully apply. Expand a representation to view the range or clear it.")
+                .accessibilityLabel("Per-atom transparency set")
+        }
+
         Spacer(minLength: 4)
 
         ActionMenuButton(name: entry.name)
@@ -1989,9 +2019,66 @@ private struct RepPropertyGrid: View {
             }
             ForEach(spec.properties) { p in
                 gridRow(p.label) { control(for: p) }
+                // Per-atom transparency detail sits directly under the matching
+                // transparency slider so it's clear the slider is only a baseline.
+                if let at = state.atomTransp, at.setting == p.setting {
+                    atomTranspRow(at)
+                }
+            }
+            // Fallback: surface the detail even if this rep's spec has no slider
+            // for its transparency setting (so the info is never lost).
+            if let at = state.atomTransp,
+               !spec.properties.contains(where: { $0.setting == at.setting }) {
+                atomTranspRow(at)
             }
         }
         .padding(.top, 2)
+    }
+
+    // "per-atom: min–max" readout + a Clear action, shown when atom-level
+    // transparency overrides the object-level slider for this rep.
+    @ViewBuilder
+    private func atomTranspRow(_ at: AtomTransp) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "drop.halffull").font(.system(size: 10))
+            Text("per-atom: \(rangeLabel(at))").font(.system(size: 10))
+            Spacer(minLength: 4)
+            Button(action: { clearAtomTransp(at.setting) }) {
+                Text("Clear")
+                    .font(.system(size: 10))
+                    .padding(.horizontal, 8).padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .stroke(PanelTheme.atomTranspColor.opacity(0.55), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundColor(PanelTheme.atomTranspColor)
+        .padding(.leading, 84)   // align under the control column (label width 78 + gap)
+        .help("Some atoms set \(at.setting) individually, so the slider above only sets a baseline. Clear removes the per-atom values and hands control back to the slider.")
+    }
+
+    private func rangeLabel(_ at: AtomTransp) -> String {
+        let lo = fmtTransp(at.min), hi = fmtTransp(at.max)
+        return lo == hi ? lo : "\(lo)–\(hi)"
+    }
+
+    private func fmtTransp(_ v: Double) -> String {
+        var s = String(format: "%.2f", v)
+        if s.contains(".") {
+            while s.hasSuffix("0") { s.removeLast() }
+            if s.hasSuffix(".") { s.removeLast() }
+        }
+        return s
+    }
+
+    // Remove the per-atom overrides for `setting` on this object. The
+    // atom-selection form `unset(setting, (obj))` clears atom-level values while
+    // keeping the object-level slider value; a rebuild refreshes the baked
+    // cartoon/surface geometry, then re-poll so the row disappears promptly.
+    private func clearAtomTransp(_ setting: String) {
+        engine.runCommand("unset \(setting), (\(objName))")
+        engine.runCommand("rebuild \(objName)")
+        engine.refreshExpandedDetail()
     }
 
     @ViewBuilder
@@ -3074,6 +3161,7 @@ extension PyMOLEngine {
             let enabled: [String]
             let sel_counts: [String: Int]
             let nstate: [String: Int]?
+            let has_transp: [String: Bool]?
         }
 
         guard let payload = try? JSONDecoder().decode(PanelPayload.self, from: data) else {
@@ -3090,7 +3178,8 @@ extension PyMOLEngine {
                 isEnabled: enabledSet.contains(name),
                 isSelection: false,
                 atomCount: nil,
-                stateCount: max(payload.nstate?[name] ?? 1, 1)
+                stateCount: max(payload.nstate?[name] ?? 1, 1),
+                hasAtomTransp: payload.has_transp?[name] ?? false
             ))
         }
 

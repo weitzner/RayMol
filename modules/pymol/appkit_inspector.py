@@ -50,6 +50,19 @@ REP_EXTRA_COLORS = {
     'surface': ['surface_contour_color'],
 }
 
+# Transparency settings that PyMOL actually supports at the ATOM level, i.e. that
+# can carry per-atom overrides. ribbon_transparency and stick_transparency are
+# object-level only and can never differ per atom, so they are intentionally
+# excluded (they would never flag). `transparency` is the surface/mesh/dots one.
+REP_TRANSP = {
+    'cartoon': 'cartoon_transparency',
+    'spheres': 'sphere_transparency',
+    'surface': 'transparency',
+    'mesh': 'transparency',
+    'dots': 'transparency',
+}
+TRANSP_SETTINGS = ['cartoon_transparency', 'sphere_transparency', 'transparency']
+
 SCENE_SETTINGS = ['metal_raytrace', 'metal_rt_shadows', 'metal_shadows', 'metal_ssao',
                   'metal_rt_samples', 'metal_rt_ao_radius', 'metal_rt_ao_intensity',
                   'metal_rt_shadow_intensity',
@@ -147,10 +160,69 @@ def _color_setting_rgb(setting, fallback=(0.0, 0.0, 0.0)):
     return [float(t[0]), float(t[1]), float(t[2])]
 
 
+def transp_summary(obj):
+    """One pass over `obj`'s atoms → {setting: (min, max, over)} for the atom-level
+    transparency settings, where min/max are the EFFECTIVE per-atom transparency
+    (the atom-level value if set, else the object-level value) and `over` is True
+    when that range differs from the object-level value — i.e. per-atom overrides
+    make the object-level slider misleading. Settings with no atoms are omitted.
+
+    Reading `s.<setting>` in iterate always resolves to the object-level value when
+    no atom-level override exists (it never returns None here), so comparing the
+    effective range to the object-level value is what detects a genuine override.
+    """
+    objlv = {s: _num(s, obj) for s in TRANSP_SETTINGS}
+    mn = {s: None for s in TRANSP_SETTINGS}
+    mx = {s: None for s in TRANSP_SETTINGS}
+
+    def _visit(vals):
+        for i, s in enumerate(TRANSP_SETTINGS):
+            e = objlv[s] if vals[i] is None else float(vals[i])
+            if mn[s] is None or e < mn[s]:
+                mn[s] = e
+            if mx[s] is None or e > mx[s]:
+                mx[s] = e
+
+    expr = '_visit((%s))' % ', '.join('s.%s' % s for s in TRANSP_SETTINGS)
+    try:
+        cmd.iterate(obj, expr, space={'_visit': _visit})
+    except Exception:
+        return {}
+    out = {}
+    for s in TRANSP_SETTINGS:
+        if mn[s] is None:
+            continue
+        over = (round(mn[s], 4) != round(objlv[s], 4)) or (round(mx[s], 4) != round(objlv[s], 4))
+        out[s] = (round(mn[s], 4), round(mx[s], 4), over)
+    return out
+
+
+def object_has_atom_transp(obj):
+    """True when any ACTIVE rep of `obj` has a per-atom transparency override — the
+    signal for the collapsed-row badge. Rep-gated so an override on a hidden rep
+    (which the user can't see and the expanded card wouldn't show) doesn't flag.
+    The count_atoms probe runs only when an override exists (cheap short-circuit).
+    """
+    summ = transp_summary(obj)
+    for rep, setting in REP_TRANSP.items():
+        entry = summ.get(setting)
+        if entry and entry[2]:
+            try:
+                if cmd.count_atoms('(%s) & rep %s' % (obj, rep)) > 0:
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 def _build(objs):
     detail = {}
     for o in objs:
         reps = []
+        # Effective per-atom transparency range per setting, computed once per
+        # object; attached to the rep whose transparency setting is overridden so
+        # the expanded card can show "per-atom: min–max" and a Clear action.
+        summ = transp_summary(o)
         for r in REPS:
             try:
                 present = cmd.count_atoms('(%s) & rep %s' % (o, r)) > 0
@@ -161,8 +233,12 @@ def _build(objs):
             vals = {s: _num(s, o) for s in REP_SETTINGS.get(r, [])}
             col = _rep_color(o, REP_COLOR[r]) if r in REP_COLOR else 'inherit'
             cols = {s: _rep_color(o, s) for s in REP_EXTRA_COLORS.get(r, [])}
-            reps.append({'rep': r, 'vis': 1, 'vals': vals, 'color': col,
-                         'colors': cols})
+            rep = {'rep': r, 'vis': 1, 'vals': vals, 'color': col, 'colors': cols}
+            tset = REP_TRANSP.get(r)
+            tsumm = summ.get(tset) if tset else None
+            if tsumm and tsumm[2]:
+                rep['atom_transp'] = {'setting': tset, 'min': tsumm[0], 'max': tsumm[1]}
+            reps.append(rep)
         detail[o] = reps
     scene = {s: _num(s, '') for s in SCENE_SETTINGS}
     scene['bg'] = _bg_rgb()
