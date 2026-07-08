@@ -2299,7 +2299,9 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                // Selection mode — here (shared chrome) so it's reachable from every tab.
+                // Clear selection + selection mode — here (shared chrome) so both
+                // are reachable from every tab.
+                ClearSelectionButton()
                 SelectionModeMenu()
             }
             .padding(.horizontal, 12)
