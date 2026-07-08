@@ -2074,12 +2074,19 @@ void SceneRenderMetal(PyMOLGlobals* G)
     int temporalAO = SettingGetGlobal_b(G, cSetting_metal_temporal_ao) ? 1 : 0;
     int upscaleEnabled = SettingGetGlobal_b(G, cSetting_metal_upscale) ? 1 : 0;
     float dofAperture = SettingGetGlobal_f(G, cSetting_metal_dof_aperture);
+    // Orthographic projection: the SSAO/shadow (and RT AO/shadow) post passes
+    // reconstruct eye-space position/normal from the depth buffer with the
+    // PERSPECTIVE inverse. Under an ortho projection that inverse is wrong /
+    // near-singular, so the reconstructed positions and normals become garbage and
+    // the shadow/AO terms drive whole regions of cartoon/sticks/spheres fully black
+    // (#139). Pass the flag so the shaders select the linear ortho reconstruction.
+    int orthoEnabled = SettingGetGlobal_b(G, cSetting_ortho) ? 1 : 0;
     G->Renderer->setPostParams(fogEnabled, fogStart, fogEnd, bg[0], bg[1],
         bg[2], aoEnabled, shadowEnabled, aaEnabled, outlineEnabled, proj[10],
         proj[14], proj[0], proj[5], rtEnabled, tonemapEnabled, exposure,
         rtShadowEnabled, outlineCol[0], outlineCol[1], outlineCol[2],
         outlineWidth, dofEnabled, dofFocus, dofRange, temporalAO,
-        upscaleEnabled, dofAperture);
+        upscaleEnabled, dofAperture, orthoEnabled);
     // Real-time RT quality knobs (metal_rt_*): AO rays/pixel, AO radius (A),
     // AO intensity, cast-shadow intensity — applied in RendererMetal::runPostChain.
     G->Renderer->setRayTraceParams(

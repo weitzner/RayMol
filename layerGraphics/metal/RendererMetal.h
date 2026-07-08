@@ -158,7 +158,8 @@ public:
       float outlineG = 0.0f, float outlineB = 0.0f,
       float outlineWidth = 1.4f, int dofEnabled = 0, float dofFocus = 0.0f,
       float dofRange = 14.0f, int temporalAO = 0,
-      int upscaleEnabled = 0, float dofAperture = 14.0f) override;
+      int upscaleEnabled = 0, float dofAperture = 14.0f,
+      int ortho = 0) override;
   void setLightingParams(float ambient, float direct, float reflect,
       float specular, float shininess, float sssWrap = 0.0f) override;
   void setRayTraceParams(int samples, float aoRadius, float aoIntensity,
@@ -542,6 +543,7 @@ private:
   float _sssWrap = 0.0f;  // cSetting_metal_sss_wrap: 0 = pure Lambert (identity)
   float _projA = -1.f, _projB = 0.f;  // projection[10], projection[14]
   float _projX = 1.f, _projY = 1.f;   // projection[0], projection[5]
+  float _projOrtho = 0.f;             // 1 = orthographic (linear eye-z recon; #139)
   float _letterboxAspect = 0.f;       // saved-viewport W/H; 0 = fill window
   int _lbOriginX = 0, _lbOriginY = 0; // letterbox sub-rect origin (backing px)
   std::string _capturePath;           // pending png ray=0 capture (empty = none)
