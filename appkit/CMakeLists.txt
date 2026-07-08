@@ -262,7 +262,8 @@ target_compile_options(pymol_core PRIVATE ${PYMOL_COMPILE_FLAGS})
 option(PYMOL_OPENMP "Parallelize surface sampling with OpenMP" ON)
 if(PYMOL_OPENMP AND NOT PYMOL_IOS)
     find_path(LIBOMP_INCLUDE omp.h
-        HINTS /opt/homebrew/opt/libomp/include /usr/local/opt/libomp/include)
+        HINTS /opt/homebrew/opt/libomp/include /usr/local/opt/libomp/include
+              ${PYMOL_EXTERNAL_PREFIX}/include/libomp ${PYMOL_EXTERNAL_PREFIX}/opt/libomp/include)
     if(LIBOMP_INCLUDE)
         target_compile_definitions(pymol_core PRIVATE PYMOL_OPENMP)
         target_compile_options(pymol_core PRIVATE -Xpreprocessor -fopenmp)
