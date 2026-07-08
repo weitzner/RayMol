@@ -42,6 +42,12 @@ struct MetalViewport: NSViewRepresentable {
         NSWorkspace.shared.notificationCenter.addObserver(
             context.coordinator, selector: #selector(Coordinator.handleWake),
             name: NSWorkspace.didWakeNotification, object: nil)
+        // A state/frame change while a movie exists can leave the viewport on its
+        // on-demand gate with nothing to repaint it; the engine posts this to
+        // force one unconditional frame so the new state shows (issue #132).
+        NotificationCenter.default.addObserver(
+            context.coordinator, selector: #selector(Coordinator.handleWake),
+            name: PyMOLEngine.forceRedrawNotification, object: nil)
 
         // Trackpad pinch → zoom. Two-finger drag (scrollWheel) → translate;
         // see handleScrollWheel. A real mouse wheel still zooms.
@@ -159,6 +165,12 @@ struct MetalViewport: UIViewRepresentable {
         NotificationCenter.default.addObserver(
             context.coordinator, selector: #selector(Coordinator.handleWake),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+        // A state/frame change while a movie exists can leave the viewport on its
+        // on-demand gate with nothing to repaint it; the engine posts this to
+        // force one unconditional frame so the new state shows (issue #132).
+        NotificationCenter.default.addObserver(
+            context.coordinator, selector: #selector(Coordinator.handleWake),
+            name: PyMOLEngine.forceRedrawNotification, object: nil)
 
         // Gesture recognizers for touch input
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))

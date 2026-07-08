@@ -740,6 +740,17 @@ final class PyMOLEngine: ObservableObject {
         PyMOLBridge_RunCommand(command)
         handleSessionViewport(for: command)
         maybeWidenClipForSurface(for: command)
+        // A per-object `set state, N, obj` (and the related all_states / unset
+        // controls) changes which model renders, but once a movie exists the
+        // redisplay flag can be consumed before the viewport's on-demand gate
+        // checks it — leaving the viewer frozen while the state counter advances
+        // (issue #132). Force one repaint so the new state shows.
+        let l = command.lowercased()
+        if l.hasPrefix("set state") || l.hasPrefix("set_state")
+            || l.hasPrefix("set all_states") || l.hasPrefix("unset state")
+            || l.hasPrefix("unset all_states") {
+            requestViewportRedraw()
+        }
     }
 
     // Classify a command as a known long (>~2s) operation that deserves the
@@ -1172,10 +1183,13 @@ final class PyMOLEngine: ObservableObject {
     func pause() { movieCmd("mstop()"); playback.isPlaying = false }
     func togglePlay() { playback.isPlaying ? pause() : play() }
 
-    func rewindMovie() { movieCmd("rewind()") }
-    func endingMovie() { movieCmd("ending()") }
-    func stepForward() { movieCmd("forward()") }
-    func stepBackward() { movieCmd("backward()") }
+    // These set the movie frame while paused; force one repaint so the viewport
+    // leaves the on-demand gate and shows the new frame (issue #132) — mirrors
+    // the per-object `set state` case in runCommandCore.
+    func rewindMovie() { movieCmd("rewind()"); requestViewportRedraw() }
+    func endingMovie() { movieCmd("ending()"); requestViewportRedraw() }
+    func stepForward() { movieCmd("forward()"); requestViewportRedraw() }
+    func stepBackward() { movieCmd("backward()"); requestViewportRedraw() }
 
     // MARK: - Per-object model (state) playback — NMR/MD inspection, independent
     // of the movie. Each object animates its OWN coordinate state at its OWN fps
@@ -1240,6 +1254,10 @@ final class PyMOLEngine: ObservableObject {
         guard f != lastScrubFrame else { return }
         lastScrubFrame = f
         movieCmd("frame(\(f))")
+        // Paused-scrub redraw: without an active mplay the on-demand gate can
+        // swallow the frame change once a movie exists, so nudge one repaint
+        // (issue #132). Harmless while playing (already redrawing every tick).
+        requestViewportRedraw()
     }
 
     // Drag ended: commit the final frame and release the scrub lock after a
@@ -1934,6 +1952,28 @@ final class PyMOLEngine: ObservableObject {
     func idle() {
         guard let inst = instance else { return }
         _ = PyMOLBridge_Idle(inst)
+    }
+
+    // Posted to force the MetalViewport off its on-demand gate for one frame.
+    // The coordinator observes this (same handler as wake) and renders once
+    // unconditionally. Needed when a command changes what's displayed but the
+    // core's redisplay flag doesn't reach the next draw(in:) — notably a
+    // per-object `set state` / movie `frame` scrub AFTER a movie exists, where
+    // the flag is otherwise consumed before the gate checks it (issue #132).
+    static let forceRedrawNotification = Notification.Name("PyMOLEngine.forceRedraw")
+
+    // Request a single unconditional viewport repaint. Cheap (one extra frame);
+    // safe during mplay (that path already renders every tick, so an extra
+    // forced frame is a no-op there). Main-thread only — the coordinator kicks
+    // an immediate draw() which must run on the UI thread.
+    func requestViewportRedraw() {
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: PyMOLEngine.forceRedrawNotification, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: PyMOLEngine.forceRedrawNotification, object: nil)
+            }
+        }
     }
 
     func reshape(width: Int, height: Int) {

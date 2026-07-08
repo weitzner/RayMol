@@ -1,0 +1,130 @@
+- generic [ref=f1e2]:
+  - banner [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - img "RayMol app icon" [ref=f1e5]
+      - generic [ref=f1e6]:
+        - heading "RayMol Downloads" [level=1] [ref=f1e7]
+        - paragraph [ref=f1e8]: Cumulative installs · macOS release telemetry
+    - generic [ref=f1e9]:
+      - generic [ref=f1e10]: 89installs
+      - generic [ref=f1e11]: ▲+4 day-over-day · +84 since launch
+  - region "Summary" [ref=f1e12]:
+    - generic [ref=f1e13]:
+      - generic [ref=f1e14]: Cumulative installs
+      - generic [ref=f1e15]: "89"
+    - generic [ref=f1e16]:
+      - generic [ref=f1e17]: Releases tracked
+      - generic [ref=f1e18]: 11 v1.1.0 → v1.5.2
+    - generic [ref=f1e19]:
+      - generic [ref=f1e20]: Latest release
+      - generic [ref=f1e21]: v1.5.2 18 installs
+    - generic [ref=f1e22]:
+      - generic [ref=f1e23]: Tracking window
+      - generic [ref=f1e24]: Jun 23–Jul 6 14 days
+  - generic [ref=f1e25]:
+    - generic [ref=f1e26]:
+      - tablist "Chart view" [ref=f1e27]:
+        - tab "All releases" [selected] [ref=f1e28] [cursor=pointer]
+        - tab "Minor releases" [ref=f1e29] [cursor=pointer]
+        - tab "Total cumulative" [ref=f1e30] [cursor=pointer]
+      - generic [ref=f1e31]: downloads · cumulative
+    - img "Line chart of cumulative RayMol downloads over time" [ref=f1e33]:
+      - generic [ref=f1e34]: "0"
+      - generic [ref=f1e35]: "5"
+      - generic [ref=f1e36]: "10"
+      - generic [ref=f1e37]: "15"
+      - generic [ref=f1e38]: "20"
+      - generic [ref=f1e39]: Jun 23
+      - generic [ref=f1e40]: Jun 24
+      - generic [ref=f1e41]: Jun 25
+      - generic [ref=f1e42]: Jun 26
+      - generic [ref=f1e43]: Jun 27
+      - generic [ref=f1e44]: Jun 28
+      - generic [ref=f1e45]: Jun 29
+      - generic [ref=f1e46]: Jun 30
+      - generic [ref=f1e47]: Jul 1
+      - generic [ref=f1e48]: Jul 2
+      - generic [ref=f1e49]: Jul 3
+      - generic [ref=f1e50]: Jul 4
+      - generic [ref=f1e51]: Jul 5
+      - generic [ref=f1e52]: Jul 6
+    - generic [ref=f1e72]:
+      - button "v1.1.0" [pressed] [ref=f1e73] [cursor=pointer]: v1.1.0
+      - button "v1.2.0" [pressed] [ref=f1e75] [cursor=pointer]: v1.2.0
+      - button "v1.2.1" [pressed] [ref=f1e77] [cursor=pointer]: v1.2.1
+      - button "v1.3.0" [pressed] [ref=f1e79] [cursor=pointer]: v1.3.0
+      - button "v1.3.1" [pressed] [ref=f1e81] [cursor=pointer]: v1.3.1
+      - button "v1.3.2" [pressed] [ref=f1e83] [cursor=pointer]: v1.3.2
+      - button "v1.4.0" [pressed] [ref=f1e85] [cursor=pointer]: v1.4.0
+      - button "v1.4.1" [pressed] [ref=f1e87] [cursor=pointer]: v1.4.1
+      - button "v1.5.0" [pressed] [ref=f1e89] [cursor=pointer]: v1.5.0
+      - button "v1.5.1" [pressed] [ref=f1e91] [cursor=pointer]: v1.5.1
+      - button "v1.5.2" [pressed] [ref=f1e93] [cursor=pointer]: v1.5.2
+    - generic [ref=f1e95]: Click a release to hide it · click a hidden release to show only that version.
+  - region "Installs by release" [ref=f1e96]:
+    - generic [ref=f1e97]:
+      - heading "Installs by release" [level=2] [ref=f1e98]
+      - generic [ref=f1e99]:
+        - generic [ref=f1e100]: grouped by minor · cumulative dmg
+        - button "Expand all" [ref=f1e101] [cursor=pointer]
+    - table [ref=f1e103]:
+      - rowgroup [ref=f1e104]:
+        - row "Release Versioned .dmg RayMol.dmg Total" [ref=f1e105]:
+          - columnheader "Release" [ref=f1e106]
+          - columnheader "Versioned .dmg" [ref=f1e107]
+          - columnheader "RayMol.dmg" [ref=f1e108]
+          - columnheader "Total" [ref=f1e109]
+      - rowgroup [ref=f1e110]:
+        - button "v1.53 releases 10 16 26" [ref=f1e111] [cursor=pointer]:
+          - cell "v1.53 releases" [ref=f1e112]:
+            - generic [ref=f1e113]: ▸
+            - text: v1.53 releases
+          - cell "10" [ref=f1e114]
+          - cell "16" [ref=f1e115]
+          - cell "26" [ref=f1e116]
+        - button "v1.42 releases 5 14 19" [ref=f1e117] [cursor=pointer]:
+          - cell "v1.42 releases" [ref=f1e118]:
+            - generic [ref=f1e119]: ▸
+            - text: v1.42 releases
+          - cell "5" [ref=f1e120]
+          - cell "14" [ref=f1e121]
+          - cell "19" [ref=f1e122]
+        - button "v1.33 releases 5 16 21" [ref=f1e123] [cursor=pointer]:
+          - cell "v1.33 releases" [ref=f1e124]:
+            - generic [ref=f1e125]: ▸
+            - text: v1.33 releases
+          - cell "5" [ref=f1e126]
+          - cell "16" [ref=f1e127]
+          - cell "21" [ref=f1e128]
+        - button "v1.22 releases 3 11 14" [ref=f1e129] [cursor=pointer]:
+          - cell "v1.22 releases" [ref=f1e130]:
+            - generic [ref=f1e131]: ▸
+            - text: v1.22 releases
+          - cell "3" [ref=f1e132]
+          - cell "11" [ref=f1e133]
+          - cell "14" [ref=f1e134]
+        - row "v1.1.0 9 – 9" [ref=f1e135]:
+          - cell "v1.1.0" [ref=f1e136]
+          - cell "9" [ref=f1e137]
+          - cell "–" [ref=f1e138]
+          - cell "9" [ref=f1e139]
+      - rowgroup [ref=f1e140]:
+        - row "Total 32 57 89" [ref=f1e141]:
+          - cell "Total" [ref=f1e142]
+          - cell "32" [ref=f1e143]
+          - cell "57" [ref=f1e144]
+          - cell "89" [ref=f1e145]
+    - generic [ref=f1e146]: 32 auto-updater pulls, 57 manual installs.
+  - contentinfo [ref=f1e147]:
+    - generic [ref=f1e148]:
+      - strong [ref=f1e149]: Downloads
+      - text: = DMG installs (versioned + generic
+      - code [ref=f1e150]: RayMol.dmg
+      - text: ); Sparkle
+      - code [ref=f1e151]: appcast.xml
+      - text: feed checks are excluded. Counts are cumulative per release, plotted from each version's first appearance.
+    - generic [ref=f1e152]:
+      - text: "Source:"
+      - link "gist · raymol-download-stats.csv" [ref=f1e153] [cursor=pointer]:
+        - /url: https://gist.github.com/javierbq/1526331929bc210dc4baf8cc2e92e3b6
+      - text: · snapshots Jun 23–Jul 6, 2026.
