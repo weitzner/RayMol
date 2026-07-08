@@ -23,6 +23,9 @@ dd_ios
 # per-user Xcode UI state (should never be tracked)
 xcuserdata
 
+# per-developer package-manager prefix override (see PyMOLBridge.xcconfig)
+PyMOLBridge.local.xcconfig
+
 # scratch test structures / session transcripts at repo root
 /*.cif
 /*.pdb
