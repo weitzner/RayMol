@@ -236,6 +236,12 @@ extension MetalViewport {
         // a drag (rotate). Point space, view coordinates.
         private var mouseDownLoc: CGPoint = .zero
         private var didDrag = false
+        // Right-button equivalents: a pure right-click raises the viewport
+        // context menu (CPU pick → engine.longPressHit), while a right-DRAG
+        // still drives PyMOL's clip (slab). The button-down is deferred to the
+        // first drag so a bare click never enters clip mode.
+        private var rightDownLoc: CGPoint = .zero
+        private var rightDidDrag = false
 
         // Trackpad pinch (NSMagnificationGestureRecognizer) → zoom via an
         // explicit camera dolly (engine.zoomBy). We can't use the scroll-wheel
@@ -504,20 +510,50 @@ extension MetalViewport {
         }
 
         func handleRightMouseDown(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
-            let mods = pymolModifiers(event.modifierFlags.rawValue)
-            engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_DOWN, x: pt.0, y: pt.1, modifiers: mods)
+            // Defer PyMOL's button-down: raising it here would immediately enter
+            // clip mode, and PyMOL's own pop-up menu is never rendered under this
+            // Metal backend (internal_gui=0). A bare right-click instead pops the
+            // native SwiftUI context menu in handleRightMouseUp; a right-DRAG
+            // starts the clip on first movement (handleRightMouseDragged).
+            rightDownLoc = view.convert(event.locationInWindow, from: nil)
+            rightDidDrag = false
         }
 
         func handleRightMouseUp(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
+            let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
-            engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: mods)
+
+            if rightDidDrag {
+                // Finish the clip (slab) drag.
+                let pt = pymolPoint(in: view, at: loc)
+                engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: mods)
+                return
+            }
+
+            // Pure right-click → identify the atom/residue under the cursor and
+            // publish it so ContentView shows the viewport context menu. NDC in
+            // view-point space, bottom-left origin (macOS views aren't flipped),
+            // matching the left-click pick — so no Y flip.
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return }
+            let ndcX = Float(loc.x / w) * 2 - 1
+            let ndcY = Float(loc.y / h) * 2 - 1
+            engine?.longPressPick(ndcX: ndcX, ndcY: ndcY, aspect: Float(w / h))
         }
 
         func handleRightMouseDragged(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
+            let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
+            let moved = hypot(loc.x - rightDownLoc.x, loc.y - rightDownLoc.y)
+            if !rightDidDrag {
+                // First real movement past the click threshold: now raise the
+                // deferred button-down (at the press point) to begin the clip.
+                guard moved >= 4 else { return }
+                rightDidDrag = true
+                let down = pymolPoint(in: view, at: rightDownLoc)
+                engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_DOWN, x: down.0, y: down.1, modifiers: mods)
+            }
+            let pt = pymolPoint(in: view, at: loc)
             engine?.drag(x: pt.0, y: pt.1, modifiers: mods)
         }
 
