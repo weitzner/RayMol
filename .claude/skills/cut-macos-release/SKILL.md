@@ -54,6 +54,7 @@ echo "current: $CUR_MARKETING / build $CUR_BUILD"
 - Sanity-check `$LAST` against `$CUR_MARKETING` — they should be the same release (or LAST one behind if a bump hasn't shipped).
 - If the only commits past the tag are release bookkeeping (a bump + appcast commit), **there is nothing to release** — say so and stop; don't invent a release.
 - Choose the bump from the commit mix (standard semver): any real `feat`s → **minor** (`1.5.1` → `1.6.0`); only `fix`/`perf`/`docs`/`build` → **patch** (`1.5.1` → `1.5.2`). New build `N = CUR_BUILD + 1`.
+- A **minor or major** bump also means preparing a fresh in-app "What's New" splash page (Step 2, via the `whats-new-preparer` agent); a **patch** bump skips it. Note which applies when you recommend the version.
 - The release is **macOS-facing**: fixes/features that only touch the iOS path (App Store) should NOT headline the macOS notes. Recommend the version + build to the user and confirm before proceeding.
 
 ## Step 2 — Create a release worktree, bump, and build a release-candidate
@@ -74,6 +75,10 @@ Bump the version and write notes:
 - Edit `swiftui/project.yml`: set `MARKETING_VERSION` to `X.Y.Z` and `CURRENT_PROJECT_VERSION` to `N`.
 - Write `docs/release-notes/vX.Y.Z.md` (see `references/release-notes-style.md`).
 
+**Prepare the What's New splash — minor/major bumps only (Step 1 decides which).** RayMol shows an in-app "What's New" carousel on version bump, driven by bundled `swiftui/PyMOLViewer/Resources/WhatsNew.json` plus hero media (`whatsnew-*.png` / `.mp4`) in the same `Resources/` dir. These are baked into the app bundle, so the new page must exist in the **tagged commit** — prepare it now (before the RC build) and land it in the Step 3 PR.
+- **Delegate to the `whats-new-preparer` agent.** It drafts the per-feature copy from what shipped since the last documented version, produces the hero media itself by driving the app (images by default; short looping mp4s for motion/interaction features like the camera dock), wires everything into `WhatsNew.json`, and verifies each page renders. It presents a plan first — approve or adjust it, then let it capture and wire the assets.
+- **Patch bump → skip this step entirely.** Patch releases don't get a new splash page; the existing cumulative content still shows correctly.
+
 Build the RC and open it (two-stage — non-negotiable #3). Prefer delegating to the `multiplatform-build-deployer` agent, instructing it to build **from `$WT`, not the main repo**:
 ```bash
 bash swiftui/build_macos.sh                             # rebuild core from THIS checkout
@@ -83,12 +88,14 @@ xcodebuild -project swiftui/PyMOLViewer.xcodeproj -scheme PyMOLViewer_macOS \
 ps -eo pid,comm | awk '/build_mac_dd.*MacOS\/RayMol$/ {print $1}' | xargs -r kill   # relaunch fresh
 open -n swiftui/build_mac_dd/Build/Products/Debug/RayMol.app
 ```
-Confirm the launched app's `Info.plist` shows `X.Y.Z` / `N`, then **hand it to the user to test and wait for approval.** Note: the RC is a **Debug** build; the shipped DMG is **Release**. For an optimization/Metal-sensitive change, also smoke-test the actual notarized `build_dmg/RayMol.app` (Step 6) before publishing. Do not proceed until the user confirms.
+Confirm the launched app's `Info.plist` shows `X.Y.Z` / `N` — and, for a minor/major bump, that the new What's New splash appears on first launch — then **hand it to the user to test and wait for approval.** Note: the RC is a **Debug** build; the shipped DMG is **Release**. For an optimization/Metal-sensitive change, also smoke-test the actual notarized `build_dmg/RayMol.app` (Step 6) before publishing. Do not proceed until the user confirms.
 
 ## Step 3 — Land the bump via a PR (NOT a direct push)
 
 ```bash
 git add swiftui/project.yml swiftui/PyMOLViewer.xcodeproj/project.pbxproj docs/release-notes/vX.Y.Z.md
+# minor/major bump: also stage the What's New splash the agent produced (json + any new media it added)
+git add swiftui/PyMOLViewer/Resources/WhatsNew.json swiftui/PyMOLViewer/Resources/whatsnew-*   # skip on a patch release
 # stage explicitly — never `git add -A`; build dirs (build_mac_dd/, build_dmg/, RayMol-*.dmg) are untracked
 git commit -m "release: bump to X.Y.Z (build N)"
 git push -u origin release/X.Y.Z
