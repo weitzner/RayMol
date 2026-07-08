@@ -113,7 +113,7 @@ file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/generated)
 
 # For iOS / metal-only, find the host Python to run the shader generator
 if(PYMOL_IOS OR PYMOL_METAL_ONLY)
-    find_program(HOST_PYTHON python3 HINTS /opt/homebrew/bin /usr/bin)
+    find_program(HOST_PYTHON python3 HINTS /opt/homebrew/bin ${PYMOL_EXTERNAL_PREFIX}/bin /usr/bin)
 else()
     set(HOST_PYTHON ${Python3_EXECUTABLE})
 endif()
