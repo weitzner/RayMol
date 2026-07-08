@@ -985,10 +985,10 @@ struct ContentView: View {
             // visible (the panel's ScrollView covers any remaining overflow);
             // restore the user's size when everything collapses.
             .onChange(of: engine.expandedDetail) { detail in
-                // Poll the just-expanded object's rep detail immediately so its
-                // representation list shows at once (don't wait for the next
-                // ~500ms poll tick, which a heavy surface build can delay).
-                if detail != nil { engine.refreshExpandedDetail() }
+                // The immediate rep-detail poll on expand is fired from
+                // PyMOLEngine.expandedDetail's didSet (so every layout — incl.
+                // macOS, which has no such observer — populates at once, #107).
+                // Here we only drive the iPhone panel auto-grow.
                 // Only the iPhone (compact) bottom panel auto-grows; the iPad
                 // mac-style right column scrolls its own content at fixed width.
                 guard hSize == .compact else { return }
