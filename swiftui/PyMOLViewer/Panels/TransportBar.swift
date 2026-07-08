@@ -25,8 +25,16 @@ enum TimelineTheme {
     // the rest of the inspector rather than a fixed dark gray. Kept slightly
     // translucent (0.96) since the docked timeline floats over the viewport.
     static var bar: Color { ThemeManager.shared.active.panelBackground.color.opacity(0.96) }
-    static let text = Color(white: 0.88)
-    static let dim = Color(white: 0.55)
+    // Foreground text / dimmed labels FOLLOW the active theme's panel text color
+    // (like the rest of the inspector) instead of a fixed near-white — otherwise
+    // ruler ticks, the header, row labels, the counter and scene chips wash out on
+    // a light theme (issue #133). `dim` is the same hue at reduced opacity so it
+    // stays legible on both light and dark palettes.
+    static var text: Color { ThemeManager.shared.active.panelText.color }
+    static var dim: Color { ThemeManager.shared.active.panelText.color.opacity(0.6) }
+    // Subtle fill for neutral chips / hairline separators, derived from the text
+    // color so it contrasts against the panel background on any theme.
+    static var subtleFill: Color { ThemeManager.shared.active.panelText.color.opacity(0.12) }
 }
 
 // Transport control sizing. The transport is embedded in the timeline, which on

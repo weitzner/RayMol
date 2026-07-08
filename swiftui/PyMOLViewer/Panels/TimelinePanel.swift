@@ -71,6 +71,11 @@ struct TimelinePanel: View {
     @State private var sheetLast = 0            // 0 = through the last model
     @State private var sheetDuration: Double = 8
 
+    // Scenes-palette overflow tracking → drives the horizontal-scroll edge fade
+    // (issue #131). Set from GeometryReader preferences below.
+    @State private var paletteContentW: CGFloat = 0
+    @State private var paletteViewportW: CGFloat = 0
+
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
     private var isCompact: Bool { forceCompact || hSize == .compact }
@@ -102,6 +107,21 @@ struct TimelinePanel: View {
                 ? Laid(item: it, index: i, frame: spans[i].start, endFrame: spans[i].end)
                 : nil
         }
+    }
+
+    // A slim gradient hugging the trailing edge of a horizontal scroll region to
+    // signal off-screen content — the resting cue that a row is scrollable, since
+    // the native macOS scrollbar only appears mid-scroll (issue #131). Purely
+    // decorative: never hit-tests, so it can't eat scroll/scrub gestures.
+    @ViewBuilder
+    private func trailingScrollFade() -> some View {
+        // Fade to the panel background so content appears to slide UNDER the
+        // chrome edge — theme-adaptive (reads correctly on light + dark), unlike
+        // a fixed black shadow which looks harsh on a light palette (#133).
+        LinearGradient(colors: [TimelineTheme.bar.opacity(0), TimelineTheme.bar],
+                       startPoint: .leading, endPoint: .trailing)
+            .frame(width: 24)
+            .allowsHitTesting(false)
     }
 
     var body: some View {
@@ -205,7 +225,7 @@ struct TimelinePanel: View {
                     .frame(width: 28, height: 30).contentShape(Rectangle())
             }
             .disabled(zoom <= minZoom * 1.001)
-            Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 18)
+            Rectangle().fill(TimelineTheme.subtleFill).frame(width: 1, height: 18)
             Button { setZoom(zoom * 1.6) } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .bold))
@@ -215,8 +235,8 @@ struct TimelinePanel: View {
         }
         .buttonStyle(.plain)
         .foregroundColor(TimelineTheme.text)
-        .background(Capsule().fill(Color.white.opacity(0.10)))
-        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+        .background(Capsule().fill(TimelineTheme.subtleFill))
+        .overlay(Capsule().stroke(TimelineTheme.subtleFill, lineWidth: 0.5))
         .accessibilityLabel("Zoom timeline")
         .help("Zoom the time ruler in / out")
     }
@@ -302,7 +322,7 @@ struct TimelinePanel: View {
             }
             .frame(width: labelW)
 
-            Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
+            Rectangle().fill(TimelineTheme.subtleFill).frame(width: 1)
 
             GeometryReader { geo in
                 let w = geo.size.width
@@ -331,6 +351,11 @@ struct TimelinePanel: View {
                     // otherwise vertically greedy and would absorb the panel's slack,
                     // opening gaps above the ruler / below the lane.
                     .frame(height: rulerH + laneH)
+                    // Trailing fade when the lane is longer than the viewport, so
+                    // it's obvious the track scrolls horizontally (issue #131).
+                    .overlay(alignment: .trailing) {
+                        if cW > w + 1 { trailingScrollFade() }
+                    }
                     // Follow the playhead during playback (don't fight manual scroll).
                     .onChange(of: playback.currentFrame) { _ in
                         if playback.isPlaying {
@@ -643,7 +668,7 @@ struct TimelinePanel: View {
             .help("Saved scenes — tap to append to the timeline")
             .accessibilityLabel("Saved scenes")
 
-            Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
+            Rectangle().fill(TimelineTheme.subtleFill).frame(width: 1)
 
             if engine.sceneNames.isEmpty {
                 Text("Store a scene to drop it onto the timeline")
@@ -660,7 +685,20 @@ struct TimelinePanel: View {
                         }
                     }
                     .padding(.horizontal, 8).padding(.vertical, 7)
+                    .background(GeometryReader { c in
+                        Color.clear.preference(key: PaletteContentWKey.self, value: c.size.width)
+                    })
                 }
+                // Trailing fade when the chips overflow the row, so it's obvious
+                // the scenes palette scrolls horizontally (issue #131).
+                .background(GeometryReader { v in
+                    Color.clear.preference(key: PaletteViewportWKey.self, value: v.size.width)
+                })
+                .overlay(alignment: .trailing) {
+                    if paletteContentW > paletteViewportW + 1 { trailingScrollFade() }
+                }
+                .onPreferenceChange(PaletteContentWKey.self) { paletteContentW = $0 }
+                .onPreferenceChange(PaletteViewportWKey.self) { paletteViewportW = $0 }
             }
         }
         .frame(height: 40)
@@ -672,7 +710,7 @@ struct TimelinePanel: View {
             .font(.system(size: 11)).lineLimit(1)
             .padding(.horizontal, 10).padding(.vertical, 4)
             .background(Capsule().fill(engine.currentScene == name
-                                       ? TimelineTheme.accent : Color.white.opacity(0.12)))
+                                       ? TimelineTheme.accent : TimelineTheme.subtleFill))
             .foregroundColor(engine.currentScene == name ? .black : TimelineTheme.text)
             .contentShape(Capsule())
             .onTapGesture { engine.appendSceneItem(name) }
@@ -767,7 +805,7 @@ struct TimelinePanel: View {
         .font(.system(size: 12))
         .fixedSize()
         .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(Capsule().fill(Color.white.opacity(0.10)))
+        .background(Capsule().fill(TimelineTheme.subtleFill))
         .foregroundColor(TimelineTheme.text)
     }
 
@@ -942,6 +980,17 @@ struct TimelinePanel: View {
         if s < 1 { return String(format: "%.1fs", s) }
         return s.rounded() == s ? "\(Int(s))s" : String(format: "%.1fs", s)
     }
+}
+
+// Scenes-palette width measurement for the horizontal-scroll edge fade (#131):
+// content width vs. viewport width decide whether the trailing fade shows.
+private struct PaletteContentWKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+private struct PaletteViewportWKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 // Small downward-pointing triangle for the playhead head.

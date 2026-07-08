@@ -997,7 +997,16 @@ void ObjectPrepareContext(pymol::CObject * I, RenderInfo * info)
           TTTFromViewElem(I->TTT, I->ViewElem + frame);
           I->TTTFlag = true;
         }
-        if(I->ViewElem[frame].state_flag) {
+        // Apply the movie's per-frame state track ONLY when the frame has
+        // CHANGED since we last wrote it for this object. Re-applying on every
+        // render at a static frame would overwrite an explicit per-object
+        // `set state, N, obj` (Objects-panel model inspection) before it could
+        // display, freezing the viewport on one model even as the state counter
+        // advances (issue #132). Movie play / scrub / export all advance the
+        // frame, so the sweep still drives them; only an idle movie stops
+        // fighting the user's manual state.
+        if(I->ViewElem[frame].state_flag && frame != I->LastStateFrame) {
+          I->LastStateFrame = frame;
           SettingCheckHandle(I->G, I->Setting);
           if(I->Setting) {
             /* note: this assumes that the state has already been
