@@ -11,6 +11,14 @@ PYMOL_ROOT = $(SRCROOT)/..
 // in) next to this file with e.g.:
 //   PYMOL_EXTERNAL_PREFIX = /opt/local
 //   PYMOL_LIBOMP_STATIC = /opt/local/lib/libomp/libomp.a
+//
+// PYMOL_LIBOMP_STATIC does NOT derive correctly from PYMOL_EXTERNAL_PREFIX
+// alone — Homebrew's keg layout ships a static libomp.a under opt/libomp/lib,
+// while MacPorts ships only a dynamic libomp.dylib under lib/libomp, a
+// structurally different layout, not just a different prefix. Anyone setting
+// PYMOL_EXTERNAL_PREFIX to a non-Homebrew prefix MUST also override
+// PYMOL_LIBOMP_STATIC explicitly (it can hold a full "-L... -lomp" flag pair
+// instead of a bare path, e.g. "-L/opt/local/lib/libomp -lomp").
 PYMOL_EXTERNAL_PREFIX = /opt/homebrew
 PYMOL_LIBOMP_STATIC = $(PYMOL_EXTERNAL_PREFIX)/opt/libomp/lib/libomp.a
 #include? "PyMOLBridge.local.xcconfig"
