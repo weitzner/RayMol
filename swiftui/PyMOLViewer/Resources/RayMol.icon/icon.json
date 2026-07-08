@@ -1,0 +1,87 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.86279,0.22742,0.34912,1.00000",
+      "display-p3:0.92920,0.66992,0.27441,1.00000"
+    ],
+    "orientation" : {
+      "start" : {
+        "x" : 0.5,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.5,
+        "y" : 0.7
+      }
+    }
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "4_R.svg",
+          "name" : "4_R"
+        }
+      ],
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    },
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "image-name" : "3_porbital_x.svg",
+          "name" : "3_porbital_x"
+        },
+        {
+          "image-name" : "2_porbital_y.svg",
+          "name" : "2_porbital_y"
+        },
+        {
+          "image-name" : "1_porbital_z.svg",
+          "name" : "1_porbital_z"
+        }
+      ],
+      "lighting" : "individual",
+      "opacity" : 0.3,
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    },
+    {
+      "hidden" : true,
+      "layers" : [
+        {
+          "image-name" : "0_background.svg",
+          "name" : "0_background"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
