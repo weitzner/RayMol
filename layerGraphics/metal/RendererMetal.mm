@@ -817,12 +817,23 @@ static NSString* const kEyeReconSrc = @R"(
 using namespace metal;
 
 // Eye-space position from a window depth at a given screen uv (the inverse of the
-// perspective projection; matches the reconstruction used by the shadow/AO passes).
+// projection; matches the reconstruction used by the shadow/AO passes). ortho>0.5
+// selects the ORTHOGRAPHIC inverse: eye-z is linear in ndc-z and the eye x/y do
+// NOT scale with depth (parallel projection). Using the perspective inverse under
+// an ortho projection yields a wrong / near-singular eye-z, so the reconstructed
+// position and the normal derived from it become garbage — which turns the SSAO /
+// shadow terms fully black across the geometry (issue #139). projX/projY are
+// proj[0]/proj[5]; PyMOL's ortho frustum is symmetric so there is no x/y offset.
 static float3 post_eye_pos(float2 uv, float d, float projA, float projB,
-                           float projX, float projY) {
-  float ez = -projB / ((2.0 * d - 1.0) + projA); // eye z (negative)
+                           float projX, float projY, float ortho = 0.0) {
+  float ndcz = 2.0 * d - 1.0;
   float ndcx = 2.0 * uv.x - 1.0;
   float ndcy = 1.0 - 2.0 * uv.y;
+  if (ortho > 0.5) {
+    float ez = (ndcz - projB) / projA;             // ortho: linear eye z
+    return float3(ndcx / projX, ndcy / projY, ez); // no -ez foreshortening
+  }
+  float ez = -projB / (ndcz + projA);              // perspective eye z
   return float3(ndcx * (-ez) / projX, ndcy * (-ez) / projY, ez);
 }
 
@@ -839,17 +850,18 @@ static float3 post_eye_pos(float2 uv, float d, float projA, float projB,
 // derivative; only the edge band changes.
 static float3 post_eye_normal(depth2d<float> depthTex, sampler s, float2 uv,
                               float2 invres, float cd, float3 cp, float projA,
-                              float projB, float projX, float projY) {
+                              float projB, float projX, float projY,
+                              float ortho = 0.0) {
   float2 ux = float2(invres.x, 0.0);
   float2 uy = float2(0.0, invres.y);
   float dl = depthTex.sample(s, uv - ux), dr = depthTex.sample(s, uv + ux);
   float dd = depthTex.sample(s, uv - uy), du = depthTex.sample(s, uv + uy);
   float3 gx = (abs(dl - cd) < abs(dr - cd))
-                  ? (cp - post_eye_pos(uv - ux, dl, projA, projB, projX, projY))
-                  : (post_eye_pos(uv + ux, dr, projA, projB, projX, projY) - cp);
+                  ? (cp - post_eye_pos(uv - ux, dl, projA, projB, projX, projY, ortho))
+                  : (post_eye_pos(uv + ux, dr, projA, projB, projX, projY, ortho) - cp);
   float3 gy = (abs(dd - cd) < abs(du - cd))
-                  ? (cp - post_eye_pos(uv - uy, dd, projA, projB, projX, projY))
-                  : (post_eye_pos(uv + uy, du, projA, projB, projX, projY) - cp);
+                  ? (cp - post_eye_pos(uv - uy, dd, projA, projB, projX, projY, ortho))
+                  : (post_eye_pos(uv + uy, du, projA, projB, projX, projY, ortho) - cp);
   float3 n = normalize(cross(gx, gy));
   if (n.z < 0.0) n = -n; // face toward camera
   return n;
@@ -864,9 +876,10 @@ static float3 post_eye_normal(depth2d<float> depthTex, sampler s, float2 uv,
 // silhouette (large depth jump -> ~0 weight), so the #83 edge behaviour is kept.
 static float3 post_eye_normal_smooth(depth2d<float> depthTex, sampler s, float2 uv,
                                      float2 invres, float cd, float3 cp, float projA,
-                                     float projB, float projX, float projY) {
+                                     float projB, float projX, float projY,
+                                     float ortho = 0.0) {
   float3 nSum = post_eye_normal(depthTex, s, uv, invres, cd, cp,
-                                projA, projB, projX, projY);
+                                projA, projB, projX, projY, ortho);
   float wSum = 1.0;
   float ztol = max(0.02 * abs(cp.z), 0.05);
   for (int j = -1; j <= 1; j++)
@@ -875,10 +888,10 @@ static float3 post_eye_normal_smooth(depth2d<float> depthTex, sampler s, float2 
       float2 o = float2(float(i), float(j)) * 2.0 * invres;
       float dn = depthTex.sample(s, uv + o);
       if (dn >= 0.99999) continue;
-      float3 pn = post_eye_pos(uv + o, dn, projA, projB, projX, projY);
+      float3 pn = post_eye_pos(uv + o, dn, projA, projB, projX, projY, ortho);
       float w = exp(-abs(pn.z - cp.z) / ztol);
       nSum += post_eye_normal(depthTex, s, uv + o, invres, dn, pn,
-                              projA, projB, projX, projY) * w;
+                              projA, projB, projX, projY, ortho) * w;
       wSum += w;
     }
   return normalize(nSum);
@@ -1067,12 +1080,19 @@ struct PostU {
   float4x4 lightViewProj; // eye-space light view*proj for shadow-map sampling
   float shadowRadius;    // world half-extent of the shadow ortho box (Angstroms)
   float shadowBias;      // metal_shadow_bias: user multiplier on the self-shadow bias
+  float projOrtho;       // >0.5: orthographic projection (linear eye-z / no foreshortening)
 };
 
 // Linear eye distance (positive, toward the scene) from window depth [0,1].
-static float post_linear_depth(float d, float projA, float projB) {
+// ortho>0.5: the projection is orthographic, so eye-z is LINEAR in ndc-z
+//   (ez = (ndcz - projB)/projA with projA=proj[10], projB=proj[14]); the
+//   perspective inverse (-projB/(ndcz+projA)) would divide by a near-zero /
+//   wrong denominator and produce garbage distances.
+static float post_linear_depth(float d, float projA, float projB,
+                               float ortho = 0.0) {
   float ndcz = 2.0 * d - 1.0;
-  float ez = -projB / (ndcz + projA); // eye z (negative, in front of camera)
+  float ez = (ortho > 0.5) ? ((ndcz - projB) / projA)  // ortho: linear
+                           : (-projB / (ndcz + projA)); // persp: inverse
   return -ez;                         // distance from camera (positive)
 }
 
@@ -1118,7 +1138,7 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
 
   float ao = 1.0;
   if (u.aoEnabled > 0.5 && d < 0.99999 && !flatCap && !aoExempt) {
-    float zc = post_linear_depth(d, u.projA, u.projB);
+    float zc = post_linear_depth(d, u.projA, u.projB, u.projOrtho);
     float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
     const int N = 12;
     const float TWO_PI = 6.28318530718;
@@ -1131,7 +1151,7 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
       float2 off = float2(cos(ang), sin(ang)) * rr * invres;
       float dn = depthTex.sample(s, in.uv + off);
       if (dn >= 0.99999) continue; // background neighbor: no occlusion (no halo)
-      float zn = post_linear_depth(dn, u.projA, u.projB);
+      float zn = post_linear_depth(dn, u.projA, u.projB, u.projOrtho);
       float diff = zc - zn; // > 0 when neighbor is closer to camera (occluder)
       if (diff > 0.0) {
         float rel = diff / max(zc, 1e-4);
@@ -1155,14 +1175,14 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   //   (2) SEPARATION gate — the occluder must be meaningfully closer to the
   //       light than the receiver (a real gap), not the same/adjacent surface.
   if (u.shadowEnabled > 0.5 && d < 0.99999 && !flatCap) {
-    float3 p = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+    float3 p = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY, u.projOrtho);
     float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
     // SMOOTH eye-space normal (see post_eye_normal_smooth). The coarse cartoon
     // mesh yields a faceted per-triangle normal from a plain reconstruction,
     // which made faceGate + the self-shadow compare step per triangle -> the
     // "triangles under shadows". The bilateral average removes that.
     float3 nrm = post_eye_normal_smooth(depthTex, s, in.uv, invres, d, p,
-                                        u.projA, u.projB, u.projX, u.projY);
+                                        u.projA, u.projB, u.projX, u.projY, u.projOrtho);
     float3 Ldir = normalize(float3(0.4, 0.4, 1.0));      // key light (eye space)
     float faceGate = smoothstep(0.0, 0.35, dot(nrm, Ldir));
     // Scale-aware, in ANGSTROMS: the light ortho box spans (radius*4 - 0.05) in
@@ -1211,7 +1231,7 @@ fragment float4 post_ssao_fog(PostVOut in [[stage_in]],
   }
 
   if (u.fogEnabled > 0.5 && d < 0.99999) {
-    float dist = post_linear_depth(d, u.projA, u.projB);
+    float dist = post_linear_depth(d, u.projA, u.projB, u.projOrtho);
     float fog = clamp((u.fogEnd - dist) / max(u.fogEnd - u.fogStart, 1e-4),
                       0.0, 1.0);
     color = mix(float3(u.bgR, u.bgG, u.bgB), color, fog);
@@ -1684,7 +1704,7 @@ void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
     float projY, int rtEnabled, int tonemapEnabled, float exposure,
     int rtShadowEnabled, float outlineR, float outlineG, float outlineB,
     float outlineWidth, int dofEnabled, float dofFocus, float dofRange,
-    int temporalAO, int upscaleEnabled, float dofAperture)
+    int temporalAO, int upscaleEnabled, float dofAperture, int ortho)
 {
   _dofEnabled = dofEnabled;
   _dofFocus = dofFocus;
@@ -1709,6 +1729,7 @@ void RendererMetal::setPostParams(int fogEnabled, float fogStart, float fogEnd,
   _projB = projB;
   _projX = projX;
   _projY = projY;
+  _projOrtho = ortho ? 1.0f : 0.0f;
   static bool noRT = getenv("PYMOL_NO_RT") != nullptr;
   _rtEnabled = (rtEnabled && _rtSupported && !noRT) ? 1 : 0;
 }
@@ -1776,6 +1797,7 @@ struct RTU {
   float4x4 lightViewProj;  // eye-space light view*proj for shadow-map sampling
   float shadowRadius;      // world half-extent of the shadow ortho box (Angstroms)
   float shadowBias;        // metal_shadow_bias: user multiplier on the self-shadow bias
+  float projOrtho;         // >0.5: orthographic projection (linear eye-z / no foreshortening)
 };
 
 static float rt_hash(float2 p) {
@@ -1814,10 +1836,10 @@ fragment float4 rt_ao(PostVOut in [[stage_in]],
   // post_eye_normal avoids the cross-silhouette derivative blow-up that plain
   // cross(dfdx,dfdy) produces, which otherwise mis-orients the AO hemisphere /
   // ray-origin bias in a 1-2px band along every silhouette.
-  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY, u.projOrtho);
   float2 invres = 1.0 / float2(depthTex.get_width(), depthTex.get_height());
   float3 nEye = post_eye_normal(depthTex, s, in.uv, invres, d, pEye,
-                                u.projA, u.projB, u.projX, u.projY);
+                                u.projA, u.projB, u.projX, u.projY, u.projOrtho);
 
   float3 pModel = (u.invModelview * float4(pEye, 1.0)).xyz;
   float3 nModel = normalize((u.invModelview * float4(nEye, 0.0)).xyz);
@@ -1893,10 +1915,10 @@ fragment float4 rt_composite(PostVOut in [[stage_in]],
   // Eye-space position + SMOOTH normal (matches post_ssao_fog). The bilateral
   // smoothing removes the coarse-mesh facet normal that made faceGate + the
   // shadow-map self-compare step per triangle.
-  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY);
+  float3 pEye = post_eye_pos(in.uv, d, u.projA, u.projB, u.projX, u.projY, u.projOrtho);
   float2 invres = 1.0 / float2(colorTex.get_width(), colorTex.get_height());
   float3 nEye = post_eye_normal_smooth(depthTex, s, in.uv, invres, d, pEye,
-                                       u.projA, u.projB, u.projX, u.projY);
+                                       u.projA, u.projB, u.projX, u.projY, u.projOrtho);
 
   // Depth-aware 5x5 blur of the AO term: weight neighbours by eye-space depth
   // closeness so AO doesn't bleed across object silhouettes.
@@ -2298,6 +2320,7 @@ void RendererMetal::runPostChain()
       float lightViewProj[16];   // eye-space light VP for shadow-map sampling
       float shadowRadius;        // matches MSL RTU: shadow ortho half-extent
       float shadowBias;          // matches MSL RTU: metal_shadow_bias multiplier
+      float projOrtho;           // matches MSL RTU: 1 = orthographic (#139)
     } u;
     std::memcpy(u.invModelview, _modelviewInv.data(), 16 * sizeof(float));
     simd_float4x4 inv;
@@ -2309,6 +2332,7 @@ void RendererMetal::runPostChain()
     u.bgFog[0] = _bgR; u.bgFog[1] = _bgG; u.bgFog[2] = _bgB;
     u.bgFog[3] = doFog ? 1.0f : 0.0f;
     u.projA = _projA; u.projB = _projB; u.projX = _projX; u.projY = _projY;
+    u.projOrtho = _projOrtho;
     u.fogStart = _fogStart; u.fogEnd = _fogEnd;
     u.aoRadius = _rtAORadius; u.aoIntensity = _rtAOIntensity;
     u.shadowIntensity = doShadow ? _rtShadowIntensity : 0.0f;
@@ -2429,6 +2453,7 @@ void RendererMetal::runPostChain()
       float lightViewProj[16]; // eye-space light VP (matches MSL PostU)
       float shadowRadius;      // matches MSL PostU: shadow ortho half-extent
       float shadowBias;        // matches MSL PostU: metal_shadow_bias multiplier
+      float projOrtho;         // matches MSL PostU: 1 = orthographic (#139)
     } u;
     u.projA = _projA; u.projB = _projB;
     u.fogStart = _fogStart; u.fogEnd = _fogEnd;
@@ -2444,6 +2469,7 @@ void RendererMetal::runPostChain()
     std::memcpy(u.lightViewProj, _lightViewProjEye, 16 * sizeof(float));
     u.shadowRadius = _shadowRadius;
     u.shadowBias = _shadowBias;
+    u.projOrtho = _projOrtho;
 
     MTLRenderPassDescriptor* pd = [MTLRenderPassDescriptor renderPassDescriptor];
     pd.colorAttachments[0].texture = _postColor;
