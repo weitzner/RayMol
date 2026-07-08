@@ -477,10 +477,10 @@ struct ContentView: View {
         .toolbar {
             // Leading — tools (mirrors the iOS top-left): Open · Measure.
             macOpenToolbar
-            macMovieToolbar
             macMeasureToolbar
             // Trailing — view toggles, then actions, then status. (Theme moved into
             // the Display segment, mirroring iOS Settings → Themes.)
+            macMovieToolbar
             panelToggles
             exportMenu
             #if !RAYMOL_MAS_RESTRICTED
@@ -2415,7 +2415,7 @@ struct ContentView: View {
     // works from a cold start (no movie yet), unlike the transport, which is
     // gated behind hasTimeline. The ⌥⌘M shortcut lives on the Movie menu command.
     private var macMovieToolbar: some ToolbarContent {
-        ToolbarItem {
+        ToolbarItem(placement: .primaryAction) {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() }
             } label: {
