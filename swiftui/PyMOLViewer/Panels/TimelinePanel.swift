@@ -371,9 +371,14 @@ struct TimelinePanel: View {
         .frame(width: contentW, height: rulerH)
         .overlay(alignment: .bottom) { Divider() }
         .contentShape(Rectangle())
+        // Drag the playhead: live-sync the viewport on every change (scrub drives
+        // the core frame immediately), commit + release the scrub lock on end. A
+        // zero-distance drag doubles as a tap-to-seek. minimumDistance 0 so the
+        // first touch already positions the playhead (no dead zone before drag).
         .gesture(
-            SpatialTapGesture(coordinateSpace: .named(laneSpace))
-                .onEnded { e in engine.seek(to: frame(atX: e.location.x, pps: pps)) }
+            DragGesture(minimumDistance: 0, coordinateSpace: .named(laneSpace))
+                .onChanged { g in engine.scrub(to: frame(atX: g.location.x, pps: pps)) }
+                .onEnded { _ in engine.endScrub() }
         )
     }
 
