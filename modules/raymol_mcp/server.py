@@ -140,6 +140,14 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # silence default stderr logging
 
+    def handle_one_request(self):
+        # A client hanging up mid-request (peer reset / broken pipe) is a benign,
+        # expected condition; swallow it quietly instead of dumping a traceback.
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+
     def _authed(self):
         return self.headers.get("Authorization", "") == "Bearer %s" % _token
 
