@@ -38,11 +38,15 @@ PYMOL_GENERATED_FLAGS[sdk=macosx*] = -I$(PYMOL_BUILD_MACOS)/generated
 PYMOL_GENERATED_FLAGS[sdk=iphoneos*] = -I$(PYMOL_BUILD_IOS_DEVICE)/generated
 PYMOL_GENERATED_FLAGS[sdk=iphonesimulator*] = -I$(PYMOL_BUILD_IOS)/generated
 
-// On iOS, define _PYMOL_NO_OPENGL and _PYMOL_IOS to compile out GL code (Metal-only)
-PYMOL_IOS_FLAGS[sdk=iphoneos*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
-PYMOL_IOS_FLAGS[sdk=iphonesimulator*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
+// Compile out real-GL code (Metal-only) with the same macros the CMake core
+// build uses (appkit/CMakeLists.txt PYMOL_IOS / PYMOL_METAL_ONLY branches) —
+// the bridge file must agree with libpymol_core.a on this or shared headers
+// like layer0/os_gl.h produce mismatched types between the two.
+PYMOL_NOGL_FLAGS[sdk=macosx*] = -D_PYMOL_NO_OPENGL -D_PYMOL_METAL_ONLY
+PYMOL_NOGL_FLAGS[sdk=iphoneos*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
+PYMOL_NOGL_FLAGS[sdk=iphonesimulator*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
 
-OTHER_CPLUSPLUSFLAGS = $(inherited) $(PYMOL_INCLUDE_FLAGS) $(PYMOL_GENERATED_FLAGS) $(PYMOL_IOS_FLAGS)
+OTHER_CPLUSPLUSFLAGS = $(inherited) $(PYMOL_INCLUDE_FLAGS) $(PYMOL_GENERATED_FLAGS) $(PYMOL_NOGL_FLAGS)
 
 // --- Linker flags ---
 // iOS cross-compiled dependencies
