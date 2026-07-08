@@ -115,7 +115,14 @@ struct TransportBar: View {
             if !inTimeline { scrubber }
             counter
             loopButton
-            overflowMenu
+            // In a timeline the frame rate lives inline on the transport row and
+            // Export moved to the panel's top bar, so the ⋯ overflow menu is gone
+            // (issue #142). The standalone (iPad floating) transport keeps it.
+            if inTimeline {
+                fpsMenu
+            } else {
+                overflowMenu
+            }
         }
         .padding(.horizontal, 12)
         .frame(height: 40)
@@ -253,17 +260,28 @@ struct TransportBar: View {
         .help(playback.movieLoop ? "Looping on — tap to turn off" : "Loop the movie")
     }
 
+    // Shared frame-rate picker + the "Show frame rate" HUD toggle. Folded into
+    // every fps control so both actions stay reachable now that the ⋯ overflow
+    // menu is gone (issue #142).
+    @ViewBuilder private var fpsMenuContent: some View {
+        Picker("Frame rate", selection: Binding(
+            get: { playback.movieFPS },
+            set: { engine.setMovieFPS($0) })) {
+            Text("30 fps").tag(30.0)
+            Text("15 fps").tag(15.0)
+            Text("5 fps").tag(5.0)
+            Text("1 fps").tag(1.0)
+            Text("0.3 fps").tag(0.3)
+        }
+        Divider()
+        Button { engine.setShowFrameRate(true) } label: {
+            Label("Show frame rate", systemImage: "speedometer")
+        }
+    }
+
     private var fpsMenu: some View {
         Menu {
-            Picker("Frame rate", selection: Binding(
-                get: { playback.movieFPS },
-                set: { engine.setMovieFPS($0) })) {
-                Text("30 fps").tag(30.0)
-                Text("15 fps").tag(15.0)
-                Text("5 fps").tag(5.0)
-                Text("1 fps").tag(1.0)
-                Text("0.3 fps").tag(0.3)
-            }
+            fpsMenuContent
         } label: {
             Label("\(fpsLabel) fps", systemImage: "gauge.with.dots.needle.67percent")
                 .font(.system(size: 12))
@@ -275,15 +293,7 @@ struct TransportBar: View {
     // Slim fps control for the packed timeline row (no gauge icon, "30fps").
     private var fpsMenuTight: some View {
         Menu {
-            Picker("Frame rate", selection: Binding(
-                get: { playback.movieFPS },
-                set: { engine.setMovieFPS($0) })) {
-                Text("30 fps").tag(30.0)
-                Text("15 fps").tag(15.0)
-                Text("5 fps").tag(5.0)
-                Text("1 fps").tag(1.0)
-                Text("0.3 fps").tag(0.3)
-            }
+            fpsMenuContent
         } label: {
             Text(fpsTightLabel)
                 .font(.system(size: 12, weight: .medium))

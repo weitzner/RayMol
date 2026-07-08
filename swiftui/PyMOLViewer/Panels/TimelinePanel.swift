@@ -42,6 +42,9 @@ struct TimelinePanel: View {
     var forceCompact: Bool = false
 
     @State private var showClearConfirm = false
+    // Export the authored movie — lives on the top bar (right of the trashcan) so
+    // it's always visible in both the docked and expanded panel (issue #142).
+    @State private var showExport = false
 
     // Horizontal zoom: pixels-per-second = (viewportWidth / 10) * zoom, so zoom
     // 1 fits ~10 s across the lane. +/- steps; the lane scrolls when the movie is
@@ -146,6 +149,7 @@ struct TimelinePanel: View {
         }
         .background(TimelineTheme.bar)
         .sheet(isPresented: $showStatesSheet) { statesConfigSheet }
+        .sheet(isPresented: $showExport) { MovieExportSheet() }
         .onAppear {
             // Test affordance: auto-open the "Play models" modal so it can be
             // screenshotted on the sim (simctl can't tap). PYMOL_AUTOSTATESHEET=1.
@@ -195,6 +199,7 @@ struct TimelinePanel: View {
             addCameraButton
             zoomControl
             trashButton
+            exportButton
             if onExpand != nil { expandButton }
             if showsDone { doneButton }
         }
@@ -260,6 +265,23 @@ struct TimelinePanel: View {
         .disabled(engine.timelineItems.isEmpty)
         .help("Clear the timeline")
         .accessibilityLabel("Clear timeline")
+    }
+
+    // Export the authored movie to a file (MP4 / GIF). Pinned to the top bar,
+    // immediately right of the trashcan, so it's always visible in both the
+    // docked and expanded panel (issue #142). Disabled on an empty timeline.
+    private var exportButton: some View {
+        Button { showExport = true } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 15))
+                .frame(width: 30, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(engine.timelineItems.isEmpty ? TimelineTheme.dim : TimelineTheme.text)
+        .disabled(engine.timelineItems.isEmpty)
+        .help("Export the movie to a file")
+        .accessibilityLabel("Export movie")
     }
 
     // Open / collapse the full-width bottom dock (compact right-panel view only).
