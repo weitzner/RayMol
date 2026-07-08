@@ -700,6 +700,21 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) { sceneOverlayRow }
                     .frame(width: 230)
+                    // Fade both edges so a half-chip dissolves under the pill's
+                    // rim — the resting cue that this row scrolls, since the
+                    // native scrollbar only shows mid-scroll (issue #131). A
+                    // symmetric mask reads correctly over the translucent
+                    // material regardless of the backing color.
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0),
+                                .init(color: .black, location: 0.06),
+                                .init(color: .black, location: 0.94),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .leading, endPoint: .trailing)
+                    )
                     .onAppear { proxy.scrollTo(engine.currentScene, anchor: .center) }
                     .onChange(of: engine.currentScene) { s in
                         withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(s, anchor: .center) }
