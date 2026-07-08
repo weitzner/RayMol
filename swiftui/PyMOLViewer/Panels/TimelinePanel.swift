@@ -109,19 +109,26 @@ struct TimelinePanel: View {
         }
     }
 
-    // A slim gradient hugging the trailing edge of a horizontal scroll region to
-    // signal off-screen content — the resting cue that a row is scrollable, since
-    // the native macOS scrollbar only appears mid-scroll (issue #131). Purely
-    // decorative: never hit-tests, so it can't eat scroll/scrub gestures.
-    @ViewBuilder
-    private func trailingScrollFade() -> some View {
-        // Fade to the panel background so content appears to slide UNDER the
-        // chrome edge — theme-adaptive (reads correctly on light + dark), unlike
-        // a fixed black shadow which looks harsh on a light palette (#133).
-        LinearGradient(colors: [TimelineTheme.bar.opacity(0), TimelineTheme.bar],
-                       startPoint: .leading, endPoint: .trailing)
-            .frame(width: 24)
-            .allowsHitTesting(false)
+    // Symmetric edge-fade for a horizontal scroll region, applied as a `.mask`
+    // (matches the floating scene-chip row in ContentView, issue #131). Unlike the
+    // opaque trailing overlay above, a mask dissolves the CONTENT to true
+    // transparency, so it reads correctly over the timeline's translucent chrome
+    // regardless of the backing color AND cues the leading edge once the row has
+    // been scrolled off its start. Pass `active` false when the row fits, so a
+    // non-overflowing row is never clipped. The gradient runs leading→trailing;
+    // masks don't hit-test, so scroll/scrub gestures are untouched.
+    private func scrollFadeMask(_ active: Bool) -> LinearGradient {
+        LinearGradient(
+            stops: active
+                ? [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.05),
+                    .init(color: .black, location: 0.95),
+                    .init(color: .clear, location: 1),
+                  ]
+                // Fully opaque (no fade) so a row that fits isn't clipped.
+                : [.init(color: .black, location: 0), .init(color: .black, location: 1)],
+            startPoint: .leading, endPoint: .trailing)
     }
 
     var body: some View {
@@ -351,11 +358,10 @@ struct TimelinePanel: View {
                     // otherwise vertically greedy and would absorb the panel's slack,
                     // opening gaps above the ruler / below the lane.
                     .frame(height: rulerH + laneH)
-                    // Trailing fade when the lane is longer than the viewport, so
-                    // it's obvious the track scrolls horizontally (issue #131).
-                    .overlay(alignment: .trailing) {
-                        if cW > w + 1 { trailingScrollFade() }
-                    }
+                    // Symmetric edge-fade when the lane is longer than the viewport,
+                    // so it's obvious the track scrolls horizontally (issue #131) —
+                    // trailing at rest, leading too once scrolled off the start.
+                    .mask(scrollFadeMask(cW > w + 1))
                     // Follow the playhead during playback (don't fight manual scroll).
                     .onChange(of: playback.currentFrame) { _ in
                         if playback.isPlaying {
@@ -689,14 +695,13 @@ struct TimelinePanel: View {
                         Color.clear.preference(key: PaletteContentWKey.self, value: c.size.width)
                     })
                 }
-                // Trailing fade when the chips overflow the row, so it's obvious
-                // the scenes palette scrolls horizontally (issue #131).
+                // Symmetric edge-fade when the chips overflow the row, so it's
+                // obvious the scenes palette scrolls horizontally (issue #131) —
+                // mirrors the floating scene-chip row's mask in ContentView.
                 .background(GeometryReader { v in
                     Color.clear.preference(key: PaletteViewportWKey.self, value: v.size.width)
                 })
-                .overlay(alignment: .trailing) {
-                    if paletteContentW > paletteViewportW + 1 { trailingScrollFade() }
-                }
+                .mask(scrollFadeMask(paletteContentW > paletteViewportW + 1))
                 .onPreferenceChange(PaletteContentWKey.self) { paletteContentW = $0 }
                 .onPreferenceChange(PaletteViewportWKey.self) { paletteViewportW = $0 }
             }
