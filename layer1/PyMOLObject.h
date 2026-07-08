@@ -90,6 +90,14 @@ struct CObject {
   int grid_slot = 0;
   CGO* gridSlotSelIndicatorsCGO = nullptr;
   int Grabbed = 0;
+  // Movie frame at which the ViewElem per-frame state track was last written
+  // into cSetting_state (see ObjectPrepareContext). Re-applying it on EVERY
+  // render at a STATIC frame would clobber an explicit per-object `set state`
+  // (the Objects-panel model inspection, which is decoupled from the movie) —
+  // freezing the viewport on one model while a movie sits idle (issue #132).
+  // The movie's own play / scrub / export all ADVANCE the frame, so the sweep
+  // still drives them. -1 = not yet applied.
+  int LastStateFrame = -1;
 
   // methods
   StateIndex_t getCurrentState() const;

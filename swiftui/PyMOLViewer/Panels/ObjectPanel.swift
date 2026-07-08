@@ -2756,6 +2756,10 @@ struct ScenesPane: View {
                         .strokeBorder(TimelineTheme.accent.opacity(0.5),
                                       style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                 )
+                // Hit the whole dashed tile, not just the glyph: without this the
+                // transparent interior between the "+" and the border isn't
+                // tappable (the Image only hit-tests its rendered glyph). (#130)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("New scene from current view")
