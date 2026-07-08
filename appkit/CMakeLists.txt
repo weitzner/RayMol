@@ -293,10 +293,10 @@ if(GLM_INCLUDE)
 endif()
 
 if(PYMOL_LIBXML AND NOT PYMOL_IOS)
-    find_library(XML2_LIB xml2 HINTS /opt/homebrew/lib)
+    find_library(XML2_LIB xml2 HINTS /opt/homebrew/lib ${PYMOL_EXTERNAL_PREFIX}/lib)
     find_path(XML2_INCLUDE libxml/parser.h
         PATH_SUFFIXES libxml2
-        HINTS /opt/homebrew/include)
+        HINTS /opt/homebrew/include ${PYMOL_EXTERNAL_PREFIX}/include)
     if(XML2_LIB AND XML2_INCLUDE)
         target_compile_definitions(pymol_core PRIVATE _HAVE_LIBXML)
         target_include_directories(pymol_core PRIVATE ${XML2_INCLUDE})
