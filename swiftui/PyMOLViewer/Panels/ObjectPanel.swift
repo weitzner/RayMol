@@ -428,6 +428,12 @@ private indirect enum ActionMenuItem {
     case action(label: String, key: String)
     case separator
     case submenu(label: String, children: [ActionMenuItem])
+    // Dynamic submenus whose children are the currently-loaded molecule
+    // objects / public selections (built at render time from engine.objects),
+    // mirroring desktop PyMOL's "to molecule (*/CA)" / "to selection (*/CA)"
+    // align entries.
+    case alignToMolecule(label: String)
+    case alignToSelection(label: String)
 }
 
 private let actionMenuItems: [ActionMenuItem] = [
@@ -473,6 +479,9 @@ private let actionMenuItems: [ActionMenuItem] = [
         .action(label: "pi-cation",                 key: "find_pi_cation"),
     ]),
     .submenu(label: "Align", children: [
+        .alignToMolecule(label: "to molecule (*/CA)"),
+        .alignToSelection(label: "to selection (*/CA)"),
+        .separator,
         .action(label: "enabled to this (*/CA)",  key: "align_enabled"),
         .action(label: "all to this (*/CA)",      key: "align_all"),
         .separator,
@@ -1106,8 +1115,48 @@ private func actionMenuContent(_ items: [ActionMenuItem], name: String, engine: 
             Menu(label) {
                 AnyView(actionMenuContent(children, name: name, engine: engine))  // AnyView breaks recursive opaque-type inference
             }
+        case .alignToMolecule(let label):
+            // Candidate targets: every OTHER loaded molecule object (mirrors
+            // desktop PyMOL's align_to_object). Empty when nothing else is loaded.
+            Menu(label) {
+                let targets = engine.objects.filter { !$0.isSelection && $0.name != name }
+                if targets.isEmpty {
+                    Button("(no other molecules)") {}.disabled(true)
+                } else {
+                    ForEach(targets) { target in
+                        Button(target.name) {
+                            runAlignCommand(mobile: name, target: target.name, engine: engine)
+                        }
+                    }
+                }
+            }
+        case .alignToSelection(let label):
+            // Candidate targets: every public selection (mirrors desktop PyMOL's
+            // align_to_sele). Empty when no selections exist.
+            Menu(label) {
+                let targets = engine.objects.filter { $0.isSelection && $0.name != name }
+                if targets.isEmpty {
+                    Button("(no selections)") {}.disabled(true)
+                } else {
+                    ForEach(targets) { target in
+                        Button(target.name) {
+                            runAlignCommand(mobile: name, target: target.name, engine: engine)
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+/// Align one object onto a target molecule/selection over polymer CA atoms,
+/// creating an alignment object (mirrors desktop PyMOL's align_to_object /
+/// align_to_sele in modules/pymol/menu.py).
+private func runAlignCommand(mobile: String, target: String, engine: PyMOLEngine) {
+    let cmd = "python\ncmd.align(\"polymer and name CA and (\(mobile))\", "
+        + "\"polymer and name CA and (\(target))\", quiet=0, "
+        + "object=\"aln_\(mobile)_to_\(target)\", reset=1)\npython end"
+    engine.runCommand(cmd)
 }
 
 private struct ActionMenuButton: View {
