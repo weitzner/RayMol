@@ -134,7 +134,19 @@ final class PyMOLEngine: ObservableObject {
     // The single detail view that is currently open (accordion: at most one).
     // nil = none, `sceneDetailKey` = the SCENE card, otherwise an object name.
     // Drives which object the detail poll queries (collapsed = cheap).
-    @Published var expandedDetail: String? = nil
+    // Poll the just-expanded object's rep detail IMMEDIATELY here (at the source)
+    // rather than waiting up to ~500ms for the next pollObjects tick — a heavy
+    // surface build can starve that timer and the card lingers on "No
+    // representations shown" / renders empty (#107). Doing it in didSet (instead
+    // of a per-layout view .onChange) guarantees EVERY expand path fires the
+    // refresh: iOS, macOS (whose layout had no such observer — the empty-panel
+    // bug), session restore, and the PYMOL_AUTOEXPAND test hook.
+    @Published var expandedDetail: String? = nil {
+        didSet {
+            guard expandedDetail != oldValue, expandedDetail != nil else { return }
+            refreshExpandedDetail()
+        }
+    }
     // Sentinel for "the SCENE card is the open detail view" — a control char so
     // it can never collide with a real object name.
     static let sceneDetailKey = "\u{1}scene"
@@ -1135,8 +1147,10 @@ final class PyMOLEngine: ObservableObject {
             + "_en |= set(_cmd.get_names('public_selections', enabled_only=1) or [])\n"
             + "_sc = {s: _cmd.count_atoms(s) for s in _sels}\n"
             + "_ns = {o: _cmd.count_states('?' + o) for o in _objs}\n"
+            + "from pymol import appkit_inspector as _ai\n"
+            + "_ht = {o: _ai.object_has_atom_transp(o) for o in _objs}\n"
             + "print('OBJPANEL:' + json.dumps({'objects': _objs, 'selections': _sels, "
-            + "'enabled': list(_en), 'sel_counts': _sc, 'nstate': _ns}))"
+            + "'enabled': list(_en), 'sel_counts': _sc, 'nstate': _ns, 'has_transp': _ht}))"
         )
         refreshExpandedDetail()
         if sequenceVisible { fetchSequences() }
@@ -2117,8 +2131,10 @@ final class PyMOLEngine: ObservableObject {
             + "_en |= set(_cmd.get_names('public_selections', enabled_only=1) or [])\n"
             + "_sc = {s: _cmd.count_atoms(s) for s in _sels}\n"
             + "_ns = {o: _cmd.count_states('?' + o) for o in _objs}\n"
+            + "from pymol import appkit_inspector as _ai\n"
+            + "_ht = {o: _ai.object_has_atom_transp(o) for o in _objs}\n"
             + "print('OBJPANEL:' + json.dumps({'objects': _objs, 'selections': _sels, "
-            + "'enabled': list(_en), 'sel_counts': _sc, 'nstate': _ns}))"
+            + "'enabled': list(_en), 'sel_counts': _sc, 'nstate': _ns, 'has_transp': _ht}))"
         )
 
         pollDetails()
@@ -2172,12 +2188,21 @@ final class PyMOLEngine: ObservableObject {
                     if let cols = r["colors"] as? [String: Any] {
                         for (k, v) in cols { settingColors[k] = v as? String ?? "inherit" }
                     }
+                    var atomTransp: AtomTransp? = nil
+                    if let at = r["atom_transp"] as? [String: Any],
+                       let setting = at["setting"] as? String {
+                        atomTransp = AtomTransp(
+                            setting: setting,
+                            min: (at["min"] as? NSNumber)?.doubleValue ?? 0,
+                            max: (at["max"] as? NSNumber)?.doubleValue ?? 0)
+                    }
                     return RepState(
                         rep: r["rep"] as? String ?? "",
                         visible: ((r["vis"] as? NSNumber)?.intValue ?? 1) != 0,
                         values: values,
                         color: r["color"] as? String ?? "inherit",
-                        settingColors: settingColors)
+                        settingColors: settingColors,
+                        atomTransp: atomTransp)
                 }
             }
         }

@@ -49,6 +49,9 @@ extension Notification.Name {
     static let raymolExportImage  = Notification.Name("raymol.menu.exportImage")
     static let raymolToggleTimeline = Notification.Name("raymol.menu.toggleTimeline")
     static let mcpOpenConnectSheet = Notification.Name("raymol.mcp.openConnectSheet")
+    // Posted by the macOS app-menu item and the iOS Settings row to open the
+    // "What's New" splash on demand; observed in ContentView.body.
+    static let raymolShowWhatsNew = Notification.Name("raymol.menu.showWhatsNew")
 }
 
 #if os(iOS)
@@ -203,6 +206,9 @@ private extension View {
 struct ContentView: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager
+    // "What's New" splash: auto-shows once after a version bump; also opened on
+    // demand via the app menu / Settings (see WhatsNewModel / WhatsNewModal).
+    @StateObject private var whatsNew = WhatsNewModel()
     @State private var showThemeStudio = false   // inline Theme studio (replaces a panel region)
     @AppStorage("mouseLegendCollapsed") private var mouseLegendCollapsed = false
     // Pending auto-minimize of the expanded mouse legend (fires ~1s after the
@@ -245,6 +251,26 @@ struct ContentView: View {
     }
 
     var body: some View {
+        layout
+            // What's New splash (both platforms, single hook): once-per-launch
+            // auto-show, the manual-open notification, and the sheet itself.
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                    whatsNew.presentAutoIfNeeded()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .raymolShowWhatsNew)) { _ in
+                whatsNew.presentManually()
+            }
+            .sheet(isPresented: $whatsNew.isPresented, onDismiss: { whatsNew.didDismiss() }) {
+                WhatsNewModal(pages: whatsNew.pages,
+                              versionLabel: whatsNew.currentVersion) {
+                    whatsNew.isPresented = false
+                }
+            }
+    }
+
+    @ViewBuilder private var layout: some View {
         #if os(macOS)
         macOSLayout
         #else
@@ -314,16 +340,29 @@ struct ContentView: View {
             .help("Show mouse controls")
             .padding(8)
         } else {
+            // The minimize button lives in a reserved trailing gutter (top-right),
+            // NOT overlaid on the panel: MousePanel's mode Picker uses
+            // `maxWidth: .infinity`, so its `.menu` chevron would otherwise run
+            // into the corner and blend with / hide the "−" (issue #111). The
+            // gutter guarantees the button is a distinct, clearly-separated
+            // affordance the picker can't reach.
             ZStack(alignment: .topTrailing) {
                 MousePanel()
                     .frame(width: 220)
+                    // Reserve space on the right so the picker chevron stops short
+                    // of the corner where the minimize button sits.
+                    .padding(.trailing, 22)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
                 Button { withAnimation(.easeInOut(duration: 0.15)) { mouseLegendCollapsed = true } } label: {
+                    // Two-tone: a strong (primary) minus glyph over a subtly tinted
+                    // circle. The old single-tone `.secondary` fill was nearly
+                    // invisible against the translucent header (issue #111).
                     Image(systemName: "minus.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.primary, Color.primary.opacity(0.18))
                         .padding(4)
                 }
                 .buttonStyle(.plain)
@@ -386,47 +425,7 @@ struct ContentView: View {
                 // Timeline transport docked beneath it whenever there's more than
                 // one frame to play (states / trajectory / movie).
                 VStack(spacing: 0) {
-                    MetalViewport()
-                        .frame(minWidth: 400, minHeight: 360)
-                        .layoutPriority(1)
-                        .overlay(alignment: .top) {
-                            if engine.measureMode != nil { measureOverlay }
-                        }
-                        // Pick-debug crosshair: marks exactly where the last click
-                        // landed, so a screenshot shows click-vs-selection offset.
-                        .overlay { debugClickMarker }
-                        // Mouse-mode legend as a compact floating card at the
-                        // bottom-trailing corner, so it's reachable even when the
-                        // right column is collapsed (where MousePanel used to live).
-                        // Minimizable to a small mouse button to free up the view.
-                        .overlay(alignment: .bottomTrailing) { mouseLegendCard }
-                        // Opt-in glanceable scene buttons (Scenes inspector →
-                        // "Show scene buttons in viewport"). The iOS path wires
-                        // this in viewportView; macOS needs it here too. Flat 12pt
-                        // bottom padding: the TransportBar docks BELOW the viewport
-                        // frame (sibling in the VStack), so no transport clearance
-                        // is needed as on iOS.
-                        .overlay(alignment: .bottomLeading) {
-                            bottomLeadingViewportChrome
-                                .padding(.leading, 12)
-                                .padding(.bottom, 12)
-                        }
-                        .overlay(alignment: .bottom) {
-                            if showCameraPanel && !engine.objects.isEmpty {
-                                CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
-                                    .padding(.horizontal, 10)
-                                    .padding(.bottom, 12)
-                                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                                    .gesture(DragGesture().onEnded { v in
-                                        if v.translation.height > 40 {
-                                            withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false }
-                                        }
-                                    })
-                            }
-                        }
-                        // Empty-state CTA centered in the VIEWPORT (not over the
-                        // docked timeline below it).
-                        .overlay { if engine.objects.isEmpty && !showThemeStudio { macEmptyState } }
+                    macViewport
                     // The docked bottom transport was removed: movie playback lives
                     // in the Movie tab, model stepping in the Object panel. Only the
                     // full timeline editor still docks here (when expanded).
@@ -541,6 +540,71 @@ struct ContentView: View {
                 showSceneButtons = true
             }
         }
+    }
+
+    // The macOS viewport: the Metal view plus its floating overlays and the
+    // right-click context menu. Extracted from macOSLayout's body so the
+    // type-checker can resolve each in isolation (the inline chain tripped the
+    // "unable to type-check in reasonable time" limit).
+    @ViewBuilder
+    private var macViewport: some View {
+        MetalViewport()
+            .frame(minWidth: 400, minHeight: 360)
+            .layoutPriority(1)
+            .overlay(alignment: .top) {
+                if engine.measureMode != nil { measureOverlay }
+            }
+            // Pick-debug crosshair: marks exactly where the last click landed,
+            // so a screenshot shows click-vs-selection offset.
+            .overlay { debugClickMarker }
+            // Mouse-mode legend as a compact floating card at the bottom-trailing
+            // corner, so it's reachable even when the right column is collapsed
+            // (where MousePanel used to live). Minimizable to free up the view.
+            .overlay(alignment: .bottomTrailing) { mouseLegendCard }
+            // Opt-in glanceable scene buttons (Scenes inspector → "Show scene
+            // buttons in viewport"). The iOS path wires this in viewportView;
+            // macOS needs it here too. Flat 12pt bottom padding: the TransportBar
+            // docks BELOW the viewport frame (sibling in the VStack), so no
+            // transport clearance is needed as on iOS.
+            .overlay(alignment: .bottomLeading) {
+                bottomLeadingViewportChrome
+                    .padding(.leading, 12)
+                    .padding(.bottom, 12)
+            }
+            .overlay(alignment: .bottom) {
+                if showCameraPanel && !engine.objects.isEmpty {
+                    CameraDock(engine: engine, onClose: { withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false } })
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .gesture(DragGesture().onEnded { v in
+                            if v.translation.height > 40 {
+                                withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = false }
+                            }
+                        })
+                }
+            }
+            // Empty-state CTA centered in the VIEWPORT (not over the docked
+            // timeline below it).
+            .overlay { if engine.objects.isEmpty && !showThemeStudio { macEmptyState } }
+            // Right-click context menu: a right-click in the viewport picks the
+            // atom/residue under the cursor (or empty space) and sets
+            // engine.longPressHit; present the same native menu the iOS
+            // long-press uses. PyMOL's own pop-up menu is never drawn under this
+            // Metal backend (internal_gui=0).
+            .confirmationDialog(
+                engine.longPressHit?.title ?? "",
+                isPresented: Binding(get: { engine.longPressHit != nil },
+                                     set: { if !$0 { engine.longPressHit = nil } }),
+                titleVisibility: .visible,
+                presenting: engine.longPressHit
+            ) { hit in
+                longPressActions(hit)
+            }
+            .confirmationDialog("Color residue", isPresented: $showLongPressColor,
+                                titleVisibility: .visible) {
+                longPressColorActions()
+            }
     }
 
     // macOS empty-state CTA, mirroring the iOS overlay visuals. "Open File…" uses
@@ -695,6 +759,42 @@ struct ContentView: View {
         n.count > 8 ? String(n.prefix(7)) + "…" : n
     }
 
+    // Long-press / right-click context menu state (shared macOS + iOS): the color
+    // sub-sheet toggle + the residue sel it colors. Both platforms present the
+    // same menu from engine.longPressHit (iOS long-press, macOS right-click).
+    @State private var showLongPressColor = false
+    @State private var longPressColorSel: String?
+
+    // Buttons for the long-press / right-click context menu. Empty space →
+    // scene-level actions; a hit → residue-scoped actions on hit.sel (an
+    // obj/chain/resi selector). Shared by iOS (long-press) and macOS (right-click).
+    @ViewBuilder
+    private func longPressActions(_ hit: LongPressHit) -> some View {
+        if hit.isEmpty {
+            Button("Reset view") { engine.runCommand("reset") }
+            Button("Deselect all") { engine.runCommand("deselect") }
+        } else {
+            Button("Zoom to residue") { engine.runCommand("zoom (\(hit.sel)), animate=1") }
+            Button("Select residue") { engine.runCommand("select sele, (?sele) or (\(hit.sel))\nenable sele") }
+            Button("Label residue") { engine.runCommand("label first (\(hit.sel)), '\(hit.resn)\(hit.resi)'") }
+            Button("Hide residue") { engine.runCommand("hide everything, (\(hit.sel))") }
+            Button("Center here") { engine.runCommand("center (\(hit.sel))") }
+            Button("Color…") { longPressColorSel = hit.sel; showLongPressColor = true }
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    // Color choices for the "Color…" sub-sheet (a few presets + by-element).
+    @ViewBuilder
+    private func longPressColorActions() -> some View {
+        let sel = longPressColorSel ?? ""
+        ForEach(["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white"], id: \.self) { c in
+            Button(c.capitalized) { engine.runCommand("color \(c), (\(sel))") }
+        }
+        Button("By element") { engine.runCommand("python\nfrom pymol import util; util.cnc('(\(sel))')\npython end") }
+        Button("Cancel", role: .cancel) {}
+    }
+
     #if os(iOS)
     // Default to the Objects tab: a touch user tunes representations far more
     // than they type commands, and it avoids greeting them with console log text.
@@ -703,9 +803,6 @@ struct ContentView: View {
     @State private var fetchID = ""
     // Confirmation for the destructive "Clear session" reset action.
     @State private var showClearSessionConfirm = false
-    // Long-press context menu: the color sub-sheet + the residue sel it colors.
-    @State private var showLongPressColor = false
-    @State private var longPressColorSel: String?
     // iPhone: the transport floats as a 1-line peek over the viewport and
     // expands in place to the full multi-row control. (Ignored on regular-width
     // iPad, where the bar is always full.)
@@ -888,10 +985,10 @@ struct ContentView: View {
             // visible (the panel's ScrollView covers any remaining overflow);
             // restore the user's size when everything collapses.
             .onChange(of: engine.expandedDetail) { detail in
-                // Poll the just-expanded object's rep detail immediately so its
-                // representation list shows at once (don't wait for the next
-                // ~500ms poll tick, which a heavy surface build can delay).
-                if detail != nil { engine.refreshExpandedDetail() }
+                // The immediate rep-detail poll on expand is fired from
+                // PyMOLEngine.expandedDetail's didSet (so every layout — incl.
+                // macOS, which has no such observer — populates at once, #107).
+                // Here we only drive the iPhone panel auto-grow.
                 // Only the iPhone (compact) bottom panel auto-grows; the iPad
                 // mac-style right column scrolls its own content at fixed width.
                 guard hSize == .compact else { return }
@@ -1047,6 +1144,16 @@ struct ContentView: View {
                     if s == "export" { showExportSheet = true }
                     if s == "settings" { showSettingsSheet = true }
                     if s == "theme" { withAnimation { showThemeStudio = true } }
+                    if s == "whatsnew" { whatsNew.presentManually() }
+                }
+            }
+            // Test affordance (screenshot harness): auto-open the Camera control
+            // dock so its layout can be captured without a tap (simctl can't
+            // synthesize one). Delayed so an AUTOLOAD/AUTOCMD structure is present
+            // (the dock only shows when an object exists). PYMOL_AUTOCAMERA=1.
+            if ProcessInfo.processInfo.environment["PYMOL_AUTOCAMERA"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                    withAnimation(.easeOut(duration: 0.22)) { showCameraPanel = true }
                 }
             }
             autoSelectThemeFromEnv()
@@ -1966,35 +2073,6 @@ struct ContentView: View {
         }
     }
 
-    // Buttons for the long-press context menu. Empty space → scene-level actions;
-    // a hit → residue-scoped actions on hit.sel (an obj/chain/resi selector).
-    @ViewBuilder
-    private func longPressActions(_ hit: LongPressHit) -> some View {
-        if hit.isEmpty {
-            Button("Reset view") { engine.runCommand("reset") }
-            Button("Deselect all") { engine.runCommand("deselect") }
-        } else {
-            Button("Zoom to residue") { engine.runCommand("zoom (\(hit.sel)), animate=1") }
-            Button("Select residue") { engine.runCommand("select sele, (?sele) or (\(hit.sel))\nenable sele") }
-            Button("Label residue") { engine.runCommand("label first (\(hit.sel)), '\(hit.resn)\(hit.resi)'") }
-            Button("Hide residue") { engine.runCommand("hide everything, (\(hit.sel))") }
-            Button("Center here") { engine.runCommand("center (\(hit.sel))") }
-            Button("Color…") { longPressColorSel = hit.sel; showLongPressColor = true }
-        }
-        Button("Cancel", role: .cancel) {}
-    }
-
-    // Color choices for the long-press "Color…" sub-sheet (a few presets + by-element).
-    @ViewBuilder
-    private func longPressColorActions() -> some View {
-        let sel = longPressColorSel ?? ""
-        ForEach(["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "white"], id: \.self) { c in
-            Button(c.capitalized) { engine.runCommand("color \(c), (\(sel))") }
-        }
-        Button("By element") { engine.runCommand("python\nfrom pymol import util; util.cnc('(\(sel))')\npython end") }
-        Button("Cancel", role: .cancel) {}
-    }
-
     private func iosHandleImport(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
         let scoped = url.startAccessingSecurityScopedResource()
@@ -2268,6 +2346,11 @@ struct ContentView: View {
                 }
             }
         }
+        // Shared panel background so every tab (Objects / Scenes / Movie / Display)
+        // matches. ObjectPanel/TimelinePanel paint their own opaque background on
+        // top; the Scenes/Display ScrollViews are transparent, so without this they
+        // fell through to the window's default chrome (a mismatched dark gray).
+        .background(themeManager.active.panelBackground.color)
         // Auto-stop model/movie playback when entering the Movie tab or expanding
         // the timeline dock (you're authoring now, not inspecting the ensemble).
         .onChange(of: inspectorTab) { tab in
@@ -2687,6 +2770,13 @@ struct ContentView: View {
         // PYMOL_SKIP_FIRSTBOOT_THEME=1.
         if ProcessInfo.processInfo.environment["PYMOL_SKIP_FIRSTBOOT_THEME"] != nil { return }
         guard themeManager.firstBoot else { return }
+        // Test affordance: suppress the one-time first-boot Theme Studio so a
+        // screenshot/UI test that drives another sheet (e.g. What's New) isn't
+        // fighting a second modal for the presentation slot. Still mark it done.
+        if ProcessInfo.processInfo.environment["PYMOL_SKIP_FIRSTBOOT_THEME"] != nil {
+            themeManager.markFirstBootDone()
+            return
+        }
         themeManager.markFirstBootDone()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             withAnimation(.easeInOut(duration: 0.2)) {

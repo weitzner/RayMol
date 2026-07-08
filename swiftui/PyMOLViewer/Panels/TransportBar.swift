@@ -20,7 +20,11 @@ enum TimelineTheme {
     // read. Views that should recolor live on a theme switch already observe
     // ThemeManager; others pick it up on their next render.
     static var accent: Color { ThemeManager.shared.active.accent.color }
-    static let bar = Color(.sRGB, red: 0.10, green: 0.11, blue: 0.12, opacity: 0.96)
+    // Timeline / transport surface — follows the ACTIVE THEME's panel background
+    // (like the Objects panel) so the Movie tab and docked timeline chrome match
+    // the rest of the inspector rather than a fixed dark gray. Kept slightly
+    // translucent (0.96) since the docked timeline floats over the viewport.
+    static var bar: Color { ThemeManager.shared.active.panelBackground.color.opacity(0.96) }
     static let text = Color(white: 0.88)
     static let dim = Color(white: 0.55)
 }

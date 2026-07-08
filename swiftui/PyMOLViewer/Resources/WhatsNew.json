@@ -1,0 +1,17 @@
+[
+  {
+    "version": "1.5.2",
+    "pages": [
+      {
+        "title": "Camera control dock",
+        "body": "A Photos-style dock to frame your scene \u2014 dial in lens length, zoom, and depth of field without hunting through menus.",
+        "videoName": "whatsnew-152-camera-dock"
+      },
+      {
+        "title": "Timeline movies",
+        "body": "Build and export multi-track movies from states, trajectories, and camera moves, right inside a docked timeline editor.",
+        "imageName": "whatsnew-152-timeline"
+      }
+    ]
+  }
+]

@@ -40,6 +40,17 @@ struct RepState: Equatable {
     var values: [String: Double]    // setting name → current value
     var color: String               // "inherit" or "#rrggbb"
     var settingColors: [String: String] = [:]  // extra color settings → "inherit"/"#rrggbb"
+    // Present when this rep has per-atom transparency overriding the object-level
+    // slider; carries the transparency setting name and the effective min–max range.
+    var atomTransp: AtomTransp? = nil
+}
+
+/// Effective per-atom transparency range for a rep whose object-level slider is
+/// overridden by atom-level settings (from appkit_inspector's `atom_transp`).
+struct AtomTransp: Equatable {
+    let setting: String   // e.g. "cartoon_transparency"
+    let min: Double
+    let max: Double
 }
 
 /// Global "Scene" parameters.
@@ -331,6 +342,10 @@ struct ObjectEntry: Identifiable, Equatable {
     // Number of coordinate states (NMR models / trajectory frames). >1 surfaces
     // the per-object STATE controls in the inspector. Defaults to 1.
     var stateCount: Int = 1
+    // True when an active rep has per-atom transparency overrides — drives the
+    // discoverability badge, since the object-level transparency slider then
+    // doesn't reflect what's rendered. See appkit_inspector.object_has_atom_transp.
+    var hasAtomTransp: Bool = false
 
     var displayName: String {
         if isSelection, let count = atomCount {
@@ -675,6 +690,10 @@ private enum PanelTheme {
     static var accentColor: Color { t.accent.color }
     static var headerColor: Color { t.panelBackground.blended(with: t.panelText, 0.6).color }
     static var disabledColor: Color { t.panelBackground.blended(with: t.panelText, 0.4).color }
+    // Amber accent for the per-atom transparency badge / detail row — a fixed hue
+    // (not the blue theme accent) that reads as "transparency" and stays legible
+    // on both light and dark panel themes.
+    static var atomTranspColor: Color { Color(.sRGB, red: 0.90, green: 0.66, blue: 0.30, opacity: 1) }
 }
 
 // Chrome for the compact A/S/H/L/C representation menu buttons so they read the
@@ -1115,7 +1134,9 @@ private struct ShowButton: View {
             ForEach(Array(showHideOptions.enumerated()), id: \.offset) { _, opt in
                 if opt.label == "---" {
                     Divider()
-                } else if let rep = opt.rep {
+                } else if let rep = opt.rep, rep != "everything" {
+                    // "everything" is meaningful for Hide but not Show — you
+                    // can't turn on every representation at once sensibly.
                     Button(opt.label) {
                         engine.runCommand("show \(rep), \(name)")
                     }
@@ -1666,6 +1687,17 @@ private struct ObjectRowContent: View {
                 .help("\(entry.stateCount) models / states")
         }
 
+        // Discoverability badge: this object has per-atom transparency overrides,
+        // so the object-level transparency slider doesn't reflect what's rendered.
+        // Visible even when the card is collapsed. Expand to see the range + Clear.
+        if entry.hasAtomTransp {
+            Image(systemName: "drop.halffull")
+                .font(.system(size: 10))
+                .foregroundColor(PanelTheme.atomTranspColor)
+                .help("Per-atom transparency is set — the object-level transparency slider won’t fully apply. Expand a representation to view the range or clear it.")
+                .accessibilityLabel("Per-atom transparency set")
+        }
+
         Spacer(minLength: 4)
 
         ActionMenuButton(name: entry.name)
@@ -1989,9 +2021,66 @@ private struct RepPropertyGrid: View {
             }
             ForEach(spec.properties) { p in
                 gridRow(p.label) { control(for: p) }
+                // Per-atom transparency detail sits directly under the matching
+                // transparency slider so it's clear the slider is only a baseline.
+                if let at = state.atomTransp, at.setting == p.setting {
+                    atomTranspRow(at)
+                }
+            }
+            // Fallback: surface the detail even if this rep's spec has no slider
+            // for its transparency setting (so the info is never lost).
+            if let at = state.atomTransp,
+               !spec.properties.contains(where: { $0.setting == at.setting }) {
+                atomTranspRow(at)
             }
         }
         .padding(.top, 2)
+    }
+
+    // "per-atom: min–max" readout + a Clear action, shown when atom-level
+    // transparency overrides the object-level slider for this rep.
+    @ViewBuilder
+    private func atomTranspRow(_ at: AtomTransp) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "drop.halffull").font(.system(size: 10))
+            Text("per-atom: \(rangeLabel(at))").font(.system(size: 10))
+            Spacer(minLength: 4)
+            Button(action: { clearAtomTransp(at.setting) }) {
+                Text("Clear")
+                    .font(.system(size: 10))
+                    .padding(.horizontal, 8).padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .stroke(PanelTheme.atomTranspColor.opacity(0.55), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundColor(PanelTheme.atomTranspColor)
+        .padding(.leading, 84)   // align under the control column (label width 78 + gap)
+        .help("Some atoms set \(at.setting) individually, so the slider above only sets a baseline. Clear removes the per-atom values and hands control back to the slider.")
+    }
+
+    private func rangeLabel(_ at: AtomTransp) -> String {
+        let lo = fmtTransp(at.min), hi = fmtTransp(at.max)
+        return lo == hi ? lo : "\(lo)–\(hi)"
+    }
+
+    private func fmtTransp(_ v: Double) -> String {
+        var s = String(format: "%.2f", v)
+        if s.contains(".") {
+            while s.hasSuffix("0") { s.removeLast() }
+            if s.hasSuffix(".") { s.removeLast() }
+        }
+        return s
+    }
+
+    // Remove the per-atom overrides for `setting` on this object. The
+    // atom-selection form `unset(setting, (obj))` clears atom-level values while
+    // keeping the object-level slider value; a rebuild refreshes the baked
+    // cartoon/surface geometry, then re-poll so the row disappears promptly.
+    private func clearAtomTransp(_ setting: String) {
+        engine.runCommand("unset \(setting), (\(objName))")
+        engine.runCommand("rebuild \(objName)")
+        engine.refreshExpandedDetail()
     }
 
     @ViewBuilder
@@ -2544,25 +2633,24 @@ struct ScenesPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 // Scene chips with an inline "+" chip that stores the current
-                // view as a new scene (in line with the existing scenes).
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(sceneOrder, id: \.self) { name in
-                            sceneChip(name)
-                                .opacity(draggingScene == name ? 0.35 : 1)
-                                .onDrag {
-                                    draggingScene = name
-                                    return NSItemProvider(object: name as NSString)
-                                }
-                                .onDrop(of: ["public.text"],
-                                        delegate: SceneDropDelegate(item: name, order: $sceneOrder,
-                                                                    dragging: $draggingScene,
-                                                                    onReorder: applySceneOrder))
-                        }
-                        addChip
+                // view as a new scene (in line with the existing scenes). Chips
+                // wrap onto multiple rows rather than overflowing (issue #114).
+                FlowLayout(spacing: 8) {
+                    ForEach(sceneOrder, id: \.self) { name in
+                        sceneChip(name)
+                            .opacity(draggingScene == name ? 0.35 : 1)
+                            .onDrag {
+                                draggingScene = name
+                                return NSItemProvider(object: name as NSString)
+                            }
+                            .onDrop(of: ["public.text"],
+                                    delegate: SceneDropDelegate(item: name, order: $sceneOrder,
+                                                                dragging: $draggingScene,
+                                                                onReorder: applySceneOrder))
                     }
-                    .padding(.vertical, 4)
+                    addChip
                 }
+                .padding(.vertical, 4)
                 .onAppear { sceneOrder = engine.sceneNames }
                 .onChange(of: engine.sceneNames) { newNames in
                     // Resync only when the SET changes (scene added/removed); a
@@ -2734,6 +2822,60 @@ private struct SceneDropDelegate: DropDelegate {
         dragging = nil
         onReorder()
         return true
+    }
+}
+
+/// Left-aligned wrapping layout: places subviews left-to-right and wraps to a
+/// new row when the next subview would overflow the proposed width. Used for
+/// the scene-chip row so chips flow onto multiple rows instead of overflowing
+/// or requiring horizontal scrolling (issue #114).
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0 && rowWidth + spacing + size.width > maxWidth {
+                // wrap to next row
+                totalWidth = max(totalWidth, rowWidth)
+                totalHeight += rowHeight + spacing
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+        totalWidth = max(totalWidth, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let maxWidth = bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.minX + maxWidth {
+                // wrap to next row
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                          proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
@@ -2939,6 +3081,33 @@ struct SettingsSheet: View {
                 Button("Done") { dismiss() }
             }.padding(16)
 
+            #if os(iOS)
+            // "What's New" entry point. Close Settings first, then open the splash
+            // (a slight delay avoids presenting one sheet on top of another).
+            Button {
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    NotificationCenter.default.post(name: .raymolShowWhatsNew, object: nil)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                    Text("What's New in RayMol")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 10).padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.gray.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+            .accessibilityIdentifier("whatsNewSettingsRow")
+            #endif
+
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search \(engine.settingsCatalog.count) settings…", text: $search)
@@ -3047,6 +3216,7 @@ extension PyMOLEngine {
             let enabled: [String]
             let sel_counts: [String: Int]
             let nstate: [String: Int]?
+            let has_transp: [String: Bool]?
         }
 
         guard let payload = try? JSONDecoder().decode(PanelPayload.self, from: data) else {
@@ -3063,7 +3233,8 @@ extension PyMOLEngine {
                 isEnabled: enabledSet.contains(name),
                 isSelection: false,
                 atomCount: nil,
-                stateCount: max(payload.nstate?[name] ?? 1, 1)
+                stateCount: max(payload.nstate?[name] ?? 1, 1),
+                hasAtomTransp: payload.has_transp?[name] ?? false
             ))
         }
 
