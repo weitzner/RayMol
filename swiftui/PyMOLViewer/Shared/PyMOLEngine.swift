@@ -1994,13 +1994,15 @@ final class PyMOLEngine: ObservableObject {
     // projection over all atoms is the cost we're throttling.
     private var hoverWork: DispatchWorkItem?
     private var lastHoverNDC: (Float, Float)? = nil
-    private let kHoverDebounce = 0.033        // ~33 ms trailing coalesce
+    private var lastHoverFire = Date.distantPast
+    private let kHoverInterval = 0.045        // leading-edge throttle: ≤~22 picks/s
     private let kHoverMinNDC: Float = 0.004   // sub-pixel move gate (NDC²-ish)
 
     /// Update the hover pre-selection preview to what a click at (ndcX,ndcY)
     /// would select, without committing to 'sele'. No-op while the feature is
-    /// disabled. Debounced + sub-pixel gated so a fast sweep doesn't spam the
-    /// Python projection pick.
+    /// disabled. LEADING-EDGE throttled (+ trailing catch-up) so the preview
+    /// tracks CONTINUOUSLY while the pointer sweeps — a pure trailing debounce
+    /// only fired once the pointer paused, which read as "hover doesn't work".
     func hoverPreview(_ ndcX: Float, _ ndcY: Float, _ aspect: Float) {
         guard isReady, hoverPreviewEnabled else { return }
         if let last = lastHoverNDC {
@@ -2009,13 +2011,22 @@ final class PyMOLEngine: ObservableObject {
         }
         lastHoverNDC = (ndcX, ndcY)
         hoverWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.runPython(
+        let fire: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            self.lastHoverFire = Date()
+            self.runPython(
                 "from pymol import metal_pick as _mp; "
                 + "_mp.hover_preview_at(\(ndcX), \(ndcY), \(aspect))")
         }
-        hoverWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + kHoverDebounce, execute: work)
+        let elapsed = Date().timeIntervalSince(lastHoverFire)
+        if elapsed >= kHoverInterval {
+            fire()                                  // leading edge — update now
+        } else {
+            let work = DispatchWorkItem(block: fire) // trailing — final rest position
+            hoverWork = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + (kHoverInterval - elapsed), execute: work)
+        }
     }
 
     /// Cancel any pending hover pick and empty the preview selection. Cheap and

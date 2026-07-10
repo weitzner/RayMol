@@ -485,8 +485,9 @@ struct ContentView: View {
             macOpenToolbar
             macMeasureToolbar
             // Trailing — view toggles, then actions, then status. (Theme moved into
-            // the Display segment, mirroring iOS Settings → Themes.)
-            macMovieToolbar
+            // the Display segment, mirroring iOS Settings → Themes. Timeline/movie
+            // mode is reached from the Movie menu / ⌥⌘M — no toolbar button, which
+            // rendered as an unlabeled circle and surprised users into movie mode.)
             panelToggles
             exportMenu
             #if !RAYMOL_MAS_RESTRICTED
@@ -2464,19 +2465,9 @@ struct ContentView: View {
         }
     }
 
-    // Primary entry into Timeline (movie studio) mode — a persistent toggle that
-    // works from a cold start (no movie yet), unlike the transport, which is
-    // gated behind hasTimeline. The ⌥⌘M shortcut lives on the Movie menu command.
-    private var macMovieToolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() }
-            } label: {
-                Label("Timeline", systemImage: engine.timelineMode ? "clapperboard.fill" : "clapperboard")
-            }
-            .help("Movie timeline (⌥⌘M)")
-        }
-    }
+    // (Removed: macMovieToolbar. Timeline/movie mode is entered from the Movie
+    // menu / ⌥⌘M. The toolbar button rendered as an unlabeled circle and toggled
+    // movie mode unexpectedly, so it was removed.)
 
     // The three desktop panes as one consistent toggle group. NOTE the right panel
     // toggle is "Inspector" (sidebar icon), NOT "Objects" — Objects is now a SEGMENT

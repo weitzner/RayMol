@@ -199,7 +199,7 @@ extension Theme {
         terminalFont: FontSpec(family: .monospaced, size: 11), terminalText: RGBA(0.10, 0.10, 0.10),
         panelBackground: RGBA(0.95, 0.95, 0.96), panelText: RGBA(0.12, 0.12, 0.14),
         chainCycle: defaultChainCycle, elementColors: defaultElementColors,
-        defaultStyle: .cartoon, outline: true, flatSheets: true, fancyHelices: false,
+        defaultStyle: .cartoon, outline: false, flatSheets: true, fancyHelices: false,
         rayTrace: false, shadows: true)
 
     /// Sunset: warm dusk — deep plum viewport, orange/magenta accents, fancy
@@ -215,8 +215,8 @@ extension Theme {
         defaultStyle: .cartoon, outline: false, flatSheets: false, fancyHelices: true,
         rayTrace: false, shadows: true)
 
-    /// Dawn: soft sunrise — warm off-white viewport, coral accents, outline +
-    /// flat sheets for a clean light look.
+    /// Dawn: soft sunrise — warm off-white viewport, coral accents, flat sheets
+    /// for a clean light look.
     static let dawn = Theme(
         id: dawnID, name: "Dawn", builtIn: true, appearance: .light,
         accent: RGBA(0.95, 0.45, 0.35), bubble: RGBA(0.95, 0.50, 0.40),
@@ -225,7 +225,7 @@ extension Theme {
         terminalFont: FontSpec(family: .monospaced, size: 11), terminalText: RGBA(0.35, 0.20, 0.15),
         panelBackground: RGBA(0.98, 0.94, 0.90), panelText: RGBA(0.22, 0.15, 0.13),
         chainCycle: defaultChainCycle, elementColors: defaultElementColors,
-        defaultStyle: .cartoon, outline: true, flatSheets: true, fancyHelices: false,
+        defaultStyle: .cartoon, outline: false, flatSheets: true, fancyHelices: false,
         rayTrace: false, shadows: true)
 
     static let builtInPresets: [Theme] = [classic, paper, sunset, dawn]
