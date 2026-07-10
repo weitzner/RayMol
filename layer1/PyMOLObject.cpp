@@ -35,6 +35,7 @@ Z* -------------------------------------------------------------------
 #include"View.h"
 #include"Err.h"
 #include "Feedback.h"
+#include "Renderer.h"
 
 #include"Executive.h"
 #include"CGO.h"
@@ -1048,6 +1049,16 @@ void ObjectPrepareContext(pymol::CObject * I, RenderInfo * info)
         auto mvm = SceneGetModelViewMatrixPtr(G);
         MatrixMultiplyC44f(gl, mvm);
         MatrixTranslateC44f(mvm, ttt[12], ttt[13], ttt[14]);
+
+        // Metal backend: the shader draws read the renderer's cached modelview
+        // (loaded once per frame), and the glLoadMatrixf below is a no-op — so
+        // the object TTT would never render. Push the TTT-updated modelview into
+        // the renderer here; ScenePopModelViewMatrix restores it after this
+        // object's reps draw, scoping the transform to this object only.
+        if (G->Renderer) {
+          G->Renderer->matrixMode(0); // modelview
+          G->Renderer->loadMatrixf(mvm);
+        }
 
 #ifndef PURE_OPENGL_ES_2
         if (ALWAYS_IMMEDIATE_OR(!info->use_shaders)) {

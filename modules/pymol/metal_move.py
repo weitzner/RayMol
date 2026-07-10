@@ -31,6 +31,11 @@ _active = None          # active object name, or None
 _tool = 'translate'     # 'translate' | 'rotate'
 _aspect = 1.0           # last viewport aspect (width / height)
 _drag = None            # in-flight drag: {handle, px, py, dx, dy, dz, deg}
+# Move mode manipulates the object's TTT display matrix (cmd.translate/rotate with
+# object=). This is non-destructive: atom coordinates are untouched, the move is
+# saved in the .pse, and reset_active() clears it via matrix_reset. (The Metal
+# renderer applies the object TTT — see the ObjectPrepareContext / Scene modelview
+# sync in the C++ layer.)
 
 # Gizmo sizing, in NDC (constant on-screen size regardless of zoom).
 _AXIS_NDC = 0.18        # arrow half-length
@@ -379,3 +384,12 @@ def reset_active():
         except Exception as e:
             print('METALMOVE_ERR:' + str(e))
     _emit(_active is not None)
+
+
+def cleanup():
+    """Leave Move mode: clear state. TTT moves that weren't reset are kept (they
+    persist in the object and the saved session)."""
+    global _active, _drag
+    _active = None
+    _drag = None
+    _emit(False)

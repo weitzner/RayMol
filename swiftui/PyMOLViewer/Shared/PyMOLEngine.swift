@@ -1905,7 +1905,7 @@ final class PyMOLEngine: ObservableObject {
             armedAxis = nil
             activeMoveObject = nil
             gizmo = nil
-            runPython("from pymol import metal_move as _mm\n_mm.clear_active()")
+            runPython("from pymol import metal_move as _mm\n_mm.cleanup()")
         }
     }
 
