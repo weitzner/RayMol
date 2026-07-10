@@ -513,6 +513,12 @@ extension MetalViewport {
                 // Finish the rotate drag.
                 let pt = pymolPoint(in: view, at: loc)
                 engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: mods)
+                // Reset the drag latch so hover resumes after the rotate ends.
+                // (didDrag is only cleared on mouseDown; without this, a drag
+                // leaves it true and handleMouseMoved's `!didDrag` guard blocks
+                // all hover until the next click — hover "stopped after rotating".)
+                didDrag = false
+                lastHoverLoc = .zero
                 return
             }
 
