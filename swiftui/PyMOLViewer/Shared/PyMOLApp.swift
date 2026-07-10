@@ -171,6 +171,11 @@ struct PyMOLApp: App {
                 Button("Export Image…") {
                     NotificationCenter.default.post(name: .raymolExportImage, object: nil)
                 }.keyboardShortcut("e", modifiers: [.command, .shift])
+                // ⌘C as a real menu command (not a toolbar-Menu button) so the
+                // shortcut fires reliably; mirrors how Export Image works above.
+                Button("Copy Image to Clipboard") {
+                    NotificationCenter.default.post(name: .raymolCopyImage, object: nil)
+                }.keyboardShortcut("c", modifiers: .command)
                 Divider()
                 Button("Clear Session") {
                     NotificationCenter.default.post(name: .raymolClearSession, object: nil)
