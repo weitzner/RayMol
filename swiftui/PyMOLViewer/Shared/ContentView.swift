@@ -578,11 +578,11 @@ struct ContentView: View {
             if let keyWindow = NSApp.keyWindow {
                 // Sheets set isSheet; popovers/NSMenu helpers are NSPanels.
                 if keyWindow.isSheet || keyWindow is NSPanel { return event }
-                // (b) A text/field editor is first responder → let it cancel the
-                // edit. NSTextView is an NSText subclass, so `is NSText` covers the
-                // window's shared field editor and any focused text view.
-                if keyWindow.firstResponder is NSText { return event }
             }
+            // NOTE: intentionally does NOT defer to a focused text field — Esc
+            // clears the selection regardless of keyboard focus (incl. while the
+            // command-line box is focused), per product decision. Only true
+            // modal/sheet/panel windows above still get Esc for dismissal.
             engine.escapeClearSelection()
             return nil  // consume — don't beep or propagate
         }
