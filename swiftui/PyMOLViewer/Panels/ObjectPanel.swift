@@ -209,6 +209,12 @@ enum CameraCommands {
         on ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
            : "set metal_dof_autofocus, 0"
     }
+
+    // Auto-lock focus on a specific selection: retarget "dof_focus" to `sel` and
+    // enable DOF + autofocus so the lock is immediately visible.
+    static func lockFocus(on sel: String) -> String {
+        "select dof_focus, (\(sel))\nset metal_dof, 1\nset metal_dof_autofocus, 1"
+    }
 }
 
 enum SceneCatalog {
