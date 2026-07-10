@@ -234,6 +234,11 @@ struct ContentView: View {
     @State private var macFetchID = ""
     // Drag-and-drop: true while a file is hovered over the viewport (draws a border).
     @State private var isViewportDropTargeted = false
+    // Local key-down monitor token for the Esc → clear-selection handler
+    // (issues #163 + #166). Installed in macOSLayout.onAppear, removed on
+    // .onDisappear. NSEvent.addLocalMonitorForEvents (not .onKeyPress, which is
+    // macOS 14+) keeps us on the macOS 13 deployment target.
+    @State private var escKeyMonitor: Any?
     #endif
     #if os(macOS) && !RAYMOL_MAS_RESTRICTED
     @EnvironmentObject private var mcpManager: MCPServerManager
@@ -539,6 +544,47 @@ struct ContentView: View {
             if ProcessInfo.processInfo.environment["PYMOL_AUTOSCENEBUTTONS"] != nil {
                 showSceneButtons = true
             }
+            installEscKeyMonitor()
+        }
+        .onDisappear {
+            if let token = escKeyMonitor {
+                NSEvent.removeMonitor(token)
+                escKeyMonitor = nil
+            }
+        }
+    }
+
+    // Esc → two-stage clear selection (issues #163 + #166). A local key-down
+    // monitor (not .onKeyPress, which is macOS 14+; deployment target is macOS
+    // 13) so the whole main window catches Esc even when the viewport isn't the
+    // SwiftUI focus. We must NOT swallow Esc that belongs to something else:
+    //   (a) a sheet / panel / popover is up (their window is key, not the main
+    //       RayMol window) — Esc should dismiss it, or
+    //   (b) the first responder is a text/field editor (the command line is
+    //       being edited) — Esc there cancels the field edit.
+    // In those cases we return the event unhandled so the system routes it
+    // normally. Otherwise we run the shared clear-selection helper and consume
+    // the event (return nil). Non-Esc keys always pass through untouched.
+    // NOTE: iOS external-keyboard Esc is a deliberate follow-up (not wired here).
+    private func installEscKeyMonitor() {
+        guard escKeyMonitor == nil else { return }
+        escKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }  // 53 = Esc
+            // (a) A modal/sheet/panel/popover owns the interaction → let it handle
+            // Esc (dismiss). Detect secondary windows STRUCTURALLY: SwiftUI's
+            // NSApp.mainWindow is unreliable (often nil in Window-scene apps), so a
+            // `keyWindow != mainWindow` test wrongly swallows Esc on the main window.
+            if NSApp.modalWindow != nil { return event }
+            if let keyWindow = NSApp.keyWindow {
+                // Sheets set isSheet; popovers/NSMenu helpers are NSPanels.
+                if keyWindow.isSheet || keyWindow is NSPanel { return event }
+            }
+            // NOTE: intentionally does NOT defer to a focused text field — Esc
+            // clears the selection regardless of keyboard focus (incl. while the
+            // command-line box is focused), per product decision. Only true
+            // modal/sheet/panel windows above still get Esc for dismissal.
+            engine.escapeClearSelection()
+            return nil  // consume — don't beep or propagate
         }
     }
 

@@ -935,28 +935,36 @@ struct SelectionModeMenu: View {
     }
 }
 
-/// One-tap "clear selection" — runs `deselect`, which hides the active
-/// selection markers (the pink `sele` indicators) without deleting any named
-/// selections. Lives right next to `SelectionModeMenu` in the shared inspector
-/// chrome (macOS/iPad) and the iPhone Object-panel header, so it's reachable
-/// from every tab. Dimmed and non-interactive when nothing is selected.
+/// One-click "delete selection" (issue #163): a single tap deletes the `sele`
+/// named selection outright (`delete sele`) — removing the pink markers AND the
+/// lingering entry from the object list, not just deselecting. (The Esc key,
+/// issue #166, is intentionally the two-stage `escapeClearSelection()` —
+/// deselect, then delete on a second press.) Lives right next to
+/// `SelectionModeMenu` in the shared inspector chrome (macOS/iPad) and the
+/// iPhone Object-panel header, so it's reachable from every tab. Dimmed and
+/// non-interactive only when there is no `sele` selection at all.
 struct ClearSelectionButton: View {
     @EnvironmentObject var engine: PyMOLEngine
+    // Enabled whenever a `sele` selection EXISTS (enabled or not); a single
+    // click deletes it. Disabled only when no `sele` exists.
     private var hasActiveSelection: Bool {
-        engine.objects.contains { $0.isSelection && $0.isEnabled }
+        engine.objects.contains { $0.isSelection && $0.name == "sele" }
     }
     var body: some View {
-        Button { engine.runCommand("deselect") } label: {
+        Button { engine.runCommand("delete sele") } label: {
             Image(systemName: "xmark.circle")
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 // Accent (blue) when there's something to clear — matches the
                 // panel's action buttons (A/S/H/L/C) — else dimmed grey.
                 .foregroundColor(hasActiveSelection ? PanelTheme.accentColor : PanelTheme.disabledColor)
+                // A real 18pt hit/hover region (not a bare ~10pt glyph) so the
+                // click is easy and the .help tooltip reliably appears on hover.
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!hasActiveSelection)
-        .fixedSize()
-        .help("Clear selection — hide the current selection markers")
+        .help("Delete selection (sele)")
     }
 }
 
