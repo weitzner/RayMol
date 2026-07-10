@@ -132,8 +132,13 @@ final class PyMOLEngine: ObservableObject {
     // Hover pre-selection preview (issue #165, macOS): when true, moving the
     // pointer over the viewport highlights what a click WOULD select (in a
     // distinct light-cyan) without committing to 'sele'. User-toggleable in the
-    // Mouse panel. When false, hoverPreview() is a no-op.
-    @Published var hoverPreviewEnabled = true
+    // Mouse panel AND Scene ▸ Canvas. When false, hoverPreview() is a no-op.
+    // Persisted across launches via UserDefaults (didSet); default on.
+    @Published var hoverPreviewEnabled: Bool =
+        (UserDefaults.standard.object(forKey: PyMOLEngine.hoverDefaultsKey) as? Bool ?? true) {
+        didSet { UserDefaults.standard.set(hoverPreviewEnabled, forKey: PyMOLEngine.hoverDefaultsKey) }
+    }
+    static let hoverDefaultsKey = "raymol.hoverPreviewEnabled"
     // Full settings catalog for the searchable Settings panel (loaded on demand).
     @Published var settingsCatalog: [SettingItem] = []
     // The single detail view that is currently open (accordion: at most one).

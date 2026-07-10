@@ -250,6 +250,10 @@ enum SceneCatalog {
                    help: "Lay each object out in its own grid cell instead of overlaid in one view."),
         SceneParam(setting: "all_states", label: "Overlay all states", kind: .toggle, group: "Canvas",
                    help: "Show every coordinate state (NMR models / trajectory frames) at once."),
+        // Not a PyMOL setting — bound to engine.hoverPreviewEnabled (see SceneParamRow's
+        // special-case) and persisted across launches. Same control as Mouse ▸ Hover.
+        SceneParam(setting: "hover_indicator", label: "Hover indicator", kind: .toggle, group: "Canvas",
+                   help: "Highlight the residue under the cursor (nearest Cα) before you click, in a distinct cyan — without changing the selection. Also on the Mouse panel; persists across launches."),
 
         // --- Camera: viewpoint + lens ---
         SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 12, max: 135, step: 0.5, decimals: 0, group: "Camera",
@@ -2408,6 +2412,13 @@ struct SceneParamRow: View {
                     // SceneRender auto-focus block). Disabling just clears the flag.
                     ToggleSetting(value: v) { on in
                         engine.runCommand(CameraCommands.setAutofocus(on))
+                    }
+                } else if p.setting == "hover_indicator" {
+                    // Not a PyMOL setting: an app-level preference (persisted via
+                    // UserDefaults) that gates the hover pre-selection preview.
+                    ToggleSetting(value: engine.hoverPreviewEnabled ? 1 : 0) { on in
+                        engine.hoverPreviewEnabled = on
+                        if !on { engine.clearHoverPreview() }
                     }
                 } else {
                     ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
