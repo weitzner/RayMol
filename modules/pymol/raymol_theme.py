@@ -47,8 +47,14 @@ def set_palette(bg=None, outline=False, flat_sheets=False, fancy_helices=False,
 
     if bg is not None:
         cmd.bg_color(_hex(bg))
+    # Outline is OFF in every theme (product decision, RayMol 1.6.1). Force it off
+    # UNCONDITIONALLY on every theme apply — OUTSIDE the apply_render_toggles gate
+    # — so it's off even on a restored/opened session (when render toggles are
+    # otherwise suppressed) and regardless of a stale compiled core default or a
+    # pre-1.6.1 cached theme. set_palette runs on every launch, so this is the
+    # reliable place to enforce it. `outline` is kept only for signature/back-compat.
+    cmd.set("metal_outline", 0)
     if apply_render_toggles:
-        cmd.set("metal_outline", 1 if outline else 0)
         cmd.set("metal_raytrace", 1 if ray_trace else 0)
         cmd.set("metal_shadows", 1 if shadows else 0)
 
