@@ -555,6 +555,13 @@ void ExecutiveInvalidateSelectionIndicatorsCGO(PyMOLGlobals* G);
  * @param grid grid info
  */
 void ExecutiveGetSelectionCoords(PyMOLGlobals* G, std::vector<float>& coords);
+/**
+ * Gather the world coordinates of a single named selection's atoms (same
+ * grid-cell + current-state logic as ExecutiveGetSelectionCoords). Used to draw
+ * the transient hover-preview selection separately from the committed one.
+ */
+void ExecutiveGetNamedSelectionCoords(
+    PyMOLGlobals* G, const char* name, std::vector<float>& coords);
 void ExecutiveRenderSelections(
     PyMOLGlobals* G, int curState, int slot, GridInfo* grid);
 void ExecutiveHideSelections(PyMOLGlobals* G);

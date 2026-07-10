@@ -143,6 +143,9 @@ public:
       int posOffset, int normalOffset, int colorOffset, int colorType,
       const void* indexData, size_t indexDataSize, int interiorCap = 0) override;
   void setInteriorCapColor(float r, float g, float b, bool overrideColor) override;
+  void setRepClip(float front, float back) override;
+  void setRepContour(bool enabled, const float* rgba, float widthPx) override;
+  void setRepScreenAO(bool exempt) override;
   void invalidateVBOCache(uint64_t key) override;
   void drawLabels(const LabelDrawCall& call) override;
   void drawSphereImpostors(const SphereImpostorDrawCall& call) override;
@@ -155,9 +158,13 @@ public:
       float outlineG = 0.0f, float outlineB = 0.0f,
       float outlineWidth = 1.4f, int dofEnabled = 0, float dofFocus = 0.0f,
       float dofRange = 14.0f, int temporalAO = 0,
-      int upscaleEnabled = 0, float dofAperture = 14.0f) override;
+      int upscaleEnabled = 0, float dofAperture = 14.0f,
+      int ortho = 0) override;
   void setLightingParams(float ambient, float direct, float reflect,
       float specular, float shininess, float sssWrap = 0.0f) override;
+  void setRayTraceParams(int samples, float aoRadius, float aoIntensity,
+      float shadowIntensity) override;
+  void setDofQuality(int level) override;
 
   // Letterbox: render the scene into a centered sub-rect of the given aspect
   // (W/H) so a loaded .pse reproduces its saved-viewport framing. 0 = fill.
@@ -198,6 +205,8 @@ public:
   void beginShadowPass() override;
   void endShadowPass() override;
   void setLightViewProjEye(const float* m) override;
+  void setShadowFrustum(float radius) override;
+  void setShadowBias(float bias) override;
 
 private:
   void buildImpostorPipelines();
@@ -401,6 +410,48 @@ private:
   // else per-primitive default (atom color darkened / surface gray).
   float _capColor[3] = {0.32f, 0.32f, 0.36f};
   bool _capColorOverride = false;
+  // Per-rep clip planes (eye-space distances) for the next lit-VBO draw.
+  // _repClipFront < 0 => disabled (use the global slab). Set via setRepClip.
+  float _repClipFront = -1.0f;
+  float _repClipBack = 1e6f;
+  // Surface outer-contour outline (per-surface, coverage-boundary). When armed
+  // (setRepContour), the next surface draw is stashed; after the scene the
+  // stashed geometry is rendered to a coverage mask and a post pass outlines the
+  // mask boundary. Works on transparent/clipped surfaces. See drawVBO / runPostChain.
+  bool _repContourEnabled = false;       // arm capture for the current draw
+  float _contourColor[4] = {0, 0, 0, 1}; // line RGBA (frame param, last writer)
+  float _contourWidth = 2.0f;            // px (constant on-screen)
+  bool _contourActive = false;           // any contour draw stashed this frame
+  id<MTLTexture> _surfaceCoverageTex = nil;
+  id<MTLRenderPipelineState> _coveragePipeline = nil; // stride-keyed
+  size_t _coverageStride = 0;
+  id<MTLRenderPipelineState> _surfaceContourPipeline = nil;
+  id<MTLFunction> _coverageVtxFunc = nil, _coverageFragFunc = nil;
+  struct CoverageDraw {
+    id<MTLBuffer> vbo;
+    id<MTLBuffer> ibo; // nil => non-indexed
+    int count;         // index count (indexed) or vertex count (non-indexed)
+    size_t stride;
+    int posOffset;
+    float modelview[16];
+    float projection[16];
+    float clipFront;
+    float clipBack;
+  };
+  std::vector<CoverageDraw> _coverageDraws;
+  // Per-rep screen-space SSAO exemption (#79). Cartoon/ribbon lit-VBO draws are
+  // stashed (when _repAOExempt is armed) and rasterized DEPTH-TESTED against
+  // _sceneDepth into _aoExemptMaskTex (R8), so only the front-most cartoon pixels
+  // are marked. post_ssao_fog reads that mask and skips the SSAO crease/contour
+  // term there (cartoons still receive directional shadows), leaving surface
+  // pockets untouched.
+  bool _repAOExempt = false;                        // armed for the current draw
+  std::vector<CoverageDraw> _aoExemptDraws;         // cartoon/ribbon draws this frame
+  id<MTLTexture> _aoExemptMaskTex = nil;            // R8 front-most cartoon mask
+  id<MTLRenderPipelineState> _aoMaskPipeline = nil; // stride-keyed (coverage fns)
+  size_t _aoMaskStride = 0;
+  id<MTLDepthStencilState> _aoMaskDepthState = nil; // LessEqual, no depth write
+  bool renderAOExemptMask();                        // fills _aoExemptMaskTex; see .mm
   id<MTLFunction> _capMarkVtxFunc = nil, _capMarkFragFunc = nil;
   id<MTLFunction> _capFillVtxFunc = nil, _capFillFragFunc = nil;
   id<MTLRenderPipelineState> _vboShadowPipelineUByte = nil; // stride 28
@@ -410,6 +461,11 @@ private:
   NSUInteger _cylinderShadowStride = 0;
   bool _shadowMode = false;       // true between begin/endShadowPass
   float _lightViewProjEye[16];    // eye-space light VP, column-major (PostU)
+  float _shadowRadius = 1.0f;     // world half-extent of the shadow ortho box
+                                  // (from SceneBuildLightViewProjEye); lets the
+                                  // receiver bias be expressed in Angstroms.
+  float _shadowBias = 1.0f;       // metal_shadow_bias: user multiplier on the
+                                  // self-shadow depth bias.
   void buildShadowPipelines();
   // Depth-only shadow pipeline for an arbitrary lit vertex layout (e.g. the
   // surface's stride-44), mirroring oitPipelineForVD.
@@ -455,7 +511,10 @@ private:
   float _dofFocus = 0.0f;   // eye-space focus distance; <=0 => auto (screen center)
   float _dofRange = 14.0f;  // eye-space distance over which CoC ramps to max blur
   float _dofAperture = 14.0f;  // cSetting_metal_dof_aperture: max blur radius (px)
+  int _dofQuality = 4;         // cSetting_metal_dof_quality: 1..4 bokeh quality
   id<MTLRenderPipelineState> _dofPipeline = nil;
+  id<MTLRenderPipelineState> _dofSmoothPipeline = nil;  // two-pass B: de-noise
+  id<MTLTexture> _dofTex = nil;                         // two-pass A gather target
   // Temporal AO accumulation (cSetting_metal_temporal_ao): EMA the RT-AO buffer
   // across frames while the view is still. Default off; RT-path only.
   int _temporalAOEnabled = 0;
@@ -484,6 +543,7 @@ private:
   float _sssWrap = 0.0f;  // cSetting_metal_sss_wrap: 0 = pure Lambert (identity)
   float _projA = -1.f, _projB = 0.f;  // projection[10], projection[14]
   float _projX = 1.f, _projY = 1.f;   // projection[0], projection[5]
+  float _projOrtho = 0.f;             // 1 = orthographic (linear eye-z recon; #139)
   float _letterboxAspect = 0.f;       // saved-viewport W/H; 0 = fill window
   int _lbOriginX = 0, _lbOriginY = 0; // letterbox sub-rect origin (backing px)
   std::string _capturePath;           // pending png ray=0 capture (empty = none)
@@ -509,6 +569,12 @@ private:
   uint32_t _rtProtoIndexCount = 0;
   id<MTLRenderPipelineState> _rtAOPipeline = nil;       // pass A: raw AO -> R16Float
   id<MTLRenderPipelineState> _rtResolvePipeline = nil;  // pass B: blur AO + shadow/fog composite
+  bool _rtCompileTried = false;   // latch: attempt the RT library compile at most once
+  // Real-time RT quality knobs (metal_rt_* settings, set via setRayTraceParams).
+  int   _rtSamples = 16;           // AO rays/pixel (live); offscreen uses max(48, this)
+  float _rtAORadius = 5.0f;        // AO hemisphere radius (Angstroms)
+  float _rtAOIntensity = 0.72f;    // AO darkening strength (0..1)
+  float _rtShadowIntensity = 0.45f;// cast-shadow darkening strength (0..1)
   // Label/text rendering (screen-aligned textured glyph quads). Initialized to
   // nil — this is a C++ class under MRC, so id ivars are not zero-initialized.
   id<MTLRenderPipelineState> _labelPipeline = nil;

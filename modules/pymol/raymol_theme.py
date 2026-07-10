@@ -24,12 +24,21 @@ def _hex(rgb):
 
 def set_palette(bg=None, outline=False, flat_sheets=False, fancy_helices=False,
                 ray_trace=False, shadows=True,
-                default_style="cartoon", chain_cycle=None, element_colors=None):
+                default_style="cartoon", chain_cycle=None, element_colors=None,
+                apply_render_toggles=True):
     """Store the active palette and apply the immediate scene-wide settings.
 
     Called by Swift (PyMOLEngine.applyTheme) on every theme change. Defines
     named colors for the chain cycle and non-carbon elements so apply_to() can
     reference them. Does NOT touch existing objects.
+
+    `apply_render_toggles` gates the three render-state settings
+    (metal_outline / metal_raytrace / metal_shadows). These are scene state that
+    a loaded/restored .pse OWNS, so the passive launch-time theme re-assertion
+    passes False to avoid clobbering the just-restored session (see
+    ContentView.applyPersistedTheme). Explicit theme changes and fresh/empty
+    launches pass True (the default) so the theme establishes them. Chrome
+    (bg_color + palette colors) is applied unconditionally either way.
     """
     global _chain_cycle, _element_colors, _default_style, _flat_sheets, _fancy_helices
     _default_style = default_style or "cartoon"
@@ -38,9 +47,10 @@ def set_palette(bg=None, outline=False, flat_sheets=False, fancy_helices=False,
 
     if bg is not None:
         cmd.bg_color(_hex(bg))
-    cmd.set("metal_outline", 1 if outline else 0)
-    cmd.set("metal_raytrace", 1 if ray_trace else 0)
-    cmd.set("metal_shadows", 1 if shadows else 0)
+    if apply_render_toggles:
+        cmd.set("metal_outline", 1 if outline else 0)
+        cmd.set("metal_raytrace", 1 if ray_trace else 0)
+        cmd.set("metal_shadows", 1 if shadows else 0)
 
     _chain_cycle = list(chain_cycle or [])
     for i, rgb in enumerate(_chain_cycle):

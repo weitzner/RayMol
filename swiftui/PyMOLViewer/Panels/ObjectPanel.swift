@@ -20,10 +20,13 @@ private let kActBtnH: CGFloat = 40
 private let kRowH: CGFloat = 46
 private let kGutterW: CGFloat = 40
 #else
-private let kActBtnW: CGFloat = 22
-private let kActBtnH: CGFloat = 18
-private let kRowH: CGFloat = 24
-private let kGutterW: CGFloat = 18
+// macOS: match the iPhone's clearly-boxed A/S/H/L/C cells (the old 22×18 was so
+// small the button background barely read as a box). Slightly denser rows than
+// iOS since it's pointer-driven.
+private let kActBtnW: CGFloat = 38
+private let kActBtnH: CGFloat = 30
+private let kRowH: CGFloat = 34
+private let kGutterW: CGFloat = 26
 #endif
 
 // MARK: - Representation inspector: polled state models
@@ -36,6 +39,18 @@ struct RepState: Equatable {
     var visible: Bool
     var values: [String: Double]    // setting name → current value
     var color: String               // "inherit" or "#rrggbb"
+    var settingColors: [String: String] = [:]  // extra color settings → "inherit"/"#rrggbb"
+    // Present when this rep has per-atom transparency overriding the object-level
+    // slider; carries the transparency setting name and the effective min–max range.
+    var atomTransp: AtomTransp? = nil
+}
+
+/// Effective per-atom transparency range for a rep whose object-level slider is
+/// overridden by atom-level settings (from appkit_inspector's `atom_transp`).
+struct AtomTransp: Equatable {
+    let setting: String   // e.g. "cartoon_transparency"
+    let min: Double
+    let max: Double
 }
 
 /// Global "Scene" parameters.
@@ -53,7 +68,7 @@ struct ObjStateMeta: Equatable {
 
 // MARK: - Representation inspector: control metadata
 
-enum RepControlKind { case slider, segmented, toggle }
+enum RepControlKind { case slider, segmented, toggle, color }
 
 /// One controllable property row (label + control bound to a PyMOL setting).
 struct RepProperty: Identifiable {
@@ -94,6 +109,7 @@ enum RepCatalog {
                 RepProperty(setting: "cartoon_loop_radius",   label: "Loop radius",  kind: .slider),
                 RepProperty(setting: "cartoon_tube_radius",   label: "Tube radius",  kind: .slider),
                 RepProperty(setting: "cartoon_fancy_helices", label: "Fancy helices", kind: .toggle),
+                RepProperty(setting: "cartoon_flat_sheets",   label: "Flat sheets",   kind: .toggle),
             ]),
         "surface": RepSpec(rep: "surface", display: "Surface",
             colorSetting: "surface_color", defaultColor: -1, properties: [
@@ -101,7 +117,13 @@ enum RepCatalog {
                 RepProperty(setting: "surface_quality", label: "Quality", kind: .segmented,
                             options: [("0", 0), ("1", 1), ("2", 2)]),
                 RepProperty(setting: "solvent_radius", label: "Solvent radius", kind: .slider, min: 0.5, max: 3, step: 0.1, decimals: 1, commitOnly: true),
+                RepProperty(setting: "surface_clip_front", label: "Clip front", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2),
+                RepProperty(setting: "surface_clip_back", label: "Clip back", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2),
                 RepProperty(setting: "metal_interior_cap", label: "Solid interior", kind: .toggle),
+                RepProperty(setting: "surface_contour", label: "Contour", kind: .toggle),
+                RepProperty(setting: "surface_contour_width", label: "Contour width", kind: .slider, min: 0.5, max: 6, step: 0.5, decimals: 1),
+                RepProperty(setting: "surface_contour_color", label: "Contour color", kind: .color),
+                RepProperty(setting: "surface_contour_opaque", label: "Contour opaque", kind: .toggle),
             ]),
         "sticks": RepSpec(rep: "sticks", display: "Sticks",
             colorSetting: "stick_color", defaultColor: -1, properties: [
@@ -178,9 +200,46 @@ struct SceneParam: Identifiable {
     var help: String = ""
 }
 
+// Camera-control command strings shared by the inspector row and the camera dock,
+// so the DOF auto-lock action has a single source of truth.
+enum CameraCommands {
+    // Auto-lock focus: enabling snapshots the current selection into "dof_focus"
+    // (the target the renderer tracks each frame); disabling just clears the flag.
+    static func setAutofocus(_ on: Bool) -> String {
+        on ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
+           : "set metal_dof_autofocus, 0"
+    }
+
+    // Auto-lock focus on a specific selection: retarget "dof_focus" to `sel` and
+    // enable DOF + autofocus so the lock is immediately visible.
+    static func lockFocus(on sel: String) -> String {
+        "select dof_focus, (\(sel))\nset metal_dof, 1\nset metal_dof_autofocus, 1"
+    }
+}
+
 enum SceneCatalog {
     // Ordered sub-groups shown inside the SCENE section (see panel reorg).
-    static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Effects", "Quality"]
+    static let groups = ["Canvas", "Camera", "Lighting", "Shadows & AO", "Metal optimization", "Effects", "Quality"]
+    // Viewport camera dock (see CameraDock): the always-visible strip icons, in
+    // order. DOF's sub-controls are rendered by DOFSubPanelContent, not as strip
+    // icons. metal_dof_quality is intentionally absent — it defaults to best (4)
+    // and lives only in the inspector's Scene → Camera group.
+    static let cameraStripKeys = ["field_of_view", "zoom", "metal_dof"]
+
+    // SF Symbol for each strip control.
+    static func cameraIcon(for setting: String) -> String {
+        switch setting {
+        case "field_of_view": return "camera.aperture"
+        case "zoom":          return "plus.magnifyingglass"
+        case "ortho":         return "cube"
+        case "metal_dof":     return "camera.metering.center.weighted"
+        default:              return "slider.horizontal.3"
+        }
+    }
+
+    static func param(for setting: String) -> SceneParam? {
+        params.first { $0.setting == setting }
+    }
     static let params: [SceneParam] = [
         // --- Canvas: background + multi-object/state layout ---
         SceneParam(setting: "bg_rgb",     label: "Background", kind: .toggle, group: "Canvas", isColor: true,
@@ -193,16 +252,24 @@ enum SceneCatalog {
                    help: "Show every coordinate state (NMR models / trajectory frames) at once."),
 
         // --- Camera: viewpoint + lens ---
-        SceneParam(setting: "field_of_view", label: "Field of view", kind: .slider, min: 10, max: 60, step: 1, decimals: 0, group: "Camera",
-                   help: "Camera lens angle. Lower = flatter / telephoto; higher = wider with more perspective."),
+        SceneParam(setting: "field_of_view", label: "Lens (mm)", kind: .slider, min: 12, max: 135, step: 0.5, decimals: 0, group: "Camera",
+                   help: "Focal length (35mm-equivalent). Like swapping physical lenses: the camera dollies to keep the subject framed, so a short/wide lens (~12mm) exaggerates perspective (fisheye) and a long lens (~135mm) flattens it (macro/telephoto). Drag for a live, continuous perspective change. Pinch to zoom. No effect in orthoscopic mode."),
+        SceneParam(setting: "zoom", label: "Zoom (×)", kind: .slider, min: 0.5, max: 8, step: 0.1, decimals: 1, group: "Camera",
+                   help: "Apparent magnification — dollies the camera closer/farther. ~1× fits the whole scene; higher zooms in. Independent of the Lens: changing perspective (dolly-zoom) leaves this put, and vice-versa. Pinch to zoom also updates it."),
+        SceneParam(setting: "ortho", label: "Orthographic", kind: .toggle, group: "Camera",
+                   help: "Orthographic (parallel) projection — no perspective. Disables the Lens control."),
         SceneParam(setting: "metal_dof", label: "Depth of field", kind: .toggle, group: "Camera",
                    help: "Blur objects in front of and behind the focal plane for a photographic bokeh look."),
+        SceneParam(setting: "metal_dof_autofocus", label: "Auto lock focus", kind: .toggle, group: "Camera", dependsOn: "metal_dof",
+                   help: "Lock focus onto the current selection and keep it sharp as you zoom/rotate. Select an element, then turn this on to snapshot it (it stays locked even if you select elsewhere; toggle off→on to re-target). No selection → focuses the center of interest. Overrides the focus slider."),
         SceneParam(setting: "metal_dof_focus", label: "DOF focus (0=auto)", kind: .slider, min: 0, max: 120, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
-                   help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest."),
+                   help: "Distance of the in-focus plane (eye-space units). 0 = auto-focus on the center of interest. Disabled while Autofocus is on."),
         SceneParam(setting: "metal_dof_range", label: "DOF range", kind: .slider, min: 1, max: 60, step: 0.5, decimals: 1, group: "Camera", dependsOn: "metal_dof",
                    help: "How far beyond focus before blur reaches maximum. Smaller = sharper falloff."),
         SceneParam(setting: "metal_dof_aperture", label: "DOF aperture (blur)", kind: .slider, min: 0, max: 40, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
                    help: "Maximum out-of-focus blur (bokeh radius). Larger = stronger blur."),
+        SceneParam(setting: "metal_dof_quality", label: "DOF quality", kind: .slider, min: 1, max: 4, step: 1, decimals: 0, group: "Camera", dependsOn: "metal_dof",
+                   help: "Bokeh quality: higher traces more gather samples (1→16, 2→32, 3→64, 4→96) for denser, cleaner out-of-focus blur; levels 2+ add a de-noise pass. 1 = fastest single-pass, 4 = smoothest (GPU-heavy)."),
 
         // --- Lighting: real-time lighting model + shading ---
         SceneParam(setting: "ambient",   label: "Ambient",  kind: .slider, min: 0, max: 1, step: 0.01, decimals: 2, group: "Lighting",
@@ -218,17 +285,31 @@ enum SceneCatalog {
         SceneParam(setting: "metal_sss_wrap", label: "Subsurface wrap", kind: .slider, min: 0, max: 1, step: 0.05, decimals: 2, group: "Lighting",
                    help: "Wraps light past the terminator for a soft, waxy/translucent look. 0 = plain Lambert."),
 
-        // --- Shadows & AO: occlusion + the hardware-RT subsystem ---
+        // --- Shadows & AO: screen-space (non-RT) shadows + occlusion ---
         SceneParam(setting: "metal_shadows", label: "Shadows", kind: .toggle, group: "Shadows & AO",
                    help: "Real-time screen-space directional shadows."),
         SceneParam(setting: "metal_ssao",    label: "Ambient occlusion", kind: .toggle, group: "Shadows & AO",
                    help: "Screen-space ambient occlusion — darkens crevices and contact points for depth."),
-        SceneParam(setting: "metal_raytrace", label: "Ray tracing (AO + shadows)", kind: .toggle, group: "Shadows & AO",
-                   help: "Hardware ray tracing for higher-quality ambient occlusion and shadows. Requires a supported GPU; it powers the two options below."),
-        SceneParam(setting: "metal_rt_shadows", label: "RT hard shadows", kind: .toggle, group: "Shadows & AO", dependsOn: "metal_raytrace",
+
+        // --- Metal optimization: hardware ray tracing + GPU quality/perf knobs ---
+        SceneParam(setting: "metal_raytrace", label: "Ray tracing (AO + shadows)", kind: .toggle, group: "Metal optimization",
+                   help: "Hardware ray tracing for higher-quality ambient occlusion and shadows. Requires a supported GPU; it powers the options below."),
+        SceneParam(setting: "metal_rt_shadows", label: "RT hard shadows", kind: .toggle, group: "Metal optimization", dependsOn: "metal_raytrace",
                    help: "Trace crisp hard shadow rays instead of the shadow-map approximation. Needs ray tracing on."),
-        SceneParam(setting: "metal_temporal_ao", label: "Temporal AO", kind: .toggle, group: "Shadows & AO", dependsOn: "metal_raytrace",
+        SceneParam(setting: "metal_temporal_ao", label: "Temporal AO", kind: .toggle, group: "Metal optimization", dependsOn: "metal_raytrace",
                    help: "Accumulate ray-traced AO across frames while the view is still, for cleaner, smoother occlusion. Needs ray tracing on."),
+        SceneParam(setting: "metal_rt_samples", label: "RT quality (rays)", kind: .slider, min: 4, max: 128, step: 4, decimals: 0, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "Ambient-occlusion rays traced per pixel in the live view. Higher is smoother but slower — lower it on mobile for speed (exports always use at least 48)."),
+        SceneParam(setting: "metal_rt_ao_radius", label: "AO radius (Å)", kind: .slider, min: 1, max: 15, step: 0.5, decimals: 1, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "How far ambient occlusion reaches, in Angstroms. Larger darkens broad pockets and cavities; smaller keeps it to tight contact creases."),
+        SceneParam(setting: "metal_rt_ao_intensity", label: "AO strength", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "Ambient-occlusion darkening amount."),
+        SceneParam(setting: "metal_rt_shadow_intensity", label: "RT shadow strength", kind: .slider, min: 0, max: 1, step: 0.02, decimals: 2, group: "Metal optimization", dependsOn: "metal_raytrace",
+                   help: "Cast-shadow darkening amount (still needs Shadows on)."),
+        SceneParam(setting: "metal_msaa",   label: "MSAA 4×", kind: .toggle, group: "Metal optimization",
+                   help: "4× multisample antialiasing — smoother edges at some GPU cost."),
+        SceneParam(setting: "metal_upscale", label: "Reduced-res upscale", kind: .toggle, group: "Metal optimization",
+                   help: "Render at reduced resolution and upscale (MetalFX) for better performance on slower GPUs."),
 
         // --- Effects: stylization + post-processing ---
         SceneParam(setting: "metal_outline", label: "Outline", kind: .toggle, group: "Effects",
@@ -248,11 +329,7 @@ enum SceneCatalog {
         SceneParam(setting: "depth_cue",  label: "Depth cue / fog", kind: .toggle, group: "Effects",
                    help: "Fade distant parts of the scene into the background to convey depth."),
 
-        // --- Quality: antialiasing / perf / tessellation ---
-        SceneParam(setting: "metal_msaa",   label: "MSAA 4×", kind: .toggle, group: "Quality",
-                   help: "4× multisample antialiasing — smoother edges at some GPU cost."),
-        SceneParam(setting: "metal_upscale", label: "Reduced-res upscale", kind: .toggle, group: "Quality",
-                   help: "Render at reduced resolution and upscale (MetalFX) for better performance on slower GPUs."),
+        // --- Quality: tessellation ---
         SceneParam(setting: "surface_quality", label: "Surface quality", kind: .segmented,
                    options: [("0", 0), ("1", 1), ("2", 2)], group: "Quality",
                    help: "Surface mesh detail: 0 = coarse/fast, 2 = fine/slow."),
@@ -271,6 +348,10 @@ struct ObjectEntry: Identifiable, Equatable {
     // Number of coordinate states (NMR models / trajectory frames). >1 surfaces
     // the per-object STATE controls in the inspector. Defaults to 1.
     var stateCount: Int = 1
+    // True when an active rep has per-atom transparency overrides — drives the
+    // discoverability badge, since the object-level transparency slider then
+    // doesn't reflect what's rendered. See appkit_inspector.object_has_atom_transp.
+    var hasAtomTransp: Bool = false
 
     var displayName: String {
         if isSelection, let count = atomCount {
@@ -353,6 +434,12 @@ private indirect enum ActionMenuItem {
     case action(label: String, key: String)
     case separator
     case submenu(label: String, children: [ActionMenuItem])
+    // Dynamic submenus whose children are the currently-loaded molecule
+    // objects / public selections (built at render time from engine.objects),
+    // mirroring desktop PyMOL's "to molecule (*/CA)" / "to selection (*/CA)"
+    // align entries.
+    case alignToMolecule(label: String)
+    case alignToSelection(label: String)
 }
 
 private let actionMenuItems: [ActionMenuItem] = [
@@ -398,6 +485,9 @@ private let actionMenuItems: [ActionMenuItem] = [
         .action(label: "pi-cation",                 key: "find_pi_cation"),
     ]),
     .submenu(label: "Align", children: [
+        .alignToMolecule(label: "to molecule (*/CA)"),
+        .alignToSelection(label: "to selection (*/CA)"),
+        .separator,
         .action(label: "enabled to this (*/CA)",  key: "align_enabled"),
         .action(label: "all to this (*/CA)",      key: "align_all"),
         .separator,
@@ -612,8 +702,37 @@ private enum PanelTheme {
     static var selectionTextColor: Color { t.selectionName.color }
     static var buttonBackground: Color { t.panelBackground.blended(with: t.panelText, 0.16).color }
     static var buttonText: Color { t.panelText.color }
+    static var accentColor: Color { t.accent.color }
     static var headerColor: Color { t.panelBackground.blended(with: t.panelText, 0.6).color }
     static var disabledColor: Color { t.panelBackground.blended(with: t.panelText, 0.4).color }
+    // Amber accent for the per-atom transparency badge / detail row — a fixed hue
+    // (not the blue theme accent) that reads as "transparency" and stays legible
+    // on both light and dark panel themes.
+    static var atomTranspColor: Color { Color(.sRGB, red: 0.90, green: 0.66, blue: 0.30, opacity: 1) }
+}
+
+// Chrome for the compact A/S/H/L/C representation menu buttons so they read the
+// SAME on both platforms: a blue glyph on a gray rounded box, hugging its cell.
+// iOS's `.borderlessButton` menu renders the custom label (box + background)
+// verbatim; macOS's `.borderlessButton` instead tints the glyph, DROPS the box,
+// and lays out greedily (the letters spread across the row). So on macOS we use
+// the `.button` menu style + a plain button style, which render the label as-is
+// and size to it. The explicit accent foreground keeps the glyph blue on macOS
+// (a plain button would otherwise inherit the primary text color).
+private extension View {
+    @ViewBuilder func repMenuChrome() -> some View {
+        #if os(iOS)
+        self.menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .foregroundColor(PanelTheme.accentColor)
+        #else
+        self.menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .foregroundColor(PanelTheme.accentColor)
+            .fixedSize()
+        #endif
+    }
 }
 
 // MARK: - ObjectPanel View
@@ -621,6 +740,9 @@ private enum PanelTheme {
 struct ObjectPanel: View {
     @EnvironmentObject var engine: PyMOLEngine
     @EnvironmentObject private var themeManager: ThemeManager   // re-render on theme switch
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    #endif
     @State private var showSelectionBuilder = false
     @State private var renameText = ""
     // Independent collapse state for the three top-level sections (Scene starts
@@ -650,35 +772,32 @@ struct ObjectPanel: View {
 
     private var panelBody: some View {
         VStack(spacing: 0) {
-            // Panel-wide toolbar: the selection-pick mode and refresh act on the
-            // whole panel, so they live here rather than in any one section header.
-            HStack(spacing: 8) {
-                Text("Inspector")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(PanelTheme.headerColor)
-                Spacer()
-                selectionModeMenu
-                Button(action: { refreshObjects() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                        .foregroundColor(PanelTheme.headerColor)
+            // Panel-wide toolbar: the selection-pick mode acts on the whole panel,
+            // so it lives here rather than in any one section header. (The former
+            // "Inspector" label was dropped — the bottom tab already names the pane;
+            // SCENE moved fully into the Settings tab.)
+            // Selection mode: on macOS/iPad it lives in the shared inspector chrome
+            // (right of the tab description); on iPhone it stays here in the panel.
+            #if os(iOS)
+            if hSizeClass == .compact {
+                HStack(spacing: 8) {
+                    Spacer()
+                    ClearSelectionButton()
+                    SelectionModeMenu()
                 }
-                .buttonStyle(.plain)
-                .help("Refresh")
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                Divider()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-
-            Divider()
+            #endif
 
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
                     let objects = engine.objects.filter { !$0.isSelection }
                     let selections = engine.objects.filter { $0.isSelection }
 
-                    // SCENE — global display settings.
-                    sectionHeader("SCENE", id: "scene", tag: "global") { EmptyView() }
-                    if openSections.contains("scene") { SceneCard() }
+                    // SCENE (global display settings) now lives in the Settings tab
+                    // → "Scene settings"; it was removed from the Inspector here.
 
                     // OBJECTS — the loaded molecules + the global "all" row.
                     sectionHeader("OBJECTS", id: "objects",
@@ -717,6 +836,10 @@ struct ObjectPanel: View {
                     }
                 }
                 .padding(.vertical, 2)
+                // Report natural list height so the portrait panel can hug Objects
+                // (capped at 1/3). Harmless in landscape/iPad (no listener there).
+                .reportPaneHeight(1)
+                .padding(.bottom, 56)   // clearance when capped + scrolling (portrait)
             }
         }
         .background(PanelTheme.background)
@@ -771,32 +894,6 @@ struct ObjectPanel: View {
     }
 
     // Pick-granularity menu (mouse_selection_mode): what a viewport tap selects.
-    private var selectionModeMenu: some View {
-        let modes: [(Int, String)] = [(0, "Atoms"), (1, "Residues"), (2, "Chains"),
-                                      (3, "Segments"), (4, "Objects"), (5, "Molecules"), (6, "C-α")]
-        let cur = Int(engine.sceneState.values["mouse_selection_mode"] ?? 1)
-        return Menu {
-            ForEach(modes, id: \.0) { m in
-                Button {
-                    engine.runCommand("set mouse_selection_mode, \(m.0)")
-                } label: {
-                    if m.0 == cur { Label(m.1, systemImage: "checkmark") } else { Text(m.1) }
-                }
-            }
-        } label: {
-            HStack(spacing: 2) {
-                Image(systemName: "hand.tap").font(.system(size: 9))
-                Text(modes.first(where: { $0.0 == cur })?.1 ?? "Residues")
-                    .font(.system(size: 10))
-            }
-            .foregroundColor(PanelTheme.headerColor)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Selection mode — what a tap selects")
-    }
-
     private func refreshObjects() {
         engine.runCommand(
             "python\n"
@@ -811,6 +908,69 @@ struct ObjectPanel: View {
             + "'enabled': list(enabled), 'sel_counts': sel_counts}))\n"
             + "python end"
         )
+    }
+}
+
+// MARK: - Selection mode menu (shared: inspector chrome + iPhone toolbar)
+
+/// The "what does a tap select" mode (atoms / residues / chains / …). Lives in the
+/// inspector chrome (right of the tab description) on macOS/iPad so it's reachable
+/// from every tab; on iPhone it sits in the Object panel's top toolbar.
+struct SelectionModeMenu: View {
+    @EnvironmentObject var engine: PyMOLEngine
+    private let modes: [(Int, String)] = [(0, "Atoms"), (1, "Residues"), (2, "Chains"),
+                                          (3, "Segments"), (4, "Objects"), (5, "Molecules"), (6, "C-α")]
+    var body: some View {
+        let cur = Int(engine.sceneState.values["mouse_selection_mode"] ?? 1)
+        Menu {
+            ForEach(modes, id: \.0) { m in
+                Button { engine.runCommand("set mouse_selection_mode, \(m.0)") } label: {
+                    if m.0 == cur { Label(m.1, systemImage: "checkmark") } else { Text(m.1) }
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: "hand.tap").font(.system(size: 9))
+                Text(modes.first(where: { $0.0 == cur })?.1 ?? "Residues").font(.system(size: 10))
+            }
+            .foregroundColor(PanelTheme.headerColor)
+        }
+        .repMenuChrome()
+        .fixedSize()
+        .help("Selection mode — what a tap selects")
+    }
+}
+
+/// One-click "delete selection" (issue #163): a single tap deletes the `sele`
+/// named selection outright (`delete sele`) — removing the pink markers AND the
+/// lingering entry from the object list, not just deselecting. (The Esc key,
+/// issue #166, is intentionally the two-stage `escapeClearSelection()` —
+/// deselect, then delete on a second press.) Lives right next to
+/// `SelectionModeMenu` in the shared inspector chrome (macOS/iPad) and the
+/// iPhone Object-panel header, so it's reachable from every tab. Dimmed and
+/// non-interactive only when there is no `sele` selection at all.
+struct ClearSelectionButton: View {
+    @EnvironmentObject var engine: PyMOLEngine
+    // Enabled whenever a `sele` selection EXISTS (enabled or not); a single
+    // click deletes it. Disabled only when no `sele` exists.
+    private var hasActiveSelection: Bool {
+        engine.objects.contains { $0.isSelection && $0.name == "sele" }
+    }
+    var body: some View {
+        Button { engine.runCommand("delete sele") } label: {
+            Image(systemName: "xmark.circle")
+                .font(.system(size: 11))
+                // Accent (blue) when there's something to clear — matches the
+                // panel's action buttons (A/S/H/L/C) — else dimmed grey.
+                .foregroundColor(hasActiveSelection ? PanelTheme.accentColor : PanelTheme.disabledColor)
+                // A real 18pt hit/hover region (not a bare ~10pt glyph) so the
+                // click is easy and the .help tooltip reliably appears on hover.
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!hasActiveSelection)
+        .help("Delete selection (sele)")
     }
 }
 
@@ -856,16 +1016,17 @@ private struct ObjectRowView: View {
         .padding(.vertical, 2)
         .frame(height: kRowH)
         .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
+        // Whole-row tap toggles enable. The trailing A/S/H/L/C controls consume
+        // their own taps (they sit above this gesture); only the dead Spacer gap
+        // falls through to here.
+        .contentShape(Rectangle())
+        .onTapGesture { toggleEnabled() }
         // Long-press (iOS) / right-click (macOS) opens the action menu.
         .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
     }
 
     private func toggleEnabled() {
-        if entry.isEnabled {
-            engine.runCommand("disable \(entry.name)")
-        } else {
-            engine.runCommand("enable \(entry.name)")
-        }
+        engine.setObjectEnabled(entry.name, !entry.isEnabled)
     }
 }
 
@@ -911,8 +1072,7 @@ private struct AllControlsRow: View {
                     .cornerRadius(2)
                     .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .repMenuChrome()
             ShowButton(name: "all")
             HideButton(name: "all")
             LabelMenuButton(name: "all")
@@ -922,6 +1082,10 @@ private struct AllControlsRow: View {
         .padding(.vertical, 2)
         .frame(height: kRowH)
         .background(PanelTheme.rowBackground)
+        // Whole-row tap toggles ALL objects. The trailing A/S/H/L/C controls
+        // consume their own taps; only the dead Spacer gap falls through here.
+        .contentShape(Rectangle())
+        .onTapGesture { toggleAll() }
         .contextMenu { actionMenuContent(allActionMenuItems, name: "all", engine: engine) }
     }
 
@@ -929,7 +1093,14 @@ private struct AllControlsRow: View {
     // targets exactly the current objects (not the "all" atom-selection), so it
     // works regardless of how enable/disable interpret the "all" keyword.
     private func toggleAll() {
-        let action = allEnabled ? "disable" : "enable"
+        let enable = !allEnabled
+        // Optimistic-first: flip every object's checkbox immediately (isEnabled
+        // is a var → instant re-render) so the whole "all" row updates this frame
+        // instead of waiting on the ~500ms pollObjects reconcile.
+        for idx in engine.objects.indices where !engine.objects[idx].isSelection {
+            engine.objects[idx].isEnabled = enable
+        }
+        let action = enable ? "enable" : "disable"
         engine.runPython(
             "from pymol import cmd as _c\n"
             + "for _o in (_c.get_names('objects') or []):\n"
@@ -970,8 +1141,48 @@ private func actionMenuContent(_ items: [ActionMenuItem], name: String, engine: 
             Menu(label) {
                 AnyView(actionMenuContent(children, name: name, engine: engine))  // AnyView breaks recursive opaque-type inference
             }
+        case .alignToMolecule(let label):
+            // Candidate targets: every OTHER loaded molecule object (mirrors
+            // desktop PyMOL's align_to_object). Empty when nothing else is loaded.
+            Menu(label) {
+                let targets = engine.objects.filter { !$0.isSelection && $0.name != name }
+                if targets.isEmpty {
+                    Button("(no other molecules)") {}.disabled(true)
+                } else {
+                    ForEach(targets) { target in
+                        Button(target.name) {
+                            runAlignCommand(mobile: name, target: target.name, engine: engine)
+                        }
+                    }
+                }
+            }
+        case .alignToSelection(let label):
+            // Candidate targets: every public selection (mirrors desktop PyMOL's
+            // align_to_sele). Empty when no selections exist.
+            Menu(label) {
+                let targets = engine.objects.filter { $0.isSelection && $0.name != name }
+                if targets.isEmpty {
+                    Button("(no selections)") {}.disabled(true)
+                } else {
+                    ForEach(targets) { target in
+                        Button(target.name) {
+                            runAlignCommand(mobile: name, target: target.name, engine: engine)
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+/// Align one object onto a target molecule/selection over polymer CA atoms,
+/// creating an alignment object (mirrors desktop PyMOL's align_to_object /
+/// align_to_sele in modules/pymol/menu.py).
+private func runAlignCommand(mobile: String, target: String, engine: PyMOLEngine) {
+    let cmd = "python\ncmd.align(\"polymer and name CA and (\(mobile))\", "
+        + "\"polymer and name CA and (\(target))\", quiet=0, "
+        + "object=\"aln_\(mobile)_to_\(target)\", reset=1)\npython end"
+    engine.runCommand(cmd)
 }
 
 private struct ActionMenuButton: View {
@@ -990,8 +1201,7 @@ private struct ActionMenuButton: View {
                 // the "A" glyph — so a tap anywhere on the button opens the menu.
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1025,7 +1235,9 @@ private struct ShowButton: View {
             ForEach(Array(showHideOptions.enumerated()), id: \.offset) { _, opt in
                 if opt.label == "---" {
                     Divider()
-                } else if let rep = opt.rep {
+                } else if let rep = opt.rep, rep != "everything" {
+                    // "everything" is meaningful for Hide but not Show — you
+                    // can't turn on every representation at once sensibly.
                     Button(opt.label) {
                         engine.runCommand("show \(rep), \(name)")
                     }
@@ -1038,8 +1250,7 @@ private struct ShowButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1071,8 +1282,7 @@ private struct HideButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1104,8 +1314,7 @@ private struct LabelMenuButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
     }
 }
 
@@ -1148,8 +1357,7 @@ private struct ColorMenuButton: View {
                 .cornerRadius(2)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .repMenuChrome()
         .popover(isPresented: $showCustom, arrowEdge: .bottom) {
             VStack(spacing: 8) {
                 Text("Custom color").font(.system(size: 11, weight: .semibold))
@@ -1252,15 +1460,23 @@ private struct LabeledSlider: View {
     let value: Double
     let onLive: (Double) -> Void
     let onCommit: (Double) -> Void
+    // When set, caps the slider's width (used by the camera dock); nil = fill the
+    // available width, the inspector's default.
+    var sliderMaxWidth: CGFloat? = nil
 
     @State private var local: Double = 0
     @State private var text: String = ""
     @State private var editing = false
     @State private var debounce: DispatchWorkItem?
+    @State private var lastLiveAt: Date = .distantPast
 
     var body: some View {
         HStack(spacing: 6) {
-            Slider(value: $local, in: prop.min...prop.max, step: prop.step,
+            // Continuous (no `step`): a stepped Slider draws busy tick marks on
+            // macOS. Values are rounded for display (fmt) and when applied
+            // (fmtScene / the mm/zoom mappings), so dropping the step only removes
+            // the ticks, not the effective granularity.
+            Slider(value: $local, in: prop.min...prop.max,
                    onEditingChanged: { began in
                        editing = began
                        if !began { onCommit(local) }
@@ -1274,6 +1490,7 @@ private struct LabeledSlider: View {
             .controlSize(.mini)
             #endif
                 #endif
+            .frame(maxWidth: sliderMaxWidth)
             TextField("", text: $text)
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.trailing)
@@ -1297,11 +1514,24 @@ private struct LabeledSlider: View {
     }
 
     private func fmt(_ v: Double) -> String { String(format: "%.\(prop.decimals)f", v) }
+    // Leading-edge throttle (~30 Hz): fire onLive immediately during a
+    // continuous drag, rate-limited, with a trailing call so the final value
+    // always lands. A plain trailing debounce (cancel + reschedule on every
+    // change) starved the update until the finger paused, so the view chased
+    // the drag instead of tracking it — the perceived slider lag.
     private func scheduleLive(_ v: Double) {
+        let interval = 0.033
         debounce?.cancel()
-        let w = DispatchWorkItem { onLive(v) }
-        debounce = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: w)
+        let now = Date()
+        let wait = interval - now.timeIntervalSince(lastLiveAt)
+        if wait <= 0 {
+            lastLiveAt = now
+            onLive(v)
+        } else {
+            let w = DispatchWorkItem { lastLiveAt = Date(); onLive(v) }
+            debounce = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: w)
+        }
     }
 }
 
@@ -1431,6 +1661,62 @@ private struct RepColorControl: View {
     }
 }
 
+/// Color control bound to an arbitrary per-rep color setting (e.g.
+/// surface_contour_color). "Inherit" sets -1 (here the surface color); named
+/// colors / the custom picker set an explicit color. Mirrors RepColorControl but
+/// without the atom-coloring schemes (which don't apply to a contour line).
+private struct SettingColorControl: View {
+    let objName: String
+    let rep: String
+    let setting: String
+    let colorState: String        // "inherit" or "#rrggbb"
+    @EnvironmentObject var engine: PyMOLEngine
+
+    var body: some View {
+        HStack(spacing: 6) {
+            swatch
+            Menu {
+                Button("Inherit") { setColor("-1") }
+                Divider()
+                ForEach(Array(inspectorNamedColors.enumerated()), id: \.offset) { _, c in
+                    Button(action: { setColor(c.name) }) {
+                        Label(c.name, systemImage: "circle.fill")
+                    }
+                }
+            } label: {
+                Text(colorState == "inherit" ? "Inherit" : "Custom")
+                    .font(.system(size: 10))
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .frame(maxWidth: 70)
+            DebouncedColorPicker(get: { colorFromHex(colorState) ?? .white },
+                                 apply: { applyCustom($0) })
+                .frame(width: 28)
+        }
+    }
+
+    @ViewBuilder private var swatch: some View {
+        if colorState == "inherit" {
+            RoundedRectangle(cornerRadius: 3)
+                .strokeBorder(PanelTheme.disabledColor, lineWidth: 1)
+                .frame(width: 14, height: 14)
+        } else {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(colorFromHex(colorState) ?? .gray)
+                .frame(width: 14, height: 14)
+        }
+    }
+
+    private func setColor(_ c: String) {
+        engine.runCommand("set \(setting), \(c), \(objName)")
+    }
+    private func applyCustom(_ color: Color) {
+        let nm = "tmp_\(sanitizeName(objName))_\(rep)_ctr"
+        engine.runCommand("set_color \(nm), \(rgb01List(color))\nset \(setting), \(nm), \(objName)")
+    }
+}
+
 /// Object-level (Layer-1) color: presets + named + custom; affects all reps on "Inherit".
 private struct ObjectColorRow: View {
     let objName: String
@@ -1492,6 +1778,27 @@ private struct ObjectRowContent: View {
             .contentShape(Rectangle())
             .onTapGesture { toggleEnabled() }   // tap name = toggle enable
 
+        // Model / state count, right of the name (the structure's "frame count").
+        if entry.stateCount > 1 {
+            Text("\(entry.stateCount)")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundColor(PanelTheme.headerColor)
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(Capsule().fill(PanelTheme.buttonBackground))
+                .help("\(entry.stateCount) models / states")
+        }
+
+        // Discoverability badge: this object has per-atom transparency overrides,
+        // so the object-level transparency slider doesn't reflect what's rendered.
+        // Visible even when the card is collapsed. Expand to see the range + Clear.
+        if entry.hasAtomTransp {
+            Image(systemName: "drop.halffull")
+                .font(.system(size: 10))
+                .foregroundColor(PanelTheme.atomTranspColor)
+                .help("Per-atom transparency is set — the object-level transparency slider won’t fully apply. Expand a representation to view the range or clear it.")
+                .accessibilityLabel("Per-atom transparency set")
+        }
+
         Spacer(minLength: 4)
 
         ActionMenuButton(name: entry.name)
@@ -1502,7 +1809,7 @@ private struct ObjectRowContent: View {
     }
 
     private func toggleEnabled() {
-        engine.runCommand(entry.isEnabled ? "disable \(entry.name)" : "enable \(entry.name)")
+        engine.setObjectEnabled(entry.name, !entry.isEnabled)
     }
 }
 
@@ -1513,6 +1820,9 @@ private struct ObjectCard: View {
     let isAlt: Bool
     @EnvironmentObject var engine: PyMOLEngine
     @State private var selectedRep: String?
+    // Live state-slider value while dragging (nil = follow the object poll). Keeps
+    // the thumb from snapping back to the last-polled state mid-drag.
+    @State private var scrubState: Int? = nil
 
     private var expanded: Bool { engine.expandedDetail == entry.name }
     private var reps: [RepState] { engine.objectDetails[entry.name] ?? [] }
@@ -1545,6 +1855,13 @@ private struct ObjectCard: View {
             .padding(.vertical, 2)
             .frame(height: kRowH)
             .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
+            // Whole HEADER-row tap toggles enable. Applied to the header HStack
+            // only (NOT the outer VStack) so the expanded rep-detail below stays
+            // interactive. The disclosure chevron Button and the trailing
+            // A/S/H/L/C controls consume their own taps (expand-only for the
+            // chevron); only the dead Spacer gap falls through to here.
+            .contentShape(Rectangle())
+            .onTapGesture { engine.setObjectEnabled(entry.name, !entry.isEnabled) }
             // Long-press (iOS) / right-click (macOS) opens the action menu.
             .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
 
@@ -1607,21 +1924,26 @@ private struct ObjectCard: View {
         // Use the object's effective state from the poll; default to 1 (avoid
         // depending on playback.currentFrame so the inspector doesn't re-render
         // on every frame tick during playback).
-        let cur = min(max(meta?.state ?? 1, 1), total)
+        // While dragging, show the live scrub value; otherwise follow the poll.
+        let cur = min(max(scrubState ?? meta?.state ?? 1, 1), total)
         VStack(spacing: 3) {
             HStack(spacing: 6) {
                 Text("State")
                     .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
                     .frame(width: 78, alignment: .leading)
-                Button { setState(max(cur - 1, 1)) } label: {
+                Button { scrubState = nil; setState(max(cur - 1, 1)) } label: {
                     Image(systemName: "minus.circle").font(.system(size: 14))
                 }
                 .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)
                 Slider(value: Binding(get: { Double(cur) },
-                                      set: { setState(Int($0.rounded())) }),
-                       in: 1...Double(max(total, 2)), step: 1)
+                                      set: { v in
+                                          let n = min(max(Int(v.rounded()), 1), total)
+                                          if n != cur { scrubState = n; setState(n) }  // apply only on integer change
+                                      }),
+                       in: 1...Double(max(total, 2)), step: 1,
+                       onEditingChanged: { editing in if !editing { scrubState = nil } })
                     .tint(TimelineTheme.accent)
-                Button { setState(min(cur + 1, total)) } label: {
+                Button { scrubState = nil; setState(min(cur + 1, total)) } label: {
                     Image(systemName: "plus.circle").font(.system(size: 14))
                 }
                 .buttonStyle(.plain).foregroundColor(TimelineTheme.accent)
@@ -1629,6 +1951,47 @@ private struct ObjectCard: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(PanelTheme.textColor)
                     .frame(width: 42, alignment: .trailing)
+            }
+            // Play/pause + per-object fps — animates THIS object's models (via a
+            // Swift timer + `set state`), independent of the movie and other objects.
+            HStack(spacing: 6) {
+                Text("Play")
+                    .font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+                    .frame(width: 78, alignment: .leading)
+                Button { engine.toggleObjectStates(entry.name) } label: {
+                    Image(systemName: engine.playingObjects.contains(entry.name) ? "pause.fill" : "play.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(engine.timelineMode ? PanelTheme.disabledColor : TimelineTheme.accent)
+                        .frame(width: 24, height: 20).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(engine.timelineMode)   // authoring a movie → model playback off
+                // A disabled Button swallows its own hover events, so `.help()` on
+                // it never fires. Wrap it so the tooltip lives on a non-disabled
+                // container that still receives hover while playback is off.
+                .allowsHitTesting(!engine.timelineMode)
+                .overlay {
+                    if engine.timelineMode {
+                        Color.clear.contentShape(Rectangle())
+                            .help("Model playback is off while the movie timeline is open — close it to inspect models")
+                    }
+                }
+                .help(engine.playingObjects.contains(entry.name) ? "Pause" : "Play models")
+                Spacer(minLength: 0)
+                Menu {
+                    ForEach([1.0, 5.0, 10.0, 15.0, 30.0], id: \.self) { f in
+                        Button("\(Int(f)) fps") { engine.setObjectFPS(entry.name, f) }
+                    }
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "speedometer").font(.system(size: 9))
+                        Text("\(Int(engine.objectPlaybackFPS(entry.name))) fps")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(TimelineTheme.accent)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("Playback speed for this object")
             }
             HStack(spacing: 6) {
                 Text("Overlay all")
@@ -1774,9 +2137,66 @@ private struct RepPropertyGrid: View {
             }
             ForEach(spec.properties) { p in
                 gridRow(p.label) { control(for: p) }
+                // Per-atom transparency detail sits directly under the matching
+                // transparency slider so it's clear the slider is only a baseline.
+                if let at = state.atomTransp, at.setting == p.setting {
+                    atomTranspRow(at)
+                }
+            }
+            // Fallback: surface the detail even if this rep's spec has no slider
+            // for its transparency setting (so the info is never lost).
+            if let at = state.atomTransp,
+               !spec.properties.contains(where: { $0.setting == at.setting }) {
+                atomTranspRow(at)
             }
         }
         .padding(.top, 2)
+    }
+
+    // "per-atom: min–max" readout + a Clear action, shown when atom-level
+    // transparency overrides the object-level slider for this rep.
+    @ViewBuilder
+    private func atomTranspRow(_ at: AtomTransp) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "drop.halffull").font(.system(size: 10))
+            Text("per-atom: \(rangeLabel(at))").font(.system(size: 10))
+            Spacer(minLength: 4)
+            Button(action: { clearAtomTransp(at.setting) }) {
+                Text("Clear")
+                    .font(.system(size: 10))
+                    .padding(.horizontal, 8).padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .stroke(PanelTheme.atomTranspColor.opacity(0.55), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundColor(PanelTheme.atomTranspColor)
+        .padding(.leading, 84)   // align under the control column (label width 78 + gap)
+        .help("Some atoms set \(at.setting) individually, so the slider above only sets a baseline. Clear removes the per-atom values and hands control back to the slider.")
+    }
+
+    private func rangeLabel(_ at: AtomTransp) -> String {
+        let lo = fmtTransp(at.min), hi = fmtTransp(at.max)
+        return lo == hi ? lo : "\(lo)–\(hi)"
+    }
+
+    private func fmtTransp(_ v: Double) -> String {
+        var s = String(format: "%.2f", v)
+        if s.contains(".") {
+            while s.hasSuffix("0") { s.removeLast() }
+            if s.hasSuffix(".") { s.removeLast() }
+        }
+        return s
+    }
+
+    // Remove the per-atom overrides for `setting` on this object. The
+    // atom-selection form `unset(setting, (obj))` clears atom-level values while
+    // keeping the object-level slider value; a rebuild refreshes the baked
+    // cartoon/surface geometry, then re-poll so the row disappears promptly.
+    private func clearAtomTransp(_ setting: String) {
+        engine.runCommand("unset \(setting), (\(objName))")
+        engine.runCommand("rebuild \(objName)")
+        engine.refreshExpandedDetail()
     }
 
     @ViewBuilder
@@ -1793,6 +2213,11 @@ private struct RepPropertyGrid: View {
             SegmentedSetting(prop: p, value: v) { set(p.setting, $0) }
         case .toggle:
             ToggleSetting(value: v) { set(p.setting, $0 ? 1 : 0) }
+        case .color:
+            // A standalone color control bound to an arbitrary color setting
+            // (e.g. surface_contour_color). -1 = inherit (here: the surface color).
+            SettingColorControl(objName: objName, rep: spec.rep, setting: p.setting,
+                                colorState: state.settingColors[p.setting] ?? "inherit")
         }
     }
 
@@ -1840,7 +2265,9 @@ private struct HelpButton: View {
     }
 }
 
-private struct SceneCard: View {
+// Non-private: also hosted in the Settings tab (ContentView.settingsPane) now
+// that SCENE lives fully under Settings rather than the Inspector.
+struct SceneCard: View {
     @EnvironmentObject var engine: PyMOLEngine
     @State private var showSettings = false
     // Per-sub-group expand state; the heavier groups start collapsed.
@@ -1849,8 +2276,8 @@ private struct SceneCard: View {
     // in ObjectPanel (shared with Objects / Selections).
     var body: some View {
         VStack(spacing: 3) {
-            SceneStrip()
-            Divider().background(PanelTheme.disabledColor.opacity(0.3))
+            // Scene management (the strip) now lives in the dedicated Scenes tab;
+            // this card holds the global DISPLAY settings only.
             ForEach(SceneCatalog.groups, id: \.self) { group in
                 sceneGroup(group)
             }
@@ -1897,7 +2324,7 @@ private struct SceneCard: View {
             .buttonStyle(.plain)
             if isOpen {
                 ForEach(SceneCatalog.params.filter { $0.group == group }) { p in
-                    if visible(p) { paramRow(p) }
+                    SceneParamRow(param: p, engine: engine)
                 }
                 if group == "Effects" { resetEffectsButton }
             }
@@ -1928,21 +2355,34 @@ private struct SceneCard: View {
     // scene-state poll re-syncs the toggles/sliders after the sets land.
     private func resetEffects() { engine.resetEffects() }
 
-    // Dependent rows (dependsOn set) are hidden while their parent toggle is off.
-    private func visible(_ p: SceneParam) -> Bool {
-        guard let dep = p.dependsOn else { return true }
-        return (engine.sceneState.values[dep] ?? 0) > 0.5
-    }
+}
 
-    @ViewBuilder
-    private func paramRow(_ p: SceneParam) -> some View {
-        // Hardware ray tracing is unavailable on some GPUs (Simulator, A-series
-        // iPads); gray the row out so the toggle doesn't read as a working control.
-        let rtUnavailable = p.setting == "metal_raytrace" && !engine.rayTracingSupported
-        sceneRow(rtUnavailable ? "\(p.label) (unavailable)" : p.label, help: p.help) { sceneControl(p) }
-            .padding(.leading, p.dependsOn != nil ? 12 : 0)   // indent gated sub-settings
+// MARK: - Shared scene-setting row + Camera dock
+
+// One scene-setting row (label + control + help), shared by the inspector's
+// Scene section (SceneCard) and the viewport camera dock (CameraDock).
+// Self-hides when its dependsOn parent toggle is off, so callers render it
+// unconditionally.
+struct SceneParamRow: View {
+    let param: SceneParam
+    @ObservedObject var engine: PyMOLEngine
+    // Compact layout for the camera dock: natural-width label and no trailing
+    // Spacer, so the slider fills the row instead of splitting the space with a
+    // Spacer (the dock card bounds the overall width). Inspector uses the default.
+    var compact: Bool = false
+
+    var body: some View {
+        if let dep = param.dependsOn, (engine.sceneState.values[dep] ?? 0) <= 0.5 {
+            EmptyView()
+        } else {
+            let rtUnavailable = param.setting == "metal_raytrace" && !engine.rayTracingSupported
+            sceneRow(rtUnavailable ? "\(param.label) (unavailable)" : param.label, help: param.help) {
+                sceneControl(param)
+            }
+            .padding(.leading, param.dependsOn != nil ? 12 : 0)
             .disabled(rtUnavailable)
             .opacity(rtUnavailable ? 0.45 : 1)
+        }
     }
 
     @ViewBuilder
@@ -1962,22 +2402,90 @@ private struct SceneCard: View {
             let v = engine.sceneState.values[p.setting] ?? 0
             switch p.kind {
             case .toggle:
-                ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
+                if p.setting == "metal_dof_autofocus" {
+                    // Enabling snapshots the current selection into "dof_focus" —
+                    // the locked target the renderer tracks each frame (see the
+                    // SceneRender auto-focus block). Disabling just clears the flag.
+                    ToggleSetting(value: v) { on in
+                        engine.runCommand(CameraCommands.setAutofocus(on))
+                    }
+                } else {
+                    ToggleSetting(value: v) { on in engine.runCommand("set \(p.setting), \(on ? 1 : 0)") }
+                }
             case .segmented:
                 SegmentedSetting(prop: RepProperty(setting: p.setting, label: p.label, kind: .segmented, options: p.options),
                                  value: v) { engine.runCommand("set \(p.setting), \(Int($0))") }
             case .slider:
-                LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
-                                                min: p.min, max: p.max, step: p.step, decimals: p.decimals),
-                              value: v,
-                              onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
-                              onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+                if p.setting == "field_of_view" {
+                    // Lens control: the slider is a 35mm-equivalent focal length (mm),
+                    // shown by converting the polled field_of_view, and applied via
+                    // set_fov (a dolly zoom) so it swaps perspective rather than
+                    // zooming. Inert in orthoscopic mode.
+                    let fovDeg = engine.sceneState.values["field_of_view"] ?? 20
+                    let orthoOn = (engine.sceneState.values["ortho"] ?? 0) > 0.5
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: fovToMM(fovDeg),
+                                  onLive: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") },
+                                  onCommit: { engine.runCommand("set_fov \(String(format: "%.3f", mmToFOV($0)))") })
+                        .disabled(orthoOn)
+                        .opacity(orthoOn ? 0.4 : 1.0)
+                } else if p.setting == "zoom" {
+                    // Zoom: absolute apparent MAGNIFICATION, independent of the Lens.
+                    // M = scene_radius / (cam_dist * tan(fov/2)) is invariant under
+                    // the Lens dolly-zoom, so the two sliders don't fight. Dragging
+                    // dollies the camera to the target distance.
+                    let camDist = engine.sceneState.values["cam_dist"] ?? 0
+                    let radius = engine.sceneState.values["scene_radius"] ?? 0
+                    let fovDeg = engine.sceneState.values["field_of_view"] ?? 20
+                    let zoomReady = radius > 0 && camDist > 0
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: zoomMag(camDist: camDist, radius: radius, fovDeg: fovDeg),
+                                  onLive: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) },
+                                  onCommit: { engine.setZoomMagnification($0, radius: radius, fovDeg: fovDeg) })
+                        .disabled(!zoomReady)
+                        .opacity(zoomReady ? 1.0 : 0.4)
+                } else {
+                    // The DOF focus slider is driven by autofocus while it's on.
+                    let dofAuto = p.setting == "metal_dof_focus"
+                        && (engine.sceneState.values["metal_dof_autofocus"] ?? 0) > 0.5
+                    LabeledSlider(prop: RepProperty(setting: p.setting, label: p.label, kind: .slider,
+                                                    min: p.min, max: p.max, step: p.step, decimals: p.decimals),
+                                  value: v,
+                                  onLive: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") },
+                                  onCommit: { engine.runCommand("set \(p.setting), \(fmtScene($0, p))") })
+                        .disabled(dofAuto)
+                        .opacity(dofAuto ? 0.4 : 1.0)
+                }
+            case .color:
+                EmptyView()  // scene colors use p.isColor above, not the .color kind
             }
         }
     }
 
     private func fmtScene(_ v: Double, _ p: SceneParam) -> String {
         p.decimals == 0 ? String(Int(v.rounded())) : String(format: "%.4f", v)
+    }
+
+    // Lens control: map PyMOL's vertical field_of_view (degrees) to a 35mm-
+    // equivalent focal length using the full-frame sensor height (24mm):
+    //   fov = 2*atan(12/f)   <->   f = 12/tan(fov/2)
+    // fovToMM clamps into the slider's mm range so the thumb never leaves bounds.
+    private func fovToMM(_ fovDeg: Double) -> Double {
+        let f = 12.0 / tan(fovDeg * .pi / 360.0)
+        return min(max(f, 12.0), 135.0)
+    }
+    private func mmToFOV(_ mm: Double) -> Double {
+        2.0 * atan(12.0 / mm) * 180.0 / .pi
+    }
+
+    // Apparent magnification for the Zoom slider: ~1 when the scene fits the view,
+    // higher when zoomed in. Clamped to the slider's [0.5, 8] range.
+    private func zoomMag(camDist: Double, radius: Double, fovDeg: Double) -> Double {
+        let t = tan(fovDeg * .pi / 360.0)
+        guard camDist > 1e-4, t > 1e-6, radius > 0 else { return 1.0 }
+        return min(max(radius / (camDist * t), 0.5), 8.0)
     }
 
     private func setBackground(_ color: Color) {
@@ -1994,77 +2502,500 @@ private struct SceneCard: View {
             Text(label)
                 .font(.system(size: 10))
                 .foregroundColor(PanelTheme.textColor)
-                .frame(width: 110, alignment: .leading)
+                .frame(width: compact ? nil : 110, alignment: .leading)
+                .fixedSize(horizontal: compact, vertical: false)
             content()
-            Spacer(minLength: 0)
+            if !compact { Spacer(minLength: 0) }
             if !help.isEmpty { HelpButton(text: help) }
+        }
+    }
+}
+
+// The Depth-of-field sub-panel shown inside the camera dock when "Depth" is
+// selected. Enabled + Auto lock share the top row (both switches); Focus and
+// Aperture reuse the inspector rows and self-hide (dependsOn: metal_dof) until
+// DOF is enabled. Quality is intentionally not here — it lives in the inspector.
+struct DOFSubPanelContent: View {
+    @ObservedObject var engine: PyMOLEngine
+    private var dofOn: Bool { (engine.sceneState.values["metal_dof"] ?? 0) > 0.5 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "camera.metering.center.weighted")
+                Text("Depth of field").font(.system(size: 13, weight: .medium))
+                Spacer()
+            }
+            .foregroundColor(PanelTheme.textColor)
+            .padding(.bottom, 2)
+
+            HStack(spacing: 20) {
+                dofToggle("Enabled", key: "metal_dof", id: "dof.enabled", enabled: true) { on in
+                    engine.runCommand("set metal_dof, \(on ? 1 : 0)")
+                }
+                HStack(spacing: 5) {
+                    dofToggle("Auto lock", key: "metal_dof_autofocus", id: "dof.autolock", enabled: dofOn) { on in
+                        engine.runCommand(CameraCommands.setAutofocus(on))
+                    }
+                    HelpButton(text: "Auto lock focus keeps the current selection in sharp focus. Select the atoms you want sharp, then turn this on — the focus point tracks that selection as the camera moves. Off lets you set the focus distance by hand with the slider below.")
+                }
+                Spacer()
+            }
+
+            if let focus = SceneCatalog.param(for: "metal_dof_focus") {
+                SceneParamRow(param: focus, engine: engine, compact: true)
+            }
+            if let aperture = SceneCatalog.param(for: "metal_dof_aperture") {
+                SceneParamRow(param: aperture, engine: engine, compact: true)
+            }
+        }
+    }
+
+    private func dofToggle(_ label: String, key: String, id: String,
+                           enabled: Bool, onToggle: @escaping (Bool) -> Void) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 11)).foregroundColor(PanelTheme.textColor)
+            ToggleSetting(value: engine.sceneState.values[key] ?? 0, onToggle: onToggle)
+                .accessibilityIdentifier(id)
+                .accessibilityLabel(label)
+        }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+    }
+}
+
+// Bottom-docked camera control strip (Photos-app "Adjust" model): a row of icon
+// buttons where one control opens at a time above the strip. Reuses SceneParamRow
+// for every slider control so all camera logic stays in one place. Used on all
+// platforms via ContentView's bottom overlay.
+struct CameraDock: View {
+    @ObservedObject var engine: PyMOLEngine
+    // Dismisses the whole dock (the ✕ close button).
+    let onClose: () -> Void
+    // Which control's surface is open above the strip. nil = strip only.
+    // "ortho" toggles instantly and never becomes `open`.
+    @State private var open: String? = nil
+
+    private var orthoOn: Bool { (engine.sceneState.values["ortho"] ?? 0) > 0.5 }
+    private var dofOn: Bool { (engine.sceneState.values["metal_dof"] ?? 0) > 0.5 }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let key = open {
+                Group {
+                    if key == "metal_dof" {
+                        DOFSubPanelContent(engine: engine)
+                    } else if key == "field_of_view", let p = SceneCatalog.param(for: key) {
+                        // Lens row: Ortho toggle on the left; the Lens slider greys
+                        // itself out (via SceneParamRow) while Ortho is on.
+                        HStack(spacing: 10) {
+                            orthoToggle
+                            SceneParamRow(param: p, engine: engine, compact: true)
+                        }
+                    } else if let p = SceneCatalog.param(for: key) {
+                        SceneParamRow(param: p, engine: engine, compact: true)
+                    }
+                }
+                .padding(.horizontal, 4)
+                Divider().overlay(PanelTheme.textColor.opacity(0.15))
+            }
+            HStack(spacing: 10) {
+                ForEach(SceneCatalog.cameraStripKeys, id: \.self) { stripIcon($0) }
+                stripAction(icon: "xmark", label: "Close", id: "camDock.close") {
+                    onClose()
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        // Hug the icon strip tightly when collapsed (a compact centered pill); when
+        // a control is open, expand to fit the slider submenu, capped so it never
+        // spans the whole viewport. The bottom overlay centers it either way.
+        .fixedSize(horizontal: open == nil, vertical: false)
+        .frame(maxWidth: open == nil ? nil : 360)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+        .animation(.easeOut(duration: 0.18), value: open)
+    }
+
+    private func tap(_ key: String) {
+        open = (open == key) ? nil : key
+    }
+
+    // Ortho lives in the Lens row (perspective vs orthographic). Toggling it greys
+    // the Lens slider (SceneParamRow self-disables field_of_view while ortho is on).
+    private var orthoToggle: some View {
+        Button {
+            engine.runCommand("set ortho, \(orthoOn ? 0 : 1)")
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "cube")
+                Text("Ortho")
+            }
+            .font(.system(size: 12))
+            .foregroundColor(orthoOn ? .black : PanelTheme.buttonText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(orthoOn ? PanelTheme.selectionTextColor : PanelTheme.buttonBackground,
+                        in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityIdentifier("camDock.ortho")
+        .accessibilityLabel("Orthographic")
+    }
+
+    @ViewBuilder
+    private func stripIcon(_ key: String) -> some View {
+        let active = (open == key)
+        Button { tap(key) } label: {
+            VStack(spacing: 3) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: SceneCatalog.cameraIcon(for: key))
+                        .font(.system(size: 17))
+                        .foregroundColor(active ? .black : PanelTheme.buttonText)
+                        .frame(width: 42, height: 42)
+                        .background(active ? PanelTheme.selectionTextColor : PanelTheme.buttonBackground,
+                                    in: Circle())
+                    if key == "metal_dof" && dofOn {
+                        Circle().fill(PanelTheme.selectionTextColor)
+                            .frame(width: 9, height: 9)
+                            .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+                            .offset(x: 2, y: -2)
+                    }
+                }
+                Text(shortLabel(key)).font(.system(size: 10))
+                    .foregroundColor(active ? PanelTheme.selectionTextColor : PanelTheme.textColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(axID(key))
+        .accessibilityLabel(fullLabel(key))
+    }
+
+    private func stripAction(icon: String, label: String, id: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 17))
+                    .foregroundColor(PanelTheme.buttonText)
+                    .frame(width: 42, height: 42)
+                    .background(PanelTheme.buttonBackground, in: Circle())
+                Text(label).font(.system(size: 10)).foregroundColor(PanelTheme.textColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
+        .accessibilityLabel(label)
+    }
+
+    private func shortLabel(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "Lens"
+        case "zoom":          return "Zoom"
+        case "ortho":         return "Ortho"
+        case "metal_dof":     return "Depth"
+        default:              return key
+        }
+    }
+    private func fullLabel(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "Lens"
+        case "zoom":          return "Zoom"
+        case "ortho":         return "Orthographic"
+        case "metal_dof":     return "Depth of field"
+        default:              return key
+        }
+    }
+    private func axID(_ key: String) -> String {
+        switch key {
+        case "field_of_view": return "camDock.lens"
+        case "zoom":          return "camDock.zoom"
+        case "ortho":         return "camDock.ortho"
+        case "metal_dof":     return "camDock.depth"
+        default:              return "camDock.\(key)"
         }
     }
 }
 
 // MARK: - Scenes strip (saved camera/representation snapshots)
 
-private struct SceneStrip: View {
+// The Scenes content tab — a full scene manager (PyMOL's Scene menu) in the
+// global/teal language. Scenes recall the whole visualization, so everything
+// here uses TimelineTheme.accent (teal), distinct from the per-object coral
+// A/S/H/L/C. Append wires to the movie; an opt-in toggle shows glanceable scene
+// buttons over the 3D viewport.
+struct ScenesPane: View {
     @EnvironmentObject var engine: PyMOLEngine
-    @State private var showBuilder = false
+    /// Drives the in-viewport scene-button overlay (owned by ContentView).
+    @Binding var showViewportButtons: Bool
+    /// Jump to the Movie tab (set by ContentView).
+    var onOpenMovie: (() -> Void)? = nil
+
+    private let danger = Color(red: 0.75, green: 0.29, blue: 0.23)
+
+    // Local order mirror so chips can be reordered by hold+drag; persisted to
+    // PyMOL via `scene_order`. Synced from engine.sceneNames on add/remove.
+    @State private var sceneOrder: [String] = []
+    @State private var draggingScene: String?
+    // Scene-chip long-press "Rename…" flow (nil = alert hidden).
+    @State private var sceneRenameTarget: String? = nil
+    @State private var sceneRenameText: String = ""
 
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                Text("Scenes")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(PanelTheme.textColor)
-                Spacer(minLength: 0)
-                actionIcon("plus") { engine.runCommand("scene new, store") }
-                    .accessibilityLabel("Store new scene")
-                actionIcon("arrow.clockwise") { engine.runCommand("scene auto, update") }
-                    .accessibilityLabel("Update current scene")
-                actionIcon("xmark") { engine.runCommand("scene auto, delete") }
-                    .accessibilityLabel("Delete current scene")
-                actionIcon("film") { showBuilder = true }
-                    .accessibilityLabel("Make scene-loop movie")
-            }
-            if engine.sceneNames.isEmpty {
-                Text("No scenes — tap + to store the current view.")
-                    .font(.system(size: 9))
-                    .foregroundColor(PanelTheme.disabledColor)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(engine.sceneNames, id: \.self) { name in
-                            let sel = name == engine.currentScene
-                            Button {
-                                engine.runCommand("scene \(name), recall, animate=1")
-                            } label: {
-                                Text(name)
-                                    .font(.system(size: 9, weight: sel ? .bold : .regular))
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(sel ? TimelineTheme.accent : PanelTheme.buttonBackground)
-                                    .foregroundColor(sel ? Color.black : PanelTheme.buttonText)
-                                    .clipShape(Capsule())
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                // Scene chips with an inline "+" chip that stores the current
+                // view as a new scene (in line with the existing scenes). Chips
+                // wrap onto multiple rows rather than overflowing (issue #114).
+                FlowLayout(spacing: 8) {
+                    ForEach(sceneOrder, id: \.self) { name in
+                        sceneChip(name)
+                            .opacity(draggingScene == name ? 0.35 : 1)
+                            .onDrag {
+                                draggingScene = name
+                                return NSItemProvider(object: name as NSString)
                             }
-                            .buttonStyle(.plain)
+                            .onDrop(of: ["public.text"],
+                                    delegate: SceneDropDelegate(item: name, order: $sceneOrder,
+                                                                dragging: $draggingScene,
+                                                                onReorder: applySceneOrder))
+                    }
+                    addChip
+                }
+                .padding(.vertical, 4)
+                .onAppear { sceneOrder = engine.sceneNames }
+                .onChange(of: engine.sceneNames) { newNames in
+                    // Resync only when the SET changes (scene added/removed); a
+                    // pure reorder (same set) keeps the user's dragged order.
+                    if Set(newNames) != Set(sceneOrder) { sceneOrder = newNames }
+                }
+
+                if engine.sceneNames.isEmpty {
+                    Text("Tap + to store the current view as your first scene.")
+                        .font(.system(size: 12))
+                        .foregroundColor(PanelTheme.disabledColor)
+                } else {
+                    // Per-scene actions, all on one row for vertical efficiency.
+                    HStack(spacing: 8) {
+                        sceneActionButton("Update", "arrow.clockwise") {
+                            engine.runCommand("scene auto, update")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.snapshot_current()")
+                        }
+                        sceneActionButton("Prev", "chevron.left") {
+                            engine.runCommand("scene auto, previous")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.apply_current()")
+                        }
+                        sceneActionButton("Next", "chevron.right") {
+                            engine.runCommand("scene auto, next")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.apply_current()")
+                        }
+                        sceneActionButton("Delete", "trash", danger: true) {
+                            engine.runCommand("scene auto, delete")
+                            engine.runPython("from pymol import raymol_scenes as _rs; _rs.prune()")
                         }
                     }
                 }
+
+                Toggle(isOn: $showViewportButtons) {
+                    Label("Show scene buttons in viewport", systemImage: "rectangle.grid.1x2")
+                        .font(.system(size: 14))
+                }
+                .tint(TimelineTheme.accent)
+                .padding(.top, 2)
+
+                Divider().padding(.vertical, 2)
+                actionRow("Build movie from scenes", "film") { onOpenMovie?() }
+                actionRow("Clear all scenes", "xmark", destructive: true) {
+                    engine.runCommand("scene *, clear")
+                    engine.runPython("from pymol import raymol_scenes as _rs; _rs.clear_all()")
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .reportPaneHeight(5)    // natural height (before tab-bar clearance)
+            .padding(.bottom, 56)   // clear the floating tab-bar pill
         }
-        .sheet(isPresented: $showBuilder) {
-            MovieBuilderSheet(initialTab: .scenes)
+        .alert("Rename scene", isPresented: Binding(
+            get: { sceneRenameTarget != nil },
+            set: { if !$0 { sceneRenameTarget = nil } })) {
+            TextField("Scene name", text: $sceneRenameText)
+            Button("Rename") {
+                if let t = sceneRenameTarget { engine.renameScene(t, to: sceneRenameText) }
+                sceneRenameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { sceneRenameTarget = nil }
         }
     }
 
-    private func actionIcon(_ systemName: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(PanelTheme.buttonText)
-                .frame(width: 24, height: 22)
-                .background(PanelTheme.buttonBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+    private func sceneChip(_ name: String) -> some View {
+        let sel = name == engine.currentScene
+        return Button {
+            engine.runCommand("scene \(name), recall, animate=1")
+            engine.runPython("from pymol import raymol_scenes as _rs; _rs.apply('\(name)')")
+        } label: {
+            Text(name)
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .padding(.horizontal, 14).frame(height: 38)
+                .background(sel ? TimelineTheme.accent : Color.white)
+                .foregroundColor(sel ? .white : TimelineTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(TimelineTheme.accent.opacity(sel ? 0 : 0.5), lineWidth: 1.5)
+                )
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Text(name)
+            Button { engine.updateScene(name) } label: { Label("Reset to current view", systemImage: "arrow.clockwise") }
+            Button { sceneRenameText = name; sceneRenameTarget = name } label: { Label("Rename…", systemImage: "pencil") }
+            Button(role: .destructive) { engine.deleteScene(name) } label: { Label("Delete", systemImage: "trash") }
+        }
+    }
+
+    // Trailing "+" chip in the scene row — stores the current view as a new scene.
+    private var addChip: some View {
+        Button {
+            engine.runCommand("scene new, store")
+            engine.runPython("from pymol import raymol_scenes as _rs; _rs.snapshot_current()")
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .bold))
+                .frame(width: 44, height: 38)
+                .foregroundColor(TimelineTheme.accent)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(TimelineTheme.accent.opacity(0.5),
+                                      style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                )
+                // Hit the whole dashed tile, not just the glyph: without this the
+                // transparent interior between the "+" and the border isn't
+                // tappable (the Image only hit-tests its rendered glyph). (#130)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("New scene from current view")
+    }
+
+    // Persist the dragged chip order to PyMOL.
+    private func applySceneOrder() {
+        guard !sceneOrder.isEmpty else { return }
+        engine.runCommand("scene_order " + sceneOrder.joined(separator: " "))
+    }
+
+    // Compact icon+label button; several sit on one row (Update/Prev/Next/Delete).
+    private func sceneActionButton(_ title: String, _ icon: String,
+                                   danger: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: 15, weight: .medium))
+                Text(title).font(.system(size: 10, weight: .medium))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .foregroundColor(danger ? self.danger : TimelineTheme.accent)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.gray.opacity(0.13)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func actionRow(_ title: String, _ icon: String,
+                           destructive: Bool = false, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon).frame(width: 22)
+                    .foregroundColor(destructive ? danger : TimelineTheme.accent)
+                Text(title).font(.system(size: 15))
+                    .foregroundColor(destructive ? danger : PanelTheme.textColor)
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+// Reorders scene chips live as one is dragged over another (hold + move).
+private struct SceneDropDelegate: DropDelegate {
+    let item: String
+    @Binding var order: [String]
+    @Binding var dragging: String?
+    let onReorder: () -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = dragging, dragging != item,
+              let from = order.firstIndex(of: dragging),
+              let to = order.firstIndex(of: item) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            order.move(fromOffsets: IndexSet(integer: from),
+                       toOffset: to > from ? to + 1 : to)
+        }
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        onReorder()
+        return true
+    }
+}
+
+/// Left-aligned wrapping layout: places subviews left-to-right and wraps to a
+/// new row when the next subview would overflow the proposed width. Used for
+/// the scene-chip row so chips flow onto multiple rows instead of overflowing
+/// or requiring horizontal scrolling (issue #114).
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0 && rowWidth + spacing + size.width > maxWidth {
+                // wrap to next row
+                totalWidth = max(totalWidth, rowWidth)
+                totalHeight += rowHeight + spacing
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+        totalWidth = max(totalWidth, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let maxWidth = bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.minX + maxWidth {
+                // wrap to next row
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                          proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
@@ -2270,6 +3201,33 @@ struct SettingsSheet: View {
                 Button("Done") { dismiss() }
             }.padding(16)
 
+            #if os(iOS)
+            // "What's New" entry point. Close Settings first, then open the splash
+            // (a slight delay avoids presenting one sheet on top of another).
+            Button {
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    NotificationCenter.default.post(name: .raymolShowWhatsNew, object: nil)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                    Text("What's New in RayMol")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 10).padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.gray.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+            .accessibilityIdentifier("whatsNewSettingsRow")
+            #endif
+
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search \(engine.settingsCatalog.count) settings…", text: $search)
@@ -2378,6 +3336,7 @@ extension PyMOLEngine {
             let enabled: [String]
             let sel_counts: [String: Int]
             let nstate: [String: Int]?
+            let has_transp: [String: Bool]?
         }
 
         guard let payload = try? JSONDecoder().decode(PanelPayload.self, from: data) else {
@@ -2394,7 +3353,8 @@ extension PyMOLEngine {
                 isEnabled: enabledSet.contains(name),
                 isSelection: false,
                 atomCount: nil,
-                stateCount: max(payload.nstate?[name] ?? 1, 1)
+                stateCount: max(payload.nstate?[name] ?? 1, 1),
+                hasAtomTransp: payload.has_transp?[name] ?? false
             ))
         }
 

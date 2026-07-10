@@ -198,11 +198,39 @@ public:
   // darkened for spheres/sticks, gray for surface). Default: no-op.
   virtual void setInteriorCapColor(float r, float g, float b, bool overrideColor) {}
 
+  // Per-representation clip planes (eye-space distances from camera) for the
+  // NEXT lit-VBO draw (cartoon/surface). Lets one rep clip tighter than the
+  // global slab. front<0 disables per-rep clip (use the global slab only). The
+  // member persists, so callers must set it before every draw. Default: no-op.
+  virtual void setRepClip(float front, float back) {}
+
+  // Arm the surface outer-contour outline for the NEXT surface draw: enabled=true
+  // stashes that draw to be outlined (coverage-boundary) after the scene; rgba is
+  // the line color (alpha folds in the opaque/transparency choice), widthPx the
+  // on-screen thickness. enabled=false disarms (for non-surface reps). Default no-op.
+  virtual void setRepContour(bool enabled, const float* rgba, float widthPx) {}
+
+  // Arm per-rep exemption from the screen-space SSAO (crease) pass for the NEXT
+  // lit-VBO draw. exempt=true stashes that draw's geometry so its (front-most)
+  // pixels are masked out of the SSAO crease/contour darkening that otherwise
+  // paints lines on cartoon/ribbon silhouettes and self-folds (#79). Cast shadows
+  // are unaffected. The member persists, so callers set it before every draw.
+  // Default: no-op.
+  virtual void setRepScreenAO(bool exempt) {}
+
   // RGB of the 3D selection indicator squares (SceneRenderMetalSelections).
   // Driven by the active RayMol theme's selection color; defaults to pink.
   float selColor[3] = {1.0f, 0.2f, 0.6f};
   void setSelectionColor(float r, float g, float b) {
     selColor[0] = r; selColor[1] = g; selColor[2] = b;
+  }
+
+  // RGB of the transient HOVER-PREVIEW indicator points (issue #165), drawn by
+  // SceneDrawMetalPreselection at a smaller point size BEFORE the committed
+  // selColor pass so pink wins on overlap. Fixed light-cyan by default.
+  float preselColor[3] = {0.40f, 0.85f, 1.0f};
+  void setPreselectionColor(float r, float g, float b) {
+    preselColor[0] = r; preselColor[1] = g; preselColor[2] = b;
   }
 
   // VBO buffer cache — returns a cached buffer ID for the given key,
@@ -297,9 +325,22 @@ public:
       float exposure = 1.0f, int rtShadowEnabled = 0, float outlineR = 0.0f,
       float outlineG = 0.0f, float outlineB = 0.0f, float outlineWidth = 1.4f,
       int dofEnabled = 0, float dofFocus = 0.0f, float dofRange = 14.0f,
-      int temporalAO = 0, int upscaleEnabled = 0, float dofAperture = 14.0f)
+      int temporalAO = 0, int upscaleEnabled = 0, float dofAperture = 14.0f,
+      int ortho = 0)
   {
   }
+
+  // Real-time ray-tracing quality knobs (metal_rt_* settings): AO rays/pixel,
+  // AO hemisphere radius (Angstroms), AO darkening strength, cast-shadow
+  // darkening strength. Fed each frame from SceneRender. Default: no-op.
+  virtual void setRayTraceParams(int samples, float aoRadius, float aoIntensity,
+      float shadowIntensity)
+  {
+  }
+
+  // metal_dof_quality: DOF bokeh quality level (1..4) — higher = more gather
+  // samples, with a de-noise smoothing pass at levels >=2. Default: no-op.
+  virtual void setDofQuality(int level) {}
 
   // PyMOL lighting model (ambient/direct/reflect/specular/shininess). Default:
   // no-op (the GL renderer reads these settings itself). The Metal renderer
@@ -332,6 +373,13 @@ public:
   virtual void beginShadowPass() {}
   virtual void endShadowPass() {}
   virtual void setLightViewProjEye(const float* m) {}
+  // World half-extent of the shadow ortho box, so the receiver can express its
+  // self-shadow bias in Angstroms (scale-invariant) rather than a frustum
+  // fraction. Default: no-op (GL unaffected).
+  virtual void setShadowFrustum(float radius) {}
+  // User multiplier on the self-shadow depth bias (metal_shadow_bias). Default
+  // no-op (GL unaffected).
+  virtual void setShadowBias(float bias) {}
 
   // GPU-tessellated Bezier tubes ("tube cartoon"). controlPoints is a tightly
   // packed array of cubic Bezier patches: 4 Float3 control points each

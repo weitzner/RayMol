@@ -34,6 +34,7 @@ extern "C" {
 // OUTSIDE the extern "C" block below so the call resolves to the core's
 // C++ (mangled) symbol, not a C one.
 void SceneRenderMetal(PyMOLGlobals *G);
+void SceneUpdate(PyMOLGlobals *G, int force);   // layer1/Scene.cpp
 extern void ImmBatch_SetActiveRenderer(pymol::Renderer *r);
 
 // All PyMOLBridge_* entry points MUST have C linkage to match the Swift
@@ -221,6 +222,14 @@ void PyMOLBridge_SetSelectionColor(PyMOLHandle h, float r, float g, float b)
     PyMOLGlobals* G = PyMOL_GetGlobals(INST(h));
     if (!G || !G->Renderer) return;
     G->Renderer->setSelectionColor(r, g, b);
+}
+
+void PyMOLBridge_SetPreselectionColor(PyMOLHandle h, float r, float g, float b)
+{
+    if (!h) return;
+    PyMOLGlobals* G = PyMOL_GetGlobals(INST(h));
+    if (!G || !G->Renderer) return;
+    G->Renderer->setPreselectionColor(r, g, b);
 }
 
 void PyMOLBridge_CapturePNG(PyMOLHandle h, const char* path)
@@ -541,6 +550,23 @@ void PyMOLBridge_RenderHiResPNG(PyMOLHandle h, const char* path,
     G->Option->winX = savedW;
     G->Option->winY = savedH;
     PyMOL_Reshape(INST(h), savedW, savedH, 0);
+}
+
+// Rebuild any dirty object representations for the current frame/state on the
+// CALLING thread. Movie export calls this on the main thread before dispatching
+// the GPU render to a background queue: SceneUpdate can trigger
+// ObjectMolecule::update() -> OrthoBusyFast -> PLockStatusAttempt, which calls
+// into the Python C-API. Under _PYMOL_EMBEDDED, PAutoBlock is a no-op (the main
+// thread owns the interpreter's GIL persistently), so that Python call is only
+// safe on the main thread — doing it on the render queue corrupts the Python
+// heap (SIGSEGV in _PyObject_Malloc). Running the rebuild here leaves the
+// subsequent off-main SceneRenderMetal with clean reps and no Python touch.
+void PyMOLBridge_UpdateScene(PyMOLHandle h)
+{
+    if (!h) return;
+    PyMOLGlobals *G = PyMOL_GetGlobals(INST(h));
+    if (!G) return;
+    SceneUpdate(G, false);
 }
 
 // --- Getters ---

@@ -88,8 +88,10 @@ final class ThemeManager: ObservableObject {
 
     /// Push viewport bg + render toggles + molecular default palette into PyMOL.
     /// Chrome (SwiftUI) updates automatically via @Published `active`.
-    func apply(engine: PyMOLEngine) {
-        engine.applyTheme(active)
+    /// `applyRenderToggles` is passed through so the passive launch-time
+    /// re-assertion can skip the render toggles a restored session already owns.
+    func apply(engine: PyMOLEngine, applyRenderToggles: Bool = true) {
+        engine.applyTheme(active, applyRenderToggles: applyRenderToggles)
     }
 
     // MARK: - Persistence

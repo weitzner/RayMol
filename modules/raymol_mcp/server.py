@@ -1,8 +1,10 @@
 """Built-in MCP server for RayMol (stdlib-only, localhost, token-authed).
 
 Runs an http.server.ThreadingHTTPServer on 127.0.0.1 inside the embedded
-interpreter on a daemon thread. Speaks MCP "Streamable HTTP": JSON-RPC 2.0 over
-HTTP POST to /mcp, answered with a single application/json response (no SSE).
+interpreter on a daemon thread (override the bind host with the RAYMOL_MCP_BIND
+env var for dev/testing only -- see start()). Speaks MCP "Streamable HTTP":
+JSON-RPC 2.0 over HTTP POST to /mcp, answered with a single application/json
+response (no SSE).
 
 Threading: tool bodies call PyMOL's cmd API from this server thread. Safe because
 this is a real Python thread holding the GIL/API lock -- the model the old Raymond
@@ -138,6 +140,14 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # silence default stderr logging
 
+    def handle_one_request(self):
+        # A client hanging up mid-request (peer reset / broken pipe) is a benign,
+        # expected condition; swallow it quietly instead of dumping a traceback.
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError):
+            self.close_connection = True
+
     def _authed(self):
         return self.headers.get("Authorization", "") == "Bearer %s" % _token
 
@@ -226,8 +236,17 @@ def start(port, token):
         # no such variable), so production always requires the user's explicit
         # click. Set it only when launching the binary directly for testing.
         _trusted = os.environ.get("RAYMOL_MCP_AUTOTRUST") == "1"
+        # Dev/testing bind host: default 127.0.0.1 (loopback only). When
+        # RAYMOL_MCP_BIND is set (e.g. "0.0.0.0") the server binds a non-loopback
+        # interface so a client on another machine can reach it -- used to drive
+        # RayMol running inside a mac-vm-test VM from the host. Like
+        # RAYMOL_MCP_AUTOTRUST above, this env var is NEVER set in a shipped build
+        # (Finder / `open` launches carry no such variable), so production stays
+        # loopback-only. Set it only when launching the binary directly for testing.
+        # The bearer-token check still gates every request regardless of bind host.
+        bind_host = os.environ.get("RAYMOL_MCP_BIND") or "127.0.0.1"
         bind_port = port if port else 0
-        _httpd = ThreadingHTTPServer(("127.0.0.1", bind_port), _Handler)
+        _httpd = ThreadingHTTPServer((bind_host, bind_port), _Handler)
         _port = _httpd.server_address[1]
         _thread = threading.Thread(target=_httpd.serve_forever,
                                    name="raymol-mcp", daemon=True)

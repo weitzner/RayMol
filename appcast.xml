@@ -6,35 +6,73 @@
     <description>RayMol macOS updates</description>
     <language>en</language>
     <item>
-      <title>RayMol 1.4.1</title>
+      <title>RayMol 1.6.0</title>
       <description xml:lang="en" sparkle:format="markdown"><![CDATA[
-## RayMol 1.4.1
+## RayMol 1.6.0
 
-A stability and polish release on top of 1.4.0 — fewer crashes, lighter memory use, and smoother editing.
+A big feature release: a Photos-style camera dock with real depth-of-field, a
+docked Timeline movie studio, multi-state (NMR/MD) support in movies, and a
+batch of inspector and rendering improvements.
 
-### Stability
-- **Fixed several crashes and a data-loss case.** Three issues found in review that could crash the app or lose unsaved work are resolved.
-- **Plugged Metal memory & resource leaks.** The renderer no longer accumulates GPU memory and resources over a long session, so RayMol stays lighter the longer it runs.
+### Camera & lens
+- **New camera control dock.** A Photos-style strip docked at the bottom of the
+  viewport for framing and lens controls — collapses to icons, expands for the
+  sliders.
+- **Lens (focal length).** Dial the camera from wide-angle to telephoto (down to
+  12 mm) with a true dolly-zoom — it swaps perspective without re-zooming the
+  subject. Ortho is now a toggle right in the Lens row.
+- **Zoom (magnification) slider.** Absolute on-screen magnification, independent
+  of the lens.
 
-### Rendering & export
-- **Accurate high-resolution export.** Depth-of-field blur and outline width now scale with the output resolution, so a hi-res render looks like what you see on screen (WYSIWYG).
-- **Cleaner tone mapping.** Tone-map and exposure no longer subtly muddy the render.
+### Depth of field
+- **Autofocus.** Lock the focal plane to a selection and it tracks through zoom.
+- **DOF quality slider (1–4)**, defaulting to best, replacing the old on/off
+  toggle.
+- **Scatter-based bokeh** that spreads highlights past object edges for a
+  natural out-of-focus falloff. Transparent image export keeps DOF with a
+  halo-aware matte.
 
-### Performance
-- **Smoother movie export.** Movie rendering now runs off the main thread, so the interface stays responsive while a movie is being written.
-- **Snappier color editing.** The inspector color pickers are debounced, so dragging a color no longer stutters the view.
+### Movies & Timeline
+- **Timeline movie studio.** A docked multi-track editor for building movies —
+  drag-and-drop camera keyframes and scenes onto the timeline, with configurable
+  transitions. Lives in the right inspector with an expandable bottom dock.
+- **Multi-state (NMR / MD) objects.** Play through the models of an ensemble
+  with a "Play models" clip and per-object model playback, decoupled from the
+  movie transport. State-aware rebuilds are non-destructive.
 
-### Under the hood
-- AI/MCP control is now thread-safe — automated commands are marshaled onto the main thread, fixing intermittent failures.
-- Packaging scripts now fail loudly rather than ever shipping a broken bundle.
+### Inspector
+- **Per-atom transparency.** The inspector now surfaces per-atom transparency
+  baked into a session and lets you clear it back to opaque.
+- **Representation controls populate reliably** when you expand a structure,
+  across every layout.
+- **Half-screen expand** for the object list, a dynamic state slider, and a
+  shared selection-mode menu.
+- **Clear-selection button** sits next to the Residues toggle to wipe the
+  active selection in one tap.
+
+### Rendering
+- **Real-time ray tracing restored,** with quality controls — hardware-accelerated
+  ambient occlusion and shadows update live as you orbit.
+
+### macOS app
+- **Native right-click context menu** on the viewport.
+- **Help ▸ Contact Support…** opens a message to support@raymol.io.
+- **What's New splash** on update, and a narrower, tidier right inspector.
+
+### Fixes
+- **Scenes now capture and restore render settings** (DOF, lighting, Metal
+  toggles) per scene, and no longer throw a spurious thumbnail-save error.
+- **Restoring a saved session no longer clobbers its render toggles** when the
+  launch theme re-applies.
+- **The viewport stays in sync** while you drag the movie playhead.
 
 Built on the open-source PyMOL engine. Updates install automatically via the in-app updater (**Check for Updates…** in the app menu).
 ]]></description>
-      <pubDate>Mon, 29 Jun 2026 22:09:19 +0000</pubDate>
-      <sparkle:version>13</sparkle:version>
-      <sparkle:shortVersionString>1.4.1</sparkle:shortVersionString>
+      <pubDate>Wed, 08 Jul 2026 20:54:45 +0000</pubDate>
+      <sparkle:version>17</sparkle:version>
+      <sparkle:shortVersionString>1.6.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.4.1/RayMol-1.4.1.dmg" type="application/octet-stream" sparkle:edSignature="AV3SiilQFdSsRPYSV4T3lO0gj0+95TaN3JtxmPDs2loCNXerGyTpB2WoG5dl7eGZM1K5PViK14rz/Ajtl37fAg==" length="55799037" />
+      <enclosure url="https://github.com/javierbq/RayMol/releases/download/v1.6.0/RayMol-1.6.0.dmg" type="application/octet-stream" sparkle:edSignature="5lCb6XFygRWjaIOeOjz42fjIgNzUQH8OJRgVK3CI6TrYPftia+Eb2aUOpg2nMFhRGnDGaKyuhqTVZOXj8v5xAg==" length="57628349" />
     </item>
   </channel>
 </rss>

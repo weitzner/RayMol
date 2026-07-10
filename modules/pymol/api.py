@@ -403,6 +403,7 @@ from .viewing import \
       set_colorection,    \
       set_vis,            \
       set_view,           \
+      set_fov,            \
       show,               \
       spectrum,           \
       stereo,             \

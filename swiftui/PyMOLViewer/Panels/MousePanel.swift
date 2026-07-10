@@ -440,6 +440,27 @@ struct MousePanel: View {
                 }
 
             Spacer()
+
+            #if os(macOS)
+            // Compact "Hover" toggle: preview what a click would select as the
+            // pointer moves (issue #165). Turning it off also clears any lingering
+            // preview. macOS-only — iPad hover is a follow-up (see MetalViewport).
+            Text("Hover")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(actionColor)
+            // NB: `Binding` is shadowed by a private typealias in this file, so
+            // fully qualify the SwiftUI Binding (matches modeHeader above).
+            Toggle("", isOn: SwiftUI.Binding(
+                get: { engine.hoverPreviewEnabled },
+                set: { on in
+                    engine.hoverPreviewEnabled = on
+                    if !on { engine.clearHoverPreview() }
+                }))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .fixedSize()
+            #endif
         }
     }
 }

@@ -6,6 +6,23 @@
 
 PYMOL_ROOT = $(SRCROOT)/..
 
+// External package-manager prefix (Homebrew by default). For MacPorts or a
+// custom prefix, create PyMOLBridge.local.xcconfig (gitignored, not checked
+// in) next to this file with e.g.:
+//   PYMOL_EXTERNAL_PREFIX = /opt/local
+//   PYMOL_LIBOMP_STATIC = /opt/local/lib/libomp/libomp.a
+//
+// PYMOL_LIBOMP_STATIC does NOT derive correctly from PYMOL_EXTERNAL_PREFIX
+// alone — Homebrew's keg layout ships a static libomp.a under opt/libomp/lib,
+// while MacPorts ships only a dynamic libomp.dylib under lib/libomp, a
+// structurally different layout, not just a different prefix. Anyone setting
+// PYMOL_EXTERNAL_PREFIX to a non-Homebrew prefix MUST also override
+// PYMOL_LIBOMP_STATIC explicitly (it can hold a full "-L... -lomp" flag pair
+// instead of a bare path, e.g. "-L/opt/local/lib/libomp -lomp").
+PYMOL_EXTERNAL_PREFIX = /opt/homebrew
+PYMOL_LIBOMP_STATIC = $(PYMOL_EXTERNAL_PREFIX)/opt/libomp/lib/libomp.a
+#include? "PyMOLBridge.local.xcconfig"
+
 // Platform-conditional build directories
 PYMOL_BUILD_MACOS = $(SRCROOT)/../build_macos_swiftui
 // PYMOL_BUILD_IOS = iphonesimulator core; PYMOL_BUILD_IOS_DEVICE = iphoneos core
@@ -15,7 +32,7 @@ PYMOL_BUILD_IOS_DEVICE = $(SRCROOT)/../build_ios_device
 // --- Library search paths (platform-conditional) ---
 // macOS: the NO_OPENGL+Metal core (build_macos_swiftui) + embedded standalone
 // Python 3.13; /opt/homebrew/lib only supplies freetype/png at LINK time.
-LIBRARY_SEARCH_PATHS[sdk=macosx*] = $(PYMOL_BUILD_MACOS) $(SRCROOT)/../deps_macos/python-standalone/python/lib /opt/homebrew/lib
+LIBRARY_SEARCH_PATHS[sdk=macosx*] = $(PYMOL_BUILD_MACOS) $(SRCROOT)/../deps_macos/python-standalone/python/lib $(PYMOL_EXTERNAL_PREFIX)/lib
 LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PYMOL_BUILD_IOS_DEVICE)
 LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PYMOL_BUILD_IOS)
 
@@ -24,7 +41,7 @@ LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PYMOL_BUILD_IOS)
 LD_RUNPATH_SEARCH_PATHS[sdk=macosx*] = $(inherited) @executable_path/../Resources/python/lib
 
 // --- C++/ObjC++ include paths ---
-PYMOL_INCLUDE_FLAGS_COMMON = -I$(PYMOL_ROOT)/include -I$(PYMOL_ROOT)/include/pymol -I$(PYMOL_ROOT)/ov/src -I$(PYMOL_ROOT)/layer0 -I$(PYMOL_ROOT)/layer1 -I$(PYMOL_ROOT)/layer2 -I$(PYMOL_ROOT)/layer3 -I$(PYMOL_ROOT)/layer4 -I$(PYMOL_ROOT)/layer5 -I$(PYMOL_ROOT)/layerGraphics -I$(PYMOL_ROOT)/layerGraphics/gl -I$(PYMOL_ROOT)/layerGraphics/metal -I$(PYMOL_ROOT)/contrib -I$(PYMOL_ROOT)/contrib/pocketfft -I/opt/homebrew/include
+PYMOL_INCLUDE_FLAGS_COMMON = -I$(PYMOL_ROOT)/include -I$(PYMOL_ROOT)/include/pymol -I$(PYMOL_ROOT)/ov/src -I$(PYMOL_ROOT)/layer0 -I$(PYMOL_ROOT)/layer1 -I$(PYMOL_ROOT)/layer2 -I$(PYMOL_ROOT)/layer3 -I$(PYMOL_ROOT)/layer4 -I$(PYMOL_ROOT)/layer5 -I$(PYMOL_ROOT)/layerGraphics -I$(PYMOL_ROOT)/layerGraphics/gl -I$(PYMOL_ROOT)/layerGraphics/metal -I$(PYMOL_ROOT)/contrib -I$(PYMOL_ROOT)/contrib/pocketfft -I$(PYMOL_EXTERNAL_PREFIX)/include
 
 // Python headers: macOS uses Homebrew 3.14, iOS uses BeeWare 3.13
 PYMOL_PYTHON_INC[sdk=macosx*] = -I$(SRCROOT)/../deps_macos/python-standalone/python/include/python3.13
@@ -38,11 +55,15 @@ PYMOL_GENERATED_FLAGS[sdk=macosx*] = -I$(PYMOL_BUILD_MACOS)/generated
 PYMOL_GENERATED_FLAGS[sdk=iphoneos*] = -I$(PYMOL_BUILD_IOS_DEVICE)/generated
 PYMOL_GENERATED_FLAGS[sdk=iphonesimulator*] = -I$(PYMOL_BUILD_IOS)/generated
 
-// On iOS, define _PYMOL_NO_OPENGL and _PYMOL_IOS to compile out GL code (Metal-only)
-PYMOL_IOS_FLAGS[sdk=iphoneos*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
-PYMOL_IOS_FLAGS[sdk=iphonesimulator*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
+// Compile out real-GL code (Metal-only) with the same macros the CMake core
+// build uses (appkit/CMakeLists.txt PYMOL_IOS / PYMOL_METAL_ONLY branches) —
+// the bridge file must agree with libpymol_core.a on this or shared headers
+// like layer0/os_gl.h produce mismatched types between the two.
+PYMOL_NOGL_FLAGS[sdk=macosx*] = -D_PYMOL_NO_OPENGL -D_PYMOL_METAL_ONLY
+PYMOL_NOGL_FLAGS[sdk=iphoneos*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
+PYMOL_NOGL_FLAGS[sdk=iphonesimulator*] = -D_PYMOL_NO_OPENGL -D_PYMOL_IOS
 
-OTHER_CPLUSPLUSFLAGS = $(inherited) $(PYMOL_INCLUDE_FLAGS) $(PYMOL_GENERATED_FLAGS) $(PYMOL_IOS_FLAGS)
+OTHER_CPLUSPLUSFLAGS = $(inherited) $(PYMOL_INCLUDE_FLAGS) $(PYMOL_GENERATED_FLAGS) $(PYMOL_NOGL_FLAGS)
 
 // --- Linker flags ---
 // iOS cross-compiled dependencies
@@ -72,7 +93,7 @@ PYMOL_CORE_LDFLAGS = -lpymol_core -framework Metal -framework MetalKit -framewor
 // so the linker uses the archive, not the .dylib) to resolve the OpenMP symbols
 // from pymol_core's parallel surface sampling — no dylib to bundle/sign, so the
 // App Store build stays self-contained.
-PYMOL_PLATFORM_LDFLAGS[sdk=macosx*] = -lfreetype -lpng16 -lz -lpython3.13 /opt/homebrew/opt/libomp/lib/libomp.a
+PYMOL_PLATFORM_LDFLAGS[sdk=macosx*] = -lfreetype -lpng16 -lz -lpython3.13 $(PYMOL_LIBOMP_STATIC)
 // iOS: cross-compiled dependencies + Python dylib linked by path
 PYMOL_PLATFORM_LDFLAGS[sdk=iphoneos*] = -lfreetype -lpng16 -lz $(PYMOL_PYTHON_DYLIB)
 PYMOL_PLATFORM_LDFLAGS[sdk=iphonesimulator*] = -lfreetype -lpng16 -lz $(PYMOL_PYTHON_DYLIB)

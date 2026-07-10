@@ -31,6 +31,8 @@ void PyMOLBridge_Drag(PyMOLHandle instance, int x, int y, int modifiers);
 void PyMOLBridge_SetLetterboxAspect(PyMOLHandle instance, float aspect);
 // RGB (0..1) of the 3D selection indicator squares — set from the active theme.
 void PyMOLBridge_SetSelectionColor(PyMOLHandle instance, float r, float g, float b);
+// RGB (0..1) of the transient hover-preview indicator points (issue #165).
+void PyMOLBridge_SetPreselectionColor(PyMOLHandle instance, float r, float g, float b);
 void PyMOLBridge_CapturePNG(PyMOLHandle instance, const char* path);
 // Hi-res offscreen render → PNG: reshape PyMOL to width×height, render the full
 // Metal pipeline (all reps + hardware-RT AO/shadows) into offscreen targets at
@@ -40,6 +42,10 @@ void PyMOLBridge_CapturePNG(PyMOLHandle instance, const char* path);
 // (WYSIWYG); 0 = force OFF; 1 = force ON for this export only (the live setting
 // is saved and restored, so the on-screen view is unchanged).
 void PyMOLBridge_RenderHiResPNG(PyMOLHandle instance, const char* path, int width, int height, int rayTraced);
+// Rebuild dirty object representations on the calling thread. Call on the MAIN
+// thread before an off-main renderHiResPNG so the rep rebuild (which touches the
+// Python C-API via the busy-status callback) doesn't run on the render queue.
+void PyMOLBridge_UpdateScene(PyMOLHandle instance);
 // Hardware ray-tracing capability of the active GPU. 1 = supported,
 // 0 = not supported, -1 = unknown (renderer not yet created). Lets the UI
 // gate the metal_raytrace toggle so it isn't offered where it does nothing.

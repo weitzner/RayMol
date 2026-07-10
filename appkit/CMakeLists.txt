@@ -38,6 +38,11 @@ endif()
 # Homebrew Python. Builds only pymol_core (no AppKit executable).
 option(PYMOL_METAL_ONLY "Native macOS Metal-only build (no OpenGL)" OFF)
 
+# External package-manager prefix for build-time headers/libs not vendored in
+# deps_macos/deps_ios (freetype, libpng, glm, GLEW). Homebrew by default;
+# override with -DPYMOL_EXTERNAL_PREFIX=/opt/local for MacPorts.
+set(PYMOL_EXTERNAL_PREFIX "/opt/homebrew" CACHE PATH "External package-manager prefix (Homebrew/MacPorts)")
+
 # Options
 option(PYMOL_LIBXML "Enable libxml2 (COLLADA)" ON)
 option(PYMOL_VMD_PLUGINS "Enable VMD plugins" ON)
@@ -51,7 +56,7 @@ if(PYMOL_METAL_ONLY)
     # PyMOLBridge.xcconfig. Python headers come from the staged
     # python-build-standalone tree (PYMOL_PYTHON_INCLUDE_DIR); png/freetype
     # headers from Homebrew (build-time only).
-    set(BREW_PREFIX "/opt/homebrew")
+    set(BREW_PREFIX "${PYMOL_EXTERNAL_PREFIX}")
     set(Python3_INCLUDE_DIRS "${PYMOL_PYTHON_INCLUDE_DIR}")
     set(Python3_NumPy_INCLUDE_DIRS "")
     set(PNG_INCLUDE_DIRS "${BREW_PREFIX}/include/libpng16" "${BREW_PREFIX}/include")
@@ -108,7 +113,7 @@ file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/generated)
 
 # For iOS / metal-only, find the host Python to run the shader generator
 if(PYMOL_IOS OR PYMOL_METAL_ONLY)
-    find_program(HOST_PYTHON python3 HINTS /opt/homebrew/bin /usr/bin)
+    find_program(HOST_PYTHON python3 HINTS /opt/homebrew/bin ${PYMOL_EXTERNAL_PREFIX}/bin /usr/bin)
 else()
     set(HOST_PYTHON ${Python3_EXECUTABLE})
 endif()
@@ -257,7 +262,8 @@ target_compile_options(pymol_core PRIVATE ${PYMOL_COMPILE_FLAGS})
 option(PYMOL_OPENMP "Parallelize surface sampling with OpenMP" ON)
 if(PYMOL_OPENMP AND NOT PYMOL_IOS)
     find_path(LIBOMP_INCLUDE omp.h
-        HINTS /opt/homebrew/opt/libomp/include /usr/local/opt/libomp/include)
+        HINTS /opt/homebrew/opt/libomp/include /usr/local/opt/libomp/include
+              ${PYMOL_EXTERNAL_PREFIX}/include/libomp ${PYMOL_EXTERNAL_PREFIX}/opt/libomp/include)
     if(LIBOMP_INCLUDE)
         target_compile_definitions(pymol_core PRIVATE PYMOL_OPENMP)
         target_compile_options(pymol_core PRIVATE -Xpreprocessor -fopenmp)
@@ -287,10 +293,10 @@ if(GLM_INCLUDE)
 endif()
 
 if(PYMOL_LIBXML AND NOT PYMOL_IOS)
-    find_library(XML2_LIB xml2 HINTS /opt/homebrew/lib)
+    find_library(XML2_LIB xml2 HINTS /opt/homebrew/lib ${PYMOL_EXTERNAL_PREFIX}/lib)
     find_path(XML2_INCLUDE libxml/parser.h
         PATH_SUFFIXES libxml2
-        HINTS /opt/homebrew/include)
+        HINTS /opt/homebrew/include ${PYMOL_EXTERNAL_PREFIX}/include)
     if(XML2_LIB AND XML2_INCLUDE)
         target_compile_definitions(pymol_core PRIVATE _HAVE_LIBXML)
         target_include_directories(pymol_core PRIVATE ${XML2_INCLUDE})

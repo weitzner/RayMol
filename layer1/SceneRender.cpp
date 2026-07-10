@@ -1844,7 +1844,7 @@ static void SceneRenderPostProcessStack(PyMOLGlobals* G, const GLFramebufferConf
 // scene radius. Loaded as the renderer's PROJECTION while MODELVIEW stays the
 // camera modelview, so vbo_vertex's projection*(modelview*model) yields light
 // clip for model-space vertices.
-static glm::mat4 SceneBuildLightViewProjEye(PyMOLGlobals* G)
+static glm::mat4 SceneBuildLightViewProjEye(PyMOLGlobals* G, float* outRadius = nullptr)
 {
   float mn[3], mx[3];
   glm::vec3 centerEye(0.0f);
@@ -1872,6 +1872,9 @@ static glm::mat4 SceneBuildLightViewProjEye(PyMOLGlobals* G)
   glm::mat4 lightView = glm::lookAt(lightPos, centerEye, up);
   glm::mat4 lightProj =
       glm::ortho(-radius, radius, -radius, radius, 0.05f, radius * 4.0f);
+  if (outRadius)
+    *outRadius = radius; // world half-extent of the ortho box; the renderer
+                         // turns this into a scale-aware shadow bias (Angstroms)
   return lightProj * lightView;
 }
 
@@ -2039,6 +2042,22 @@ void SceneRenderMetal(PyMOLGlobals* G)
     float outlineWidth = SettingGetGlobal_f(G, cSetting_metal_outline_width);
     int dofEnabled = SettingGetGlobal_b(G, cSetting_metal_dof) ? 1 : 0;
     float dofFocus = SettingGetGlobal_f(G, cSetting_metal_dof_focus);
+    if (SettingGetGlobal_b(G, cSetting_metal_dof_autofocus)) {
+      // Autofocus: lock the focal plane onto the "dof_focus" selection (a
+      // snapshot of 'sele' taken when autofocus was enabled). Recompute its
+      // centroid's eye-space depth every frame so the element stays sharp as the
+      // camera zooms/rotates/pans. Overrides the manual focus slider; an empty
+      // selection leaves dofFocus at 0 and falls through to the origin below.
+      dofFocus = 0.0f;
+      float mn[3], mx[3];
+      if (ExecutiveGetExtent(G, "dof_focus", mn, mx, true, -1, false)) {
+        float cx = (mn[0] + mx[0]) * 0.5f, cy = (mn[1] + mx[1]) * 0.5f,
+              cz = (mn[2] + mx[2]) * 0.5f;
+        float ez = mv[2] * cx + mv[6] * cy + mv[10] * cz + mv[14];
+        if (-ez > 0.0f)
+          dofFocus = -ez;
+      }
+    }
     if (dofFocus <= 0.0f) {
       // Auto-focus on the center of interest (the rotation origin) rather than
       // the screen-center pixel. The origin's eye-space distance is
@@ -2055,20 +2074,47 @@ void SceneRenderMetal(PyMOLGlobals* G)
     int temporalAO = SettingGetGlobal_b(G, cSetting_metal_temporal_ao) ? 1 : 0;
     int upscaleEnabled = SettingGetGlobal_b(G, cSetting_metal_upscale) ? 1 : 0;
     float dofAperture = SettingGetGlobal_f(G, cSetting_metal_dof_aperture);
+    // Orthographic projection: the SSAO/shadow (and RT AO/shadow) post passes
+    // reconstruct eye-space position/normal from the depth buffer with the
+    // PERSPECTIVE inverse. Under an ortho projection that inverse is wrong /
+    // near-singular, so the reconstructed positions and normals become garbage and
+    // the shadow/AO terms drive whole regions of cartoon/sticks/spheres fully black
+    // (#139). Pass the flag so the shaders select the linear ortho reconstruction.
+    int orthoEnabled = SettingGetGlobal_b(G, cSetting_ortho) ? 1 : 0;
     G->Renderer->setPostParams(fogEnabled, fogStart, fogEnd, bg[0], bg[1],
         bg[2], aoEnabled, shadowEnabled, aaEnabled, outlineEnabled, proj[10],
         proj[14], proj[0], proj[5], rtEnabled, tonemapEnabled, exposure,
         rtShadowEnabled, outlineCol[0], outlineCol[1], outlineCol[2],
         outlineWidth, dofEnabled, dofFocus, dofRange, temporalAO,
-        upscaleEnabled, dofAperture);
+        upscaleEnabled, dofAperture, orthoEnabled);
+    // Real-time RT quality knobs (metal_rt_*): AO rays/pixel, AO radius (A),
+    // AO intensity, cast-shadow intensity — applied in RendererMetal::runPostChain.
+    G->Renderer->setRayTraceParams(
+        SettingGetGlobal_i(G, cSetting_metal_rt_samples),
+        SettingGetGlobal_f(G, cSetting_metal_rt_ao_radius),
+        SettingGetGlobal_f(G, cSetting_metal_rt_ao_intensity),
+        SettingGetGlobal_f(G, cSetting_metal_rt_shadow_intensity));
+    G->Renderer->setDofQuality(
+        SettingGetGlobal_i(G, cSetting_metal_dof_quality));
     // Lighting model — the Metal lit shaders read these instead of hard-coded
-    // constants, so the Scene-panel lighting sliders take effect.
+    // constants, so the Scene-panel lighting sliders take effect. Specular and
+    // shininess must go through PyMOL's light-count adjustment (the same path
+    // GL uses in CShaderPrg::Set_Specular_Values), NOT the raw settings: the
+    // default specular=1.0 is meant to resolve to specular_intensity (0.5), and
+    // spec_reflect/spec_count/light_count further scale it. Feeding the raw 1.0
+    // made the reflect highlight ~2x too strong, so flat cartoon β-sheets read
+    // as rounded/lumpy (issue #72). The Metal lit shader applies specular only
+    // from the reflect light (direct spec is 0, matching GL's default), so we
+    // pass the adjusted reflect specular/shininess into the spec/shininess slots.
+    float specReflect, specPower, specDirect, specDirectPower;
+    SceneGetAdjustedLightValues(
+        G, &specReflect, &specPower, &specDirect, &specDirectPower);
     G->Renderer->setLightingParams(
         SettingGetGlobal_f(G, cSetting_ambient),
         SettingGetGlobal_f(G, cSetting_direct),
         SettingGetGlobal_f(G, cSetting_reflect),
-        SettingGetGlobal_f(G, cSetting_specular),
-        SettingGetGlobal_f(G, cSetting_shininess),
+        specReflect,
+        specPower,
         SettingGetGlobal_f(G, cSetting_metal_sss_wrap));
     // MSAA: 4x when metal_msaa is on, otherwise single-sample. The renderer
     // stashes this and applies it at the next setDrawable (no encoder open),
@@ -2116,9 +2162,12 @@ void SceneRenderMetal(PyMOLGlobals* G)
   // (an object visible only in cell B darkening an object in cell A). Grid mode
   // therefore renders unshadowed (geometry-only parity for now).
   if (!I->grid.active && SettingGetGlobal_b(G, cSetting_metal_shadows)) {
-    glm::mat4 lightVP_eye = SceneBuildLightViewProjEye(G);
+    float shadowRadius = 1.0f;
+    glm::mat4 lightVP_eye = SceneBuildLightViewProjEye(G, &shadowRadius);
     const float* mvp = SceneGetModelViewMatrixPtr(G);
     G->Renderer->setLightViewProjEye(glm::value_ptr(lightVP_eye));
+    G->Renderer->setShadowFrustum(shadowRadius);
+    G->Renderer->setShadowBias(SettingGetGlobal_f(G, cSetting_metal_shadow_bias));
     G->Renderer->matrixMode(0x1701); // PROJECTION = light VP (eye space)
     G->Renderer->loadMatrixf(glm::value_ptr(lightVP_eye));
     G->Renderer->matrixMode(0x1700); // MODELVIEW = camera modelview
@@ -2196,22 +2245,34 @@ void SceneRenderMetal(PyMOLGlobals* G)
 }
 
 // Draw a batch of selection-indicator points (overlay, no depth test) at the
-// given world coordinates with the active theme's selection color.
-static void SceneDrawMetalSelectionPoints(
-    PyMOLGlobals* G, const std::vector<float>& coords)
+// given world coordinates in `color` at `pointSize`. Shared by the committed
+// selection pass (selColor, 12px) and the hover-preview pass (preselColor, 9px).
+static void SceneDrawMetalSelectionPoints(PyMOLGlobals* G,
+    const std::vector<float>& coords, const float* color, float pointSize)
 {
   if (coords.empty())
     return;
   int nPoints = (int)(coords.size() / 3);
   G->Renderer->disable(pymol::Capability::DepthTest);
-  G->Renderer->pointSize(12.0f); // Retina: need ~2x for visible size
+  G->Renderer->pointSize(pointSize); // Retina: need ~2x for visible size
   G->Renderer->beginBatch(pymol::PrimitiveType::Points);
-  G->Renderer->batchColor4f(G->Renderer->selColor[0], G->Renderer->selColor[1],
-      G->Renderer->selColor[2], 1.0f);
+  G->Renderer->batchColor4f(color[0], color[1], color[2], 1.0f);
   for (int i = 0; i < nPoints; i++)
     G->Renderer->batchVertex3f(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
   G->Renderer->endBatch();
   G->Renderer->enable(pymol::Capability::DepthTest);
+}
+
+// Draw the transient hover-preview selection ('_preselect', issue #165) for the
+// current grid cell (or the whole scene when grid is inactive) in the
+// renderer's preselColor at a smaller point size than the committed pass. Called
+// BEFORE the committed selColor pass so an already-selected residue keeps its
+// committed pink color under the cursor (pink overdraws cyan).
+static void SceneDrawMetalPreselection(PyMOLGlobals* G)
+{
+  std::vector<float> coords;
+  ExecutiveGetNamedSelectionCoords(G, "_preselect", coords);
+  SceneDrawMetalSelectionPoints(G, coords, G->Renderer->preselColor, 9.0f);
 }
 
 void SceneRenderMetalSelections(PyMOLGlobals* G)
@@ -2232,9 +2293,12 @@ void SceneRenderMetalSelections(PyMOLGlobals* G)
         static_cast<std::uint32_t>(vpH)};
     for (int slot = I->grid.first_slot; slot <= I->grid.last_slot; ++slot) {
       SceneSetMetalGridCell(G, &I->grid, sceneVP, slot);
+      // Hover preview FIRST (distinct color/smaller size), then the committed
+      // selection ON TOP so pink wins where the two overlap.
+      SceneDrawMetalPreselection(G);
       std::vector<float> coords;
       ExecutiveGetSelectionCoords(G, coords);
-      SceneDrawMetalSelectionPoints(G, coords);
+      SceneDrawMetalSelectionPoints(G, coords, G->Renderer->selColor, 12.0f);
     }
     G->Renderer->disable(pymol::Capability::ScissorTest);
     G->Renderer->viewport(vpX, vpY, vpW, vpH);
@@ -2242,7 +2306,10 @@ void SceneRenderMetalSelections(PyMOLGlobals* G)
     return;
   }
 
+  // Hover preview FIRST (distinct color/smaller size), then the committed
+  // selection ON TOP so pink wins where the two overlap.
+  SceneDrawMetalPreselection(G);
   std::vector<float> coords;
   ExecutiveGetSelectionCoords(G, coords);
-  SceneDrawMetalSelectionPoints(G, coords);
+  SceneDrawMetalSelectionPoints(G, coords, G->Renderer->selColor, 12.0f);
 }

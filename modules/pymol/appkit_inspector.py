@@ -19,8 +19,12 @@ REPS = ['lines', 'sticks', 'ribbon', 'cartoon', 'dots', 'spheres',
 # Numeric/bool settings exposed per rep (besides color, handled separately).
 REP_SETTINGS = {
     'cartoon':    ['cartoon_transparency', 'cartoon_loop_radius',
-                   'cartoon_tube_radius', 'cartoon_fancy_helices'],
-    'surface':    ['transparency', 'surface_quality', 'solvent_radius', 'metal_interior_cap'],
+                   'cartoon_tube_radius', 'cartoon_fancy_helices',
+                   'cartoon_flat_sheets'],
+    'surface':    ['transparency', 'surface_quality', 'solvent_radius',
+                   'surface_clip_front', 'surface_clip_back', 'metal_interior_cap',
+                   'surface_contour', 'surface_contour_width',
+                   'surface_contour_opaque'],
     'sticks':     ['stick_transparency', 'stick_radius', 'stick_h_scale', 'metal_interior_cap'],
     'spheres':    ['sphere_transparency', 'sphere_scale', 'metal_interior_cap'],
     'nb_spheres': ['nb_spheres_size'],
@@ -40,12 +44,35 @@ REP_COLOR = {
     'dots': 'dot_color', 'lines': 'line_color', 'labels': 'label_color',
 }
 
+# Extra per-rep color settings (besides the main rep color), resolved to
+# '#rrggbb'/'inherit' and sent in the rep's 'colors' dict for color-kind controls.
+REP_EXTRA_COLORS = {
+    'surface': ['surface_contour_color'],
+}
+
+# Transparency settings that PyMOL actually supports at the ATOM level, i.e. that
+# can carry per-atom overrides. ribbon_transparency and stick_transparency are
+# object-level only and can never differ per atom, so they are intentionally
+# excluded (they would never flag). `transparency` is the surface/mesh/dots one.
+REP_TRANSP = {
+    'cartoon': 'cartoon_transparency',
+    'spheres': 'sphere_transparency',
+    'surface': 'transparency',
+    'mesh': 'transparency',
+    'dots': 'transparency',
+}
+TRANSP_SETTINGS = ['cartoon_transparency', 'sphere_transparency', 'transparency']
+
 SCENE_SETTINGS = ['metal_raytrace', 'metal_rt_shadows', 'metal_shadows', 'metal_ssao',
+                  'metal_rt_samples', 'metal_rt_ao_radius', 'metal_rt_ao_intensity',
+                  'metal_rt_shadow_intensity',
                   'metal_outline', 'metal_outline_width', 'metal_msaa',
                   'metal_tonemap', 'metal_exposure',
                   'metal_sss_wrap', 'metal_dof', 'metal_dof_focus',
-                  'metal_dof_range', 'metal_dof_aperture', 'metal_temporal_ao', 'metal_upscale',
-                  'depth_cue', 'fog', 'field_of_view', 'surface_quality',
+                  'metal_dof_range', 'metal_dof_aperture', 'metal_dof_quality',
+                  'metal_dof_autofocus',
+                  'metal_temporal_ao', 'metal_upscale',
+                  'depth_cue', 'fog', 'field_of_view', 'ortho', 'surface_quality',
                   'grid_mode', 'all_states', 'mouse_selection_mode',
                   'ambient', 'direct', 'reflect', 'specular', 'shininess',
                   'ray_opaque_background']
@@ -133,10 +160,69 @@ def _color_setting_rgb(setting, fallback=(0.0, 0.0, 0.0)):
     return [float(t[0]), float(t[1]), float(t[2])]
 
 
+def transp_summary(obj):
+    """One pass over `obj`'s atoms → {setting: (min, max, over)} for the atom-level
+    transparency settings, where min/max are the EFFECTIVE per-atom transparency
+    (the atom-level value if set, else the object-level value) and `over` is True
+    when that range differs from the object-level value — i.e. per-atom overrides
+    make the object-level slider misleading. Settings with no atoms are omitted.
+
+    Reading `s.<setting>` in iterate always resolves to the object-level value when
+    no atom-level override exists (it never returns None here), so comparing the
+    effective range to the object-level value is what detects a genuine override.
+    """
+    objlv = {s: _num(s, obj) for s in TRANSP_SETTINGS}
+    mn = {s: None for s in TRANSP_SETTINGS}
+    mx = {s: None for s in TRANSP_SETTINGS}
+
+    def _visit(vals):
+        for i, s in enumerate(TRANSP_SETTINGS):
+            e = objlv[s] if vals[i] is None else float(vals[i])
+            if mn[s] is None or e < mn[s]:
+                mn[s] = e
+            if mx[s] is None or e > mx[s]:
+                mx[s] = e
+
+    expr = '_visit((%s))' % ', '.join('s.%s' % s for s in TRANSP_SETTINGS)
+    try:
+        cmd.iterate(obj, expr, space={'_visit': _visit})
+    except Exception:
+        return {}
+    out = {}
+    for s in TRANSP_SETTINGS:
+        if mn[s] is None:
+            continue
+        over = (round(mn[s], 4) != round(objlv[s], 4)) or (round(mx[s], 4) != round(objlv[s], 4))
+        out[s] = (round(mn[s], 4), round(mx[s], 4), over)
+    return out
+
+
+def object_has_atom_transp(obj):
+    """True when any ACTIVE rep of `obj` has a per-atom transparency override — the
+    signal for the collapsed-row badge. Rep-gated so an override on a hidden rep
+    (which the user can't see and the expanded card wouldn't show) doesn't flag.
+    The count_atoms probe runs only when an override exists (cheap short-circuit).
+    """
+    summ = transp_summary(obj)
+    for rep, setting in REP_TRANSP.items():
+        entry = summ.get(setting)
+        if entry and entry[2]:
+            try:
+                if cmd.count_atoms('(%s) & rep %s' % (obj, rep)) > 0:
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 def _build(objs):
     detail = {}
     for o in objs:
         reps = []
+        # Effective per-atom transparency range per setting, computed once per
+        # object; attached to the rep whose transparency setting is overridden so
+        # the expanded card can show "per-atom: min–max" and a Clear action.
+        summ = transp_summary(o)
         for r in REPS:
             try:
                 present = cmd.count_atoms('(%s) & rep %s' % (o, r)) > 0
@@ -146,11 +232,31 @@ def _build(objs):
                 continue
             vals = {s: _num(s, o) for s in REP_SETTINGS.get(r, [])}
             col = _rep_color(o, REP_COLOR[r]) if r in REP_COLOR else 'inherit'
-            reps.append({'rep': r, 'vis': 1, 'vals': vals, 'color': col})
+            cols = {s: _rep_color(o, s) for s in REP_EXTRA_COLORS.get(r, [])}
+            rep = {'rep': r, 'vis': 1, 'vals': vals, 'color': col, 'colors': cols}
+            tset = REP_TRANSP.get(r)
+            tsumm = summ.get(tset) if tset else None
+            if tsumm and tsumm[2]:
+                rep['atom_transp'] = {'setting': tset, 'min': tsumm[0], 'max': tsumm[1]}
+            reps.append(rep)
         detail[o] = reps
     scene = {s: _num(s, '') for s in SCENE_SETTINGS}
     scene['bg'] = _bg_rgb()
     scene['outline_rgb'] = _color_setting_rgb('metal_outline_color')
+    # Camera distance + scene radius drive the Zoom (magnification) control.
+    # cam_dist = |get_view()[11]| (camera→center distance); scene_radius = half the
+    # diagonal of the whole scene's extent. The Swift Zoom slider forms an apparent
+    # magnification M = scene_radius / (cam_dist * tan(fov/2)) that is ~1 at the
+    # fitted framing and invariant under the Lens dolly-zoom.
+    try:
+        import math
+        _v = cmd.get_view()
+        scene['cam_dist'] = abs(_v[11])
+        _mn, _mx = cmd.get_extent('all')
+        scene['scene_radius'] = 0.5 * math.sqrt(sum((_mx[i] - _mn[i]) ** 2 for i in range(3)))
+    except Exception:
+        scene['cam_dist'] = 0.0
+        scene['scene_radius'] = 0.0
     # Per-object state metadata for the inspector STATE row: the effective
     # current state (the object's 'state' setting, which resolves to the global
     # frame's state when not pinned) and whether all states are overlaid.

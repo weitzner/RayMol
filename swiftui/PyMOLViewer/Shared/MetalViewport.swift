@@ -42,6 +42,12 @@ struct MetalViewport: NSViewRepresentable {
         NSWorkspace.shared.notificationCenter.addObserver(
             context.coordinator, selector: #selector(Coordinator.handleWake),
             name: NSWorkspace.didWakeNotification, object: nil)
+        // A state/frame change while a movie exists can leave the viewport on its
+        // on-demand gate with nothing to repaint it; the engine posts this to
+        // force one unconditional frame so the new state shows (issue #132).
+        NotificationCenter.default.addObserver(
+            context.coordinator, selector: #selector(Coordinator.handleWake),
+            name: PyMOLEngine.forceRedrawNotification, object: nil)
 
         // Trackpad pinch → zoom. Two-finger drag (scrollWheel) → translate;
         // see handleScrollWheel. A real mouse wheel still zooms.
@@ -87,8 +93,42 @@ struct MetalViewport: NSViewRepresentable {
 class PyMOLMTKView: MTKView {
     weak var coordinator: MetalViewport.Coordinator?
 
-    override var acceptsFirstResponder: Bool { true }
+    // Decline keyboard first-responder so a click in the viewport does NOT steal
+    // focus from the command-line input (issue #73): the command line stays "hot"
+    // for typing while the user rotates/picks, matching desktop PyMOL. Mouse events
+    // are still delivered to this view via the mouse overrides below + acceptsFirstMouse
+    // (they don't require first-responder status). Trade-off: single-key PyMOL
+    // shortcuts routed through keyDown -> handleKeyDown no longer fire while the
+    // command line holds focus; RayMol is command-line/UI-driven, so keeping the
+    // prompt focused is the intended behavior.
+    override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // Track pointer motion over the viewport so the hover pre-selection preview
+    // (issue #165) can update as the mouse moves WITHOUT any button held. A
+    // tracking area is required for mouseMoved/mouseExited to fire; recreate it
+    // on every layout change so it always spans the current visible bounds.
+    private var hoverTrackingArea: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = hoverTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow,
+                      .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        coordinator?.handleMouseMoved(event, in: self)
+    }
+    override func mouseExited(with event: NSEvent) {
+        coordinator?.handleMouseExited(event, in: self)
+    }
 
     override func mouseDown(with event: NSEvent) {
         coordinator?.handleMouseDown(event, in: self)
@@ -151,6 +191,12 @@ struct MetalViewport: UIViewRepresentable {
         NotificationCenter.default.addObserver(
             context.coordinator, selector: #selector(Coordinator.handleWake),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+        // A state/frame change while a movie exists can leave the viewport on its
+        // on-demand gate with nothing to repaint it; the engine posts this to
+        // force one unconditional frame so the new state shows (issue #132).
+        NotificationCenter.default.addObserver(
+            context.coordinator, selector: #selector(Coordinator.handleWake),
+            name: PyMOLEngine.forceRedrawNotification, object: nil)
 
         // Gesture recognizers for touch input
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
@@ -189,6 +235,14 @@ struct MetalViewport: UIViewRepresentable {
         view.addGestureRecognizer(pinch)
         view.addGestureRecognizer(rotation)
         view.addGestureRecognizer(longPress)
+
+        // TODO(#165, iPad hover follow-up): add a UIHoverGestureRecognizer here
+        // (target: coordinator) so a trackpad/Apple-Pencil-hover on iPadOS drives
+        // the same hover pre-selection preview as macOS mouseMoved. Its .changed
+        // handler would compute NDC exactly like handleTap and call
+        // engine.hoverPreview(...); .ended would call engine.clearHoverPreview().
+        // Deferred: touch has no persistent cursor, so this only helps the
+        // pointer/pencil-hover case and needs its own gate against tap/drag.
 
         return view
     }
@@ -230,6 +284,12 @@ extension MetalViewport {
         private var didDrag = false
         // Move mode: the gizmo handle grabbed at mouse-down (nil = none → camera).
         private var moveHandle: GizmoHandle?
+        // Right-button equivalents: a pure right-click raises the viewport
+        // context menu (CPU pick → engine.longPressHit), while a right-DRAG
+        // still drives PyMOL's clip (slab). The button-down is deferred to the
+        // first drag so a bare click never enters clip mode.
+        private var rightDownLoc: CGPoint = .zero
+        private var rightDidDrag = false
 
         // Trackpad pinch (NSMagnificationGestureRecognizer) → zoom via an
         // explicit camera dolly (engine.zoomBy). We can't use the scroll-wheel
@@ -273,6 +333,11 @@ extension MetalViewport {
         private var gestureIsClip = false
         private let kClipSignX: CGFloat = 1
         private let kClipSignY: CGFloat = 1
+
+        // Hover pre-selection preview (issue #165): last view-point location fed
+        // to a preview, used to skip re-picking when the pointer barely moved.
+        // .zero is treated as "no prior move" (any first move re-picks).
+        private var lastHoverLoc: CGPoint = .zero
         #endif
 
         #if os(iOS)
@@ -430,6 +495,10 @@ extension MetalViewport {
             // PyMOL's mouse handling for an actual drag (rotate), so the
             // button-down is deferred to the first drag event (below). A pure
             // click selects via metal_pick in mouseUp instead.
+            // A committing click starts: drop any hover preview so it can't
+            // linger under (or fight) the committed selection.
+            engine?.clearHoverPreview()
+            lastHoverLoc = .zero
             mouseDownLoc = view.convert(event.locationInWindow, from: nil)
             didDrag = false
             // Move mode: remember whether the press landed on a gizmo handle, so
@@ -438,6 +507,34 @@ extension MetalViewport {
             if engine?.interactionMode == .move {
                 moveHandle = gizmoHit(in: view, at: mouseDownLoc)
             }
+        }
+
+        // Pointer moved over the viewport with no button held → refresh the hover
+        // pre-selection preview (issue #165). No-op while measuring or during a
+        // drag (didDrag guards the button-held drag path). Computes NDC EXACTLY
+        // like handleMouseUp — bottom-left origin, no Y flip — so the preview
+        // aligns with what a click would select. A sub-pixel move gate skips the
+        // re-pick when the pointer barely moved; the engine additionally
+        // debounces the actual Python pick.
+        func handleMouseMoved(_ event: NSEvent, in view: MTKView) {
+            guard engine?.measureMode == nil, !didDrag else { return }
+            let loc = view.convert(event.locationInWindow, from: nil)
+            if lastHoverLoc != .zero,
+               hypot(loc.x - lastHoverLoc.x, loc.y - lastHoverLoc.y) < 2 {
+                return
+            }
+            lastHoverLoc = loc
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return }
+            let ndcX = Float(loc.x / w) * 2 - 1
+            let ndcY = Float(loc.y / h) * 2 - 1
+            engine?.hoverPreview(ndcX, ndcY, Float(w / h))
+        }
+
+        // Pointer left the viewport → clear the preview so it doesn't linger.
+        func handleMouseExited(_ event: NSEvent, in view: MTKView) {
+            lastHoverLoc = .zero
+            engine?.clearHoverPreview()
         }
 
         func handleMouseUp(_ event: NSEvent, in view: MTKView) {
@@ -569,6 +666,10 @@ extension MetalViewport {
                 // First movement: now send the button-down (at the press point)
                 // so PyMOL enters rotate mode for this drag.
                 didDrag = true
+                // A rotate/drag begins: drop the hover preview (the pointer is no
+                // longer just hovering) and reset the move gate.
+                engine?.clearHoverPreview()
+                lastHoverLoc = .zero
                 let down = pymolPoint(in: view, at: mouseDownLoc)
                 engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_DOWN, x: down.0, y: down.1, modifiers: mods)
             }
@@ -577,20 +678,50 @@ extension MetalViewport {
         }
 
         func handleRightMouseDown(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
-            let mods = pymolModifiers(event.modifierFlags.rawValue)
-            engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_DOWN, x: pt.0, y: pt.1, modifiers: mods)
+            // Defer PyMOL's button-down: raising it here would immediately enter
+            // clip mode, and PyMOL's own pop-up menu is never rendered under this
+            // Metal backend (internal_gui=0). A bare right-click instead pops the
+            // native SwiftUI context menu in handleRightMouseUp; a right-DRAG
+            // starts the clip on first movement (handleRightMouseDragged).
+            rightDownLoc = view.convert(event.locationInWindow, from: nil)
+            rightDidDrag = false
         }
 
         func handleRightMouseUp(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
+            let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
-            engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: mods)
+
+            if rightDidDrag {
+                // Finish the clip (slab) drag.
+                let pt = pymolPoint(in: view, at: loc)
+                engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: mods)
+                return
+            }
+
+            // Pure right-click → identify the atom/residue under the cursor and
+            // publish it so ContentView shows the viewport context menu. NDC in
+            // view-point space, bottom-left origin (macOS views aren't flipped),
+            // matching the left-click pick — so no Y flip.
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return }
+            let ndcX = Float(loc.x / w) * 2 - 1
+            let ndcY = Float(loc.y / h) * 2 - 1
+            engine?.longPressPick(ndcX: ndcX, ndcY: ndcY, aspect: Float(w / h))
         }
 
         func handleRightMouseDragged(_ event: NSEvent, in view: MTKView) {
-            let pt = pymolPoint(in: view, at: view.convert(event.locationInWindow, from: nil))
+            let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
+            let moved = hypot(loc.x - rightDownLoc.x, loc.y - rightDownLoc.y)
+            if !rightDidDrag {
+                // First real movement past the click threshold: now raise the
+                // deferred button-down (at the press point) to begin the clip.
+                guard moved >= 4 else { return }
+                rightDidDrag = true
+                let down = pymolPoint(in: view, at: rightDownLoc)
+                engine?.button(PYMOL_BUTTON_RIGHT, state: PYMOL_BUTTON_DOWN, x: down.0, y: down.1, modifiers: mods)
+            }
+            let pt = pymolPoint(in: view, at: loc)
             engine?.drag(x: pt.0, y: pt.1, modifiers: mods)
         }
 
