@@ -209,6 +209,12 @@ enum CameraCommands {
         on ? "select dof_focus, (sele)\nset metal_dof_autofocus, 1"
            : "set metal_dof_autofocus, 0"
     }
+
+    // Auto-lock focus on a specific selection: retarget "dof_focus" to `sel` and
+    // enable DOF + autofocus so the lock is immediately visible.
+    static func lockFocus(on sel: String) -> String {
+        "select dof_focus, (\(sel))\nset metal_dof, 1\nset metal_dof_autofocus, 1"
+    }
 }
 
 enum SceneCatalog {
@@ -935,28 +941,36 @@ struct SelectionModeMenu: View {
     }
 }
 
-/// One-tap "clear selection" — runs `deselect`, which hides the active
-/// selection markers (the pink `sele` indicators) without deleting any named
-/// selections. Lives right next to `SelectionModeMenu` in the shared inspector
-/// chrome (macOS/iPad) and the iPhone Object-panel header, so it's reachable
-/// from every tab. Dimmed and non-interactive when nothing is selected.
+/// One-click "delete selection" (issue #163): a single tap deletes the `sele`
+/// named selection outright (`delete sele`) — removing the pink markers AND the
+/// lingering entry from the object list, not just deselecting. (The Esc key,
+/// issue #166, is intentionally the two-stage `escapeClearSelection()` —
+/// deselect, then delete on a second press.) Lives right next to
+/// `SelectionModeMenu` in the shared inspector chrome (macOS/iPad) and the
+/// iPhone Object-panel header, so it's reachable from every tab. Dimmed and
+/// non-interactive only when there is no `sele` selection at all.
 struct ClearSelectionButton: View {
     @EnvironmentObject var engine: PyMOLEngine
+    // Enabled whenever a `sele` selection EXISTS (enabled or not); a single
+    // click deletes it. Disabled only when no `sele` exists.
     private var hasActiveSelection: Bool {
-        engine.objects.contains { $0.isSelection && $0.isEnabled }
+        engine.objects.contains { $0.isSelection && $0.name == "sele" }
     }
     var body: some View {
-        Button { engine.runCommand("deselect") } label: {
+        Button { engine.runCommand("delete sele") } label: {
             Image(systemName: "xmark.circle")
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 // Accent (blue) when there's something to clear — matches the
                 // panel's action buttons (A/S/H/L/C) — else dimmed grey.
                 .foregroundColor(hasActiveSelection ? PanelTheme.accentColor : PanelTheme.disabledColor)
+                // A real 18pt hit/hover region (not a bare ~10pt glyph) so the
+                // click is easy and the .help tooltip reliably appears on hover.
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!hasActiveSelection)
-        .fixedSize()
-        .help("Clear selection — hide the current selection markers")
+        .help("Delete selection (sele)")
     }
 }
 
@@ -1002,16 +1016,17 @@ private struct ObjectRowView: View {
         .padding(.vertical, 2)
         .frame(height: kRowH)
         .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
+        // Whole-row tap toggles enable. The trailing A/S/H/L/C controls consume
+        // their own taps (they sit above this gesture); only the dead Spacer gap
+        // falls through to here.
+        .contentShape(Rectangle())
+        .onTapGesture { toggleEnabled() }
         // Long-press (iOS) / right-click (macOS) opens the action menu.
         .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
     }
 
     private func toggleEnabled() {
-        if entry.isEnabled {
-            engine.runCommand("disable \(entry.name)")
-        } else {
-            engine.runCommand("enable \(entry.name)")
-        }
+        engine.setObjectEnabled(entry.name, !entry.isEnabled)
     }
 }
 
@@ -1067,6 +1082,10 @@ private struct AllControlsRow: View {
         .padding(.vertical, 2)
         .frame(height: kRowH)
         .background(PanelTheme.rowBackground)
+        // Whole-row tap toggles ALL objects. The trailing A/S/H/L/C controls
+        // consume their own taps; only the dead Spacer gap falls through here.
+        .contentShape(Rectangle())
+        .onTapGesture { toggleAll() }
         .contextMenu { actionMenuContent(allActionMenuItems, name: "all", engine: engine) }
     }
 
@@ -1074,7 +1093,14 @@ private struct AllControlsRow: View {
     // targets exactly the current objects (not the "all" atom-selection), so it
     // works regardless of how enable/disable interpret the "all" keyword.
     private func toggleAll() {
-        let action = allEnabled ? "disable" : "enable"
+        let enable = !allEnabled
+        // Optimistic-first: flip every object's checkbox immediately (isEnabled
+        // is a var → instant re-render) so the whole "all" row updates this frame
+        // instead of waiting on the ~500ms pollObjects reconcile.
+        for idx in engine.objects.indices where !engine.objects[idx].isSelection {
+            engine.objects[idx].isEnabled = enable
+        }
+        let action = enable ? "enable" : "disable"
         engine.runPython(
             "from pymol import cmd as _c\n"
             + "for _o in (_c.get_names('objects') or []):\n"
@@ -1783,7 +1809,7 @@ private struct ObjectRowContent: View {
     }
 
     private func toggleEnabled() {
-        engine.runCommand(entry.isEnabled ? "disable \(entry.name)" : "enable \(entry.name)")
+        engine.setObjectEnabled(entry.name, !entry.isEnabled)
     }
 }
 
@@ -1829,6 +1855,13 @@ private struct ObjectCard: View {
             .padding(.vertical, 2)
             .frame(height: kRowH)
             .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
+            // Whole HEADER-row tap toggles enable. Applied to the header HStack
+            // only (NOT the outer VStack) so the expanded rep-detail below stays
+            // interactive. The disclosure chevron Button and the trailing
+            // A/S/H/L/C controls consume their own taps (expand-only for the
+            // chevron); only the dead Spacer gap falls through to here.
+            .contentShape(Rectangle())
+            .onTapGesture { engine.setObjectEnabled(entry.name, !entry.isEnabled) }
             // Long-press (iOS) / right-click (macOS) opens the action menu.
             .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
 

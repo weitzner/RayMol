@@ -225,6 +225,14 @@ public:
     selColor[0] = r; selColor[1] = g; selColor[2] = b;
   }
 
+  // RGB of the transient HOVER-PREVIEW indicator points (issue #165), drawn by
+  // SceneDrawMetalPreselection at a smaller point size BEFORE the committed
+  // selColor pass so pink wins on overlap. Fixed light-cyan by default.
+  float preselColor[3] = {0.40f, 0.85f, 1.0f};
+  void setPreselectionColor(float r, float g, float b) {
+    preselColor[0] = r; preselColor[1] = g; preselColor[2] = b;
+  }
+
   // VBO buffer cache — returns a cached buffer ID for the given key,
   // creating it from data if not already cached.
   virtual void invalidateVBOCache(uint64_t key) {}
