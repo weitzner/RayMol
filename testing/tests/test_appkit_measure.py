@@ -25,8 +25,12 @@ if "pymol" not in sys.modules or not hasattr(sys.modules["pymol"], "__path__"):
     sys.modules["pymol"] = _pymol_stub
 # Give `from pymol import cmd` / `metal_pick` placeholders so import is cheap and
 # does not drag in the _cmd C-extension or numpy. Real fakes are injected below.
-sys.modules["pymol"].cmd = types.SimpleNamespace()
-sys.modules["pymol"].metal_pick = types.SimpleNamespace()
+# Only when absent: inside a real `pymol -ckqy` run these already exist and must
+# NOT be clobbered (that would break every other test in the shared process).
+if not hasattr(sys.modules["pymol"], "cmd"):
+    sys.modules["pymol"].cmd = types.SimpleNamespace()
+if not hasattr(sys.modules["pymol"], "metal_pick"):
+    sys.modules["pymol"].metal_pick = types.SimpleNamespace()
 
 from pymol import appkit_measure as m
 

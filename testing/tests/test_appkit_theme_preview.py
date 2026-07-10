@@ -22,16 +22,21 @@ if "pymol" not in sys.modules or not hasattr(sys.modules["pymol"], "__path__"):
     _pymol_stub.__path__ = [os.path.join(_MODULES_DIR, "pymol")]
     _pymol_stub.__package__ = "pymol"
     sys.modules["pymol"] = _pymol_stub
-sys.modules["pymol"].cmd = types.SimpleNamespace()
+# Only when absent (a real `pymol -ckqy` run already has these; don't clobber them).
+if not hasattr(sys.modules["pymol"], "cmd"):
+    sys.modules["pymol"].cmd = types.SimpleNamespace()
 
-# style() does `from pymol import raymol_theme as _rt`; give it a fake.
-_rt = types.ModuleType("pymol.raymol_theme")
-_rt._flat_sheets = True
-_rt._fancy_helices = False
-_rt.cbc = lambda sel: None
-_rt.cnc = lambda sel: None
-sys.modules["pymol.raymol_theme"] = _rt
-sys.modules["pymol"].raymol_theme = _rt
+# style() does `from pymol import raymol_theme as _rt`; give it a fake when the
+# real one isn't present (standalone run). Inside real pymol the real module is used.
+if "pymol.raymol_theme" not in sys.modules and \
+        not hasattr(sys.modules["pymol"], "raymol_theme"):
+    _rt = types.ModuleType("pymol.raymol_theme")
+    _rt._flat_sheets = True
+    _rt._fancy_helices = False
+    _rt.cbc = lambda sel: None
+    _rt.cnc = lambda sel: None
+    sys.modules["pymol.raymol_theme"] = _rt
+    sys.modules["pymol"].raymol_theme = _rt
 
 from pymol import appkit_theme_preview as tp
 

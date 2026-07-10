@@ -20,7 +20,9 @@ if "pymol" not in sys.modules or not hasattr(sys.modules["pymol"], "__path__"):
     _pymol_stub.__path__ = [os.path.join(_MODULES_DIR, "pymol")]
     _pymol_stub.__package__ = "pymol"
     sys.modules["pymol"] = _pymol_stub
-sys.modules["pymol"].cmd = types.SimpleNamespace()
+# Only when absent (a real `pymol -ckqy` run already has the real cmd; don't clobber it).
+if not hasattr(sys.modules["pymol"], "cmd"):
+    sys.modules["pymol"].cmd = types.SimpleNamespace()
 
 from pymol import appkit_sequence as seq
 

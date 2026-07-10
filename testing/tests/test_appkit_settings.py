@@ -22,8 +22,11 @@ if "pymol" not in sys.modules or not hasattr(sys.modules["pymol"], "__path__"):
     _pymol_stub.__path__ = [os.path.join(_MODULES_DIR, "pymol")]
     _pymol_stub.__package__ = "pymol"
     sys.modules["pymol"] = _pymol_stub
-sys.modules["pymol"].cmd = types.SimpleNamespace()
-sys.modules["pymol"].setting = types.SimpleNamespace()
+# Only when absent (a real `pymol -ckqy` run already has these; don't clobber them).
+if not hasattr(sys.modules["pymol"], "cmd"):
+    sys.modules["pymol"].cmd = types.SimpleNamespace()
+if not hasattr(sys.modules["pymol"], "setting"):
+    sys.modules["pymol"].setting = types.SimpleNamespace()
 
 from pymol import appkit_settings as st
 
