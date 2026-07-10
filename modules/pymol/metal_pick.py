@@ -26,17 +26,20 @@ _MAX_PICK_NDC2 = 0.0100  # ~0.1 NDC radius
 # overlapping under the cursor; among them the front-most (min depth) is picked.
 _CLUSTER_NDC2 = 0.0009   # ~0.03 NDC
 
-# Atoms that are actually DRAWN (so a click can't select an invisible atom).
+# Atoms that are actually DRAWN (so a pick can't hit an invisible atom).
 # Per-rep selectors mirror the visRep bitmask. The catch: `show cartoon`/`ribbon`
-# OR their bit onto EVERY selected atom (incl. solvent), but the cartoon renderer
-# only draws guide/polymer atoms — so cartoon/ribbon are intersected with
-# `(polymer or guide)` (flags independent of visRep). Every other rep draws
-# exactly the atoms carrying its bit. ('labels' omitted — not pickable geometry.)
-# This is strictly better than `not solvent`: a genuinely-shown water (e.g.
-# `show nb_spheres, solvent`) stays pickable via its rep clause.
+# OR their bit onto EVERY atom of the object (incl. side chains + solvent), but
+# the cartoon/ribbon geometry is a spline through the GUIDE atoms (Cα for
+# protein, C4'/C1' for nucleic) — the side chains are NOT drawn. So for those
+# reps we intersect with `guide`, not `(polymer or guide)`: a pick over a cartoon
+# resolves to the nearest visible Cα (→ its residue), instead of snapping to
+# whatever invisible side-chain atom happens to project closest (which made hover
+# jump erratically between residues). A residue that ALSO shows sticks/lines/etc.
+# stays atom-pickable via those reps' own clauses. ('labels' omitted — not
+# pickable geometry.)
 _DRAWN_REPS = ('rep spheres or rep sticks or rep lines or rep nb_spheres or '
                'rep nonbonded or rep surface or rep dots or rep mesh or '
-               'rep ellipsoid or ((rep cartoon or rep ribbon) and (polymer or guide))')
+               'rep ellipsoid or ((rep cartoon or rep ribbon) and guide)')
 
 # Named selection that carries the transient hover PREVIEW (issue #165). The
 # leading underscore hides it from public object/selection lists AND is already
