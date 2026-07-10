@@ -794,6 +794,7 @@ struct ContentView: View {
             Button("Label residue") { engine.runCommand("label first (\(hit.sel)), '\(hit.resn)\(hit.resi)'") }
             Button("Hide residue") { engine.runCommand("hide everything, (\(hit.sel))") }
             Button("Center here") { engine.runCommand("center (\(hit.sel))") }
+            Button("Auto-lock focus") { engine.runCommand(CameraCommands.lockFocus(on: hit.sel)) }
             Button("Color…") { longPressColorSel = hit.sel; showLongPressColor = true }
         }
         Button("Cancel", role: .cancel) {}
