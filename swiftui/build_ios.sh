@@ -20,11 +20,14 @@ else
 fi
 
 NCPU=$(sysctl -n hw.ncpu)
+# Homebrew by default; MacPorts users: export PYMOL_EXTERNAL_PREFIX=/opt/local
+PYMOL_EXTERNAL_PREFIX="${PYMOL_EXTERNAL_PREFIX:-/opt/homebrew}"
 
 echo "=== Building libpymol_core.a for iOS ($PLATFORM) ==="
 echo "  PYMOL_ROOT: ${PYMOL_ROOT}"
 echo "  BUILD_DIR:  ${BUILD_DIR}"
 echo "  Platform:   ${IOS_PLATFORM}"
+echo "  EXTERNAL_PREFIX: ${PYMOL_EXTERNAL_PREFIX}"
 echo ""
 
 mkdir -p "${BUILD_DIR}"
@@ -34,6 +37,7 @@ cmake "${PYMOL_ROOT}/appkit" \
     -DCMAKE_TOOLCHAIN_FILE="${PYMOL_ROOT}/appkit/ios.toolchain.cmake" \
     -DIOS_PLATFORM="${IOS_PLATFORM}" \
     -C "${PYMOL_ROOT}/appkit/CMakeLists_iOS.cmake" \
+    -DPYMOL_EXTERNAL_PREFIX="${PYMOL_EXTERNAL_PREFIX}" \
     -DCMAKE_BUILD_TYPE=Release
 
 cmake --build . --target pymol_core -j"${NCPU}"
