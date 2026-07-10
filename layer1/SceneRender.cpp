@@ -2245,22 +2245,34 @@ void SceneRenderMetal(PyMOLGlobals* G)
 }
 
 // Draw a batch of selection-indicator points (overlay, no depth test) at the
-// given world coordinates with the active theme's selection color.
-static void SceneDrawMetalSelectionPoints(
-    PyMOLGlobals* G, const std::vector<float>& coords)
+// given world coordinates in `color` at `pointSize`. Shared by the committed
+// selection pass (selColor, 12px) and the hover-preview pass (preselColor, 9px).
+static void SceneDrawMetalSelectionPoints(PyMOLGlobals* G,
+    const std::vector<float>& coords, const float* color, float pointSize)
 {
   if (coords.empty())
     return;
   int nPoints = (int)(coords.size() / 3);
   G->Renderer->disable(pymol::Capability::DepthTest);
-  G->Renderer->pointSize(12.0f); // Retina: need ~2x for visible size
+  G->Renderer->pointSize(pointSize); // Retina: need ~2x for visible size
   G->Renderer->beginBatch(pymol::PrimitiveType::Points);
-  G->Renderer->batchColor4f(G->Renderer->selColor[0], G->Renderer->selColor[1],
-      G->Renderer->selColor[2], 1.0f);
+  G->Renderer->batchColor4f(color[0], color[1], color[2], 1.0f);
   for (int i = 0; i < nPoints; i++)
     G->Renderer->batchVertex3f(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
   G->Renderer->endBatch();
   G->Renderer->enable(pymol::Capability::DepthTest);
+}
+
+// Draw the transient hover-preview selection ('_preselect', issue #165) for the
+// current grid cell (or the whole scene when grid is inactive) in the
+// renderer's preselColor at a smaller point size than the committed pass. Called
+// BEFORE the committed selColor pass so an already-selected residue keeps its
+// committed pink color under the cursor (pink overdraws cyan).
+static void SceneDrawMetalPreselection(PyMOLGlobals* G)
+{
+  std::vector<float> coords;
+  ExecutiveGetNamedSelectionCoords(G, "_preselect", coords);
+  SceneDrawMetalSelectionPoints(G, coords, G->Renderer->preselColor, 9.0f);
 }
 
 void SceneRenderMetalSelections(PyMOLGlobals* G)
@@ -2281,9 +2293,12 @@ void SceneRenderMetalSelections(PyMOLGlobals* G)
         static_cast<std::uint32_t>(vpH)};
     for (int slot = I->grid.first_slot; slot <= I->grid.last_slot; ++slot) {
       SceneSetMetalGridCell(G, &I->grid, sceneVP, slot);
+      // Hover preview FIRST (distinct color/smaller size), then the committed
+      // selection ON TOP so pink wins where the two overlap.
+      SceneDrawMetalPreselection(G);
       std::vector<float> coords;
       ExecutiveGetSelectionCoords(G, coords);
-      SceneDrawMetalSelectionPoints(G, coords);
+      SceneDrawMetalSelectionPoints(G, coords, G->Renderer->selColor, 12.0f);
     }
     G->Renderer->disable(pymol::Capability::ScissorTest);
     G->Renderer->viewport(vpX, vpY, vpW, vpH);
@@ -2291,7 +2306,10 @@ void SceneRenderMetalSelections(PyMOLGlobals* G)
     return;
   }
 
+  // Hover preview FIRST (distinct color/smaller size), then the committed
+  // selection ON TOP so pink wins where the two overlap.
+  SceneDrawMetalPreselection(G);
   std::vector<float> coords;
   ExecutiveGetSelectionCoords(G, coords);
-  SceneDrawMetalSelectionPoints(G, coords);
+  SceneDrawMetalSelectionPoints(G, coords, G->Renderer->selColor, 12.0f);
 }

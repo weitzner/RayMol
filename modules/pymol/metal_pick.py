@@ -38,6 +38,14 @@ _DRAWN_REPS = ('rep spheres or rep sticks or rep lines or rep nb_spheres or '
                'rep nonbonded or rep surface or rep dots or rep mesh or '
                'rep ellipsoid or ((rep cartoon or rep ribbon) and (polymer or guide))')
 
+# Named selection that carries the transient hover PREVIEW (issue #165). The
+# leading underscore hides it from public object/selection lists AND is already
+# skipped by _pick_atom's `startswith('_')` filter, so it can never be picked
+# into. The renderer draws it in a distinct color/size (C++
+# SceneDrawMetalPreselection) BEFORE the committed 'sele' pass, so the pink
+# committed color always wins on overlap.
+_PRESELECT = '_preselect'
+
 
 def _pickdbg(ndc_x, ndc_y, aspect, best, ncand):
     """Append a pick diagnostic line to PYMOL_PICKDEBUG (debug harness only).
@@ -393,6 +401,32 @@ except Exception:
     pass
 
 
+def _mode_expr(best, mode):
+    """Expand a _pick_atom result tuple to a selection expression honoring
+    mouse_selection_mode (0 atom, 1 residue, 2 chain, 3 segment, 4 object,
+    5 molecule, 6 C-alpha). Shared by pick_at (commit into 'sele') and
+    hover_preview_at (transient '_preselect'), so both expand the pick to the
+    same scope for a given mode."""
+    _, obj, chain, resi, resn, segi, name, _sx, _sy = best
+    atom = '%s and resi %s and name %s' % (obj, resi, name)
+    if chain:
+        atom += ' and chain %s' % chain
+    res = ('%s and chain %s and resi %s' % (obj, chain, resi)) if chain \
+        else ('%s and resi %s' % (obj, resi))
+    if mode == 0:                                   # atom
+        return '(%s)' % atom
+    elif mode == 2:                                 # chain
+        return ('(%s and chain %s)' % (obj, chain)) if chain else '(%s)' % obj
+    elif mode == 3:                                 # segment
+        return ('(%s and segi %s)' % (obj, segi)) if segi else '(%s)' % obj
+    elif mode == 4:                                 # object
+        return '(%s)' % obj
+    elif mode == 5:                                 # molecule
+        return '(bymol (%s))' % atom
+    else:                                           # 1 residue / 6 C-alpha
+        return '(%s)' % res
+
+
 def pick_at(ndc_x, ndc_y, aspect):
     """Default tap: residue-level toggle into the active 'sele'."""
     from pymol import cmd
@@ -414,23 +448,12 @@ def pick_at(ndc_x, ndc_y, aspect):
             mode = int(cmd.get_setting_int('mouse_selection_mode'))
         except Exception:
             mode = 1
+        # atom expression reused below for click-to-focus (dof); the mode-scoped
+        # commit expression comes from the shared _mode_expr helper.
         atom = '%s and resi %s and name %s' % (obj, resi, name)
         if chain:
             atom += ' and chain %s' % chain
-        res = ('%s and chain %s and resi %s' % (obj, chain, resi)) if chain \
-            else ('%s and resi %s' % (obj, resi))
-        if mode == 0:                                   # atom
-            expr = '(%s)' % atom
-        elif mode == 2:                                 # chain
-            expr = ('(%s and chain %s)' % (obj, chain)) if chain else '(%s)' % obj
-        elif mode == 3:                                 # segment
-            expr = ('(%s and segi %s)' % (obj, segi)) if segi else '(%s)' % obj
-        elif mode == 4:                                 # object
-            expr = '(%s)' % obj
-        elif mode == 5:                                 # molecule
-            expr = '(bymol (%s))' % atom
-        else:                                           # 1 residue / 6 C-alpha
-            expr = '(%s)' % res
+        expr = _mode_expr(best, mode)
 
         # Toggle into/out of 'sele' (additive — matches Seeker toggle).
         exists = 'sele' in (cmd.get_names('selections') or [])
@@ -484,3 +507,31 @@ def pick_info_at(ndc_x, ndc_y, aspect):
             json.dump(out, f)
     except Exception:
         pass
+
+
+def hover_preview_at(ndc_x, ndc_y, aspect):
+    """Hover PREVIEW (issue #165): highlight what a click WOULD select, without
+    committing anything. Runs the same pick + mouse_selection_mode expansion as
+    pick_at, but writes the result to the transient '_preselect' selection
+    instead of 'sele'. Empty space clears the preview.
+
+    Deliberately touches ONLY '_preselect' — never 'sele' or 'pk1' — so the
+    committed selection is untouched as the pointer moves. The renderer draws
+    '_preselect' in a distinct color/size BEFORE the committed pink pass, so an
+    already-selected residue keeps its committed color under the cursor."""
+    from pymol import cmd
+    try:
+        best = _pick_atom(ndc_x, ndc_y, aspect)
+        if best is None:
+            # Empty space: clear the preview (leave 'sele' untouched).
+            cmd.select(_PRESELECT, 'none')
+            return
+
+        try:
+            mode = int(cmd.get_setting_int('mouse_selection_mode'))
+        except Exception:
+            mode = 1
+        cmd.select(_PRESELECT, _mode_expr(best, mode))
+        cmd.enable(_PRESELECT)
+    except Exception as e:
+        print('metal_pick hover error: %s' % e)
