@@ -1,69 +1,49 @@
 name: RayMol unit tests (embedded)
 
-# Build the fork's pymol on macOS and run the RayMol-specific test files under
-# the REAL embedded interpreter (pymol -ckqy testing/testing.py --run ...), so
-# the fork's Python layer (appkit_* panels, metal_pick) is exercised faithfully
-# with the actual _cmd core + pytest routing rather than a plain-python stub.
+# Build the fork's pymol on macOS (Apple Silicon / arm64) and run the
+# RayMol-specific test files under the REAL embedded interpreter
+# (pymol -ckqy testing/testing.py --run ...), so the fork's Python layer
+# (appkit_* panels, metal_pick) is exercised faithfully with the actual _cmd
+# core and the project's pytest routing rather than a plain-python stub.
 #
-# Scoped to the fork's own test files on purpose: it stays green independently of
-# the full upstream `--run all` suite (which has unrelated pre-existing failures).
+# Scoped to the fork's own test files on purpose: it stays green independently
+# of the full upstream `--run all` suite (which has unrelated pre-existing
+# failures, and whose CI workflow is currently disabled).
 #
-# The build recipe mirrors the macOS job in build.yml (conda + x86_64 miniforge
-# on macos-13), whose Build step is known to succeed.
+# Recipe verified locally on an M3 (arm64): Homebrew C deps + a GLUT build
+# (--config-settings glut=true). We deliberately do NOT pass testing=True —
+# that builds the C++ catch2 tests, and Homebrew ships catch2 v3 while PyMOL
+# needs v2. The runner (testing.py) only needs pillow + pytest here.
 
 on: [push, pull_request]
 
 jobs:
   macos-embedded:
-    runs-on: macos-13
-
-    env:
-      CONDA_ROOT: "/tmp/miniforge"
-      CONDA_ENV_NAME: "testing_env"
+    runs-on: macos-latest   # Apple Silicon (arm64)
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Miniforge
-        run: |
-          curl -L -o $CONDA_ROOT.sh https://github.com/conda-forge/miniforge/releases/download/24.11.0-0/Miniforge3-MacOSX-x86_64.sh
-          bash $CONDA_ROOT.sh -b -p $CONDA_ROOT
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
 
-      - name: Add conda to PATH
-        run: |
-          echo "${CONDA_ROOT}/bin" >> "$GITHUB_PATH"
+      - name: Install C dependencies (Homebrew)
+        run: brew install glm glew freeglut freetype libpng netcdf
 
-      - name: Set up Miniforge
+      - name: Install Python build + test deps
         run: |
-          conda create --name $CONDA_ENV_NAME -c conda-forge -c schrodinger --override-channels \
-              python=3.12 \
-              pip \
-              catch2=2.13.3 \
-              collada2gltf \
-              freetype \
-              glew \
-              glm \
-              libpng \
-              libxml2-devel \
-              libnetcdf
+          python -m pip install --upgrade pip
+          python -m pip install setuptools wheel numpy cmake pillow pytest
 
-      - name: Get additional sources
+      - name: Build RayMol (pymol core, GLUT backend)
         run: |
-          source activate $CONDA_ENV_NAME
-          git clone --depth 1 https://github.com/rcsb/mmtf-cpp.git
-          cp -R mmtf-cpp/include/* ${CONDA_PREFIX}/include/
-          git clone --depth 1 --single-branch --branch cpp_master https://github.com/msgpack/msgpack-c.git
-          cp -R msgpack-c/include/* ${CONDA_PREFIX}/include/
-
-      - name: Build PyMOL
-        run: |
-          source activate $CONDA_ENV_NAME
-          export MACOSX_DEPLOYMENT_TARGET=12.0
-          pip install -v --config-settings testing=True '.[dev]'
+          PREFIX_PATH=/opt/homebrew python -m pip install \
+              --no-build-isolation --config-settings glut=true .
 
       - name: Run RayMol unit tests under embedded pymol
         run: |
-          source activate $CONDA_ENV_NAME
           pymol -ckqy testing/testing.py --run \
               testing/tests/test_appkit_measure.py \
               testing/tests/test_appkit_sequence.py \
