@@ -981,6 +981,25 @@ final class PyMOLEngine: ObservableObject {
         PyMOLBridge_RunPython(code)
     }
 
+    /// Two-stage "clear selection" used by both the selection-chip X and the Esc
+    /// key (issues #163 + #166). Stage 1: if any public selection is enabled
+    /// (its pink markers are showing), `deselect` — hide the highlight but keep
+    /// the named selection so a follow-up refinement is still possible. Stage 2:
+    /// if nothing is enabled but a `sele` named selection still exists, `delete`
+    /// it outright so the object list is clean. The logic runs INLINE in Python
+    /// (one runPython round-trip) rather than in Swift so it reads the CURRENT
+    /// core state directly — the Swift `objects` mirror is only refreshed by the
+    /// ~500ms feedback poll, so a Swift-side branch would race the poll lag.
+    func escapeClearSelection() {
+        guard isReady else { return }
+        var py = "from pymol import cmd as _c\n"
+        py += "if _c.get_names('public_selections', enabled_only=1):\n"
+        py += "    _c.deselect()\n"
+        py += "elif 'sele' in (_c.get_names('public_selections') or []):\n"
+        py += "    _c.delete('sele')\n"
+        runPython(py)
+    }
+
     /// Write the whole session to `url` (a .pse) via cmd.save (the only path to the
     /// C++ saver is runPython — there's no Swift cmd.save wrapper) and track it as
     /// the open document so a subsequent ⌘S overwrites it with no panel. Raw triple

@@ -935,18 +935,24 @@ struct SelectionModeMenu: View {
     }
 }
 
-/// One-tap "clear selection" — runs `deselect`, which hides the active
-/// selection markers (the pink `sele` indicators) without deleting any named
-/// selections. Lives right next to `SelectionModeMenu` in the shared inspector
-/// chrome (macOS/iPad) and the iPhone Object-panel header, so it's reachable
-/// from every tab. Dimmed and non-interactive when nothing is selected.
+/// One-tap "clear selection" — runs the shared two-stage
+/// `engine.escapeClearSelection()` engine helper (issues #163 + #166), the same
+/// path the Esc key uses. Stage 1 (a selection is enabled) hides the pink
+/// markers via `deselect`; stage 2 (markers already hidden but a `sele` named
+/// selection still exists) deletes `sele` so the object list is clean. Lives
+/// right next to `SelectionModeMenu` in the shared inspector chrome (macOS/iPad)
+/// and the iPhone Object-panel header, so it's reachable from every tab. Dimmed
+/// and non-interactive only when there is no `sele` selection at all.
 struct ClearSelectionButton: View {
     @EnvironmentObject var engine: PyMOLEngine
+    // Enabled whenever a `sele` selection EXISTS — enabled or not — so a first
+    // click can hide its markers (stage 1) and a second click can delete the
+    // now-disabled selection (stage 2). Disabled only when no `sele` exists.
     private var hasActiveSelection: Bool {
-        engine.objects.contains { $0.isSelection && $0.isEnabled }
+        engine.objects.contains { $0.isSelection && $0.name == "sele" }
     }
     var body: some View {
-        Button { engine.runCommand("deselect") } label: {
+        Button { engine.escapeClearSelection() } label: {
             Image(systemName: "xmark.circle")
                 .font(.system(size: 10))
                 // Accent (blue) when there's something to clear — matches the
@@ -956,7 +962,7 @@ struct ClearSelectionButton: View {
         .buttonStyle(.plain)
         .disabled(!hasActiveSelection)
         .fixedSize()
-        .help("Clear selection — hide the current selection markers")
+        .help("Delete selection (sele) — removes the highlight and the named selection")
     }
 }
 
