@@ -714,6 +714,29 @@ final class PyMOLEngine: ObservableObject {
 
     // MARK: - Commands
 
+    /// Toggle an object/selection's enabled state with an OPTIMISTIC UI update.
+    /// Flips the matching `objects[idx].isEnabled` immediately on the main thread
+    /// (ObjectEntry.isEnabled is a var → the checkbox re-renders this frame, no
+    /// waiting on the ~500ms pollObjects round-trip), THEN issues the actual
+    /// enable/disable command. The pollObjects/parseObjectPanelFeedback equality
+    /// guard reconciles the array later; since we already set the value the poll
+    /// will report, the reconcile is a no-op and there is no flicker.
+    func setObjectEnabled(_ name: String, _ enabled: Bool) {
+        // UI mutation must happen on the main thread (drives @Published).
+        if Thread.isMainThread {
+            if let idx = objects.firstIndex(where: { $0.name == name }) {
+                objects[idx].isEnabled = enabled
+            }
+        } else {
+            DispatchQueue.main.async {
+                if let idx = self.objects.firstIndex(where: { $0.name == name }) {
+                    self.objects[idx].isEnabled = enabled
+                }
+            }
+        }
+        runCommand(enabled ? "enable \(name)" : "disable \(name)")
+    }
+
     func runCommand(_ command: String) {
         guard isReady else { return }
         // A plain `png <file>` (ray=0) wants the RENDERED frame, but PyMOL's

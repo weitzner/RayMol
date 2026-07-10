@@ -1002,16 +1002,17 @@ private struct ObjectRowView: View {
         .padding(.vertical, 2)
         .frame(height: kRowH)
         .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
+        // Whole-row tap toggles enable. The trailing A/S/H/L/C controls consume
+        // their own taps (they sit above this gesture); only the dead Spacer gap
+        // falls through to here.
+        .contentShape(Rectangle())
+        .onTapGesture { toggleEnabled() }
         // Long-press (iOS) / right-click (macOS) opens the action menu.
         .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
     }
 
     private func toggleEnabled() {
-        if entry.isEnabled {
-            engine.runCommand("disable \(entry.name)")
-        } else {
-            engine.runCommand("enable \(entry.name)")
-        }
+        engine.setObjectEnabled(entry.name, !entry.isEnabled)
     }
 }
 
@@ -1067,6 +1068,10 @@ private struct AllControlsRow: View {
         .padding(.vertical, 2)
         .frame(height: kRowH)
         .background(PanelTheme.rowBackground)
+        // Whole-row tap toggles ALL objects. The trailing A/S/H/L/C controls
+        // consume their own taps; only the dead Spacer gap falls through here.
+        .contentShape(Rectangle())
+        .onTapGesture { toggleAll() }
         .contextMenu { actionMenuContent(allActionMenuItems, name: "all", engine: engine) }
     }
 
@@ -1074,7 +1079,14 @@ private struct AllControlsRow: View {
     // targets exactly the current objects (not the "all" atom-selection), so it
     // works regardless of how enable/disable interpret the "all" keyword.
     private func toggleAll() {
-        let action = allEnabled ? "disable" : "enable"
+        let enable = !allEnabled
+        // Optimistic-first: flip every object's checkbox immediately (isEnabled
+        // is a var → instant re-render) so the whole "all" row updates this frame
+        // instead of waiting on the ~500ms pollObjects reconcile.
+        for idx in engine.objects.indices where !engine.objects[idx].isSelection {
+            engine.objects[idx].isEnabled = enable
+        }
+        let action = enable ? "enable" : "disable"
         engine.runPython(
             "from pymol import cmd as _c\n"
             + "for _o in (_c.get_names('objects') or []):\n"
@@ -1783,7 +1795,7 @@ private struct ObjectRowContent: View {
     }
 
     private func toggleEnabled() {
-        engine.runCommand(entry.isEnabled ? "disable \(entry.name)" : "enable \(entry.name)")
+        engine.setObjectEnabled(entry.name, !entry.isEnabled)
     }
 }
 
@@ -1829,6 +1841,13 @@ private struct ObjectCard: View {
             .padding(.vertical, 2)
             .frame(height: kRowH)
             .background(isAlt ? PanelTheme.rowAltBackground : PanelTheme.rowBackground)
+            // Whole HEADER-row tap toggles enable. Applied to the header HStack
+            // only (NOT the outer VStack) so the expanded rep-detail below stays
+            // interactive. The disclosure chevron Button and the trailing
+            // A/S/H/L/C controls consume their own taps (expand-only for the
+            // chevron); only the dead Spacer gap falls through to here.
+            .contentShape(Rectangle())
+            .onTapGesture { engine.setObjectEnabled(entry.name, !entry.isEnabled) }
             // Long-press (iOS) / right-click (macOS) opens the action menu.
             .contextMenu { actionMenuContent(actionMenuItems, name: entry.name, engine: engine) }
 
