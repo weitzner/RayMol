@@ -2400,6 +2400,17 @@ struct ContentView: View {
     }
     #endif
 
+    // The expanded-timeline dock's Expand button is disabled only in iPad portrait
+    // (a landscape-only, iOS concept); always enabled on macOS. Declared outside the
+    // iOS #if so the shared inspectorSwitcher can read it on both platforms.
+    private var expandDockDisabled: Bool {
+        #if os(iOS)
+        return isPadPortrait
+        #else
+        return false
+        #endif
+    }
+
     // MARK: Regular-layout inspector switcher (iPad + macOS)
     //
     // The desktop/iPad right inspector mirrors the iPhone bottom tabs as a
@@ -2450,7 +2461,7 @@ struct ContentView: View {
                 let movie = TimelinePanel(showsDone: false,
                               onExpand: { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() } },
                               forceCompact: true,
-                              expandDisabled: isPadPortrait)
+                              expandDisabled: expandDockDisabled)
                 if hugContent {
                     // Portrait bottom dock: hug intrinsic height + report it so the
                     // panel wraps tightly (matches the iPhone Movie tab spacing).
