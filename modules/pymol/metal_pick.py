@@ -523,15 +523,22 @@ def hover_preview_at(ndc_x, ndc_y, aspect):
     try:
         best = _pick_atom(ndc_x, ndc_y, aspect)
         if best is None:
-            # Empty space: clear the preview (leave 'sele' untouched).
-            cmd.select(_PRESELECT, 'none')
+            # Empty space: clear the preview (leave 'sele' untouched). enable=0:
+            # NEVER enable '_preselect' — cmd.enable is exclusive for selections
+            # and would DISABLE the committed 'sele', hiding its pink markers
+            # (the atoms stay in 'sele', which is why a click still appended).
+            # The renderer draws '_preselect' by atom membership regardless of
+            # its enabled flag, so the cyan preview still shows.
+            cmd.select(_PRESELECT, 'none', enable=0)
             return
 
         try:
             mode = int(cmd.get_setting_int('mouse_selection_mode'))
         except Exception:
             mode = 1
-        cmd.select(_PRESELECT, _mode_expr(best, mode))
-        cmd.enable(_PRESELECT)
+        # enable=0 and NO cmd.enable — see the note above: enabling '_preselect'
+        # would deselect the committed 'sele'. The C++ preselect pass renders it
+        # by name/membership regardless of enabled state.
+        cmd.select(_PRESELECT, _mode_expr(best, mode), enable=0)
     except Exception as e:
         print('metal_pick hover error: %s' % e)

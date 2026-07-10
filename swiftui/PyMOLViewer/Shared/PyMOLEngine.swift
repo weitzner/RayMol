@@ -2026,7 +2026,10 @@ final class PyMOLEngine: ObservableObject {
         hoverWork = nil
         lastHoverNDC = nil
         guard isReady else { return }
-        runPython("from pymol import cmd as _c; _c.select('_preselect', 'none')")
+        // enable=0: never enable '_preselect' — enabling a selection is exclusive
+        // and would disable the committed 'sele', hiding its markers. (The
+        // renderer draws '_preselect' by membership regardless of enabled state.)
+        runPython("from pymol import cmd as _c; _c.select('_preselect', 'none', enable=0)")
     }
 
     /// iOS long-press: identify the atom/residue under the press (read-only —
