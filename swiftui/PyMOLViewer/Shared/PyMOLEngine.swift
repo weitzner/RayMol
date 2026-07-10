@@ -129,6 +129,11 @@ final class PyMOLEngine: ObservableObject {
     // distance/angle/dihedral. measureStatus is the prompt/result shown in the UI.
     @Published var measureMode: MeasureKind? = nil
     @Published var measureStatus: String = ""
+    // Hover pre-selection preview (issue #165, macOS): when true, moving the
+    // pointer over the viewport highlights what a click WOULD select (in a
+    // distinct light-cyan) without committing to 'sele'. User-toggleable in the
+    // Mouse panel. When false, hoverPreview() is a no-op.
+    @Published var hoverPreviewEnabled = true
     // Full settings catalog for the searchable Settings panel (loaded on demand).
     @Published var settingsCatalog: [SettingItem] = []
     // The single detail view that is currently open (accordion: at most one).
@@ -1065,6 +1070,10 @@ final class PyMOLEngine: ObservableObject {
         if let inst = instance {
             let s = theme.selectionName
             PyMOLBridge_SetSelectionColor(inst, Float(s.r), Float(s.g), Float(s.b))
+            // Hover pre-selection preview color (issue #165): fixed light-cyan,
+            // NOT theme-derived, so it reads as distinct from the committed
+            // selection color under every theme.
+            PyMOLBridge_SetPreselectionColor(inst, 0.40, 0.85, 1.0)
         }
         let chains = theme.chainCycle.map { "(\($0.pymolTriplet))" }.joined(separator: ", ")
         let elems = theme.elementColors
@@ -1975,6 +1984,49 @@ final class PyMOLEngine: ObservableObject {
     func pick(ndcX: Float, ndcY: Float, aspect: Float) {
         guard let inst = instance else { return }
         PyMOLBridge_Pick(inst, ndcX, ndcY, aspect)
+    }
+
+    // MARK: - Hover pre-selection preview (issue #165)
+
+    // Trailing coalescer for the hover re-pick so a fast mouse sweep collapses to
+    // ~one pick every ~33 ms (mirrors MetalViewport.armPanEndDebounce). Plus a
+    // last-NDC gate so a barely-moved pointer doesn't re-pick at all — the actual
+    // projection over all atoms is the cost we're throttling.
+    private var hoverWork: DispatchWorkItem?
+    private var lastHoverNDC: (Float, Float)? = nil
+    private let kHoverDebounce = 0.033        // ~33 ms trailing coalesce
+    private let kHoverMinNDC: Float = 0.004   // sub-pixel move gate (NDC²-ish)
+
+    /// Update the hover pre-selection preview to what a click at (ndcX,ndcY)
+    /// would select, without committing to 'sele'. No-op while the feature is
+    /// disabled. Debounced + sub-pixel gated so a fast sweep doesn't spam the
+    /// Python projection pick.
+    func hoverPreview(_ ndcX: Float, _ ndcY: Float, _ aspect: Float) {
+        guard isReady, hoverPreviewEnabled else { return }
+        if let last = lastHoverNDC {
+            let dx = ndcX - last.0, dy = ndcY - last.1
+            if abs(dx) < kHoverMinNDC && abs(dy) < kHoverMinNDC { return }
+        }
+        lastHoverNDC = (ndcX, ndcY)
+        hoverWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.runPython(
+                "from pymol import metal_pick as _mp; "
+                + "_mp.hover_preview_at(\(ndcX), \(ndcY), \(aspect))")
+        }
+        hoverWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + kHoverDebounce, execute: work)
+    }
+
+    /// Cancel any pending hover pick and empty the preview selection. Cheap and
+    /// idempotent — safe to call from mouse-down / drag-start / mouse-exit and
+    /// when the user toggles the feature off.
+    func clearHoverPreview() {
+        hoverWork?.cancel()
+        hoverWork = nil
+        lastHoverNDC = nil
+        guard isReady else { return }
+        runPython("from pymol import cmd as _c; _c.select('_preselect', 'none')")
     }
 
     /// iOS long-press: identify the atom/residue under the press (read-only —

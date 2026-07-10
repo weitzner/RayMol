@@ -224,6 +224,14 @@ void PyMOLBridge_SetSelectionColor(PyMOLHandle h, float r, float g, float b)
     G->Renderer->setSelectionColor(r, g, b);
 }
 
+void PyMOLBridge_SetPreselectionColor(PyMOLHandle h, float r, float g, float b)
+{
+    if (!h) return;
+    PyMOLGlobals* G = PyMOL_GetGlobals(INST(h));
+    if (!G || !G->Renderer) return;
+    G->Renderer->setPreselectionColor(r, g, b);
+}
+
 void PyMOLBridge_CapturePNG(PyMOLHandle h, const char* path)
 {
     if (!h || !path) return;

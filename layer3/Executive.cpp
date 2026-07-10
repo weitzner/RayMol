@@ -8599,6 +8599,57 @@ private:
   GLfloat alpha_ref_before;
 };
 
+// Name of the transient hover-PREVIEW selection (modules/pymol/metal_pick.py
+// _PRESELECT). ExecutiveGetSelectionCoords skips it so the preview is never
+// drawn in the committed selection color; SceneDrawMetalPreselection gathers it
+// separately (via ExecutiveGetNamedSelectionCoords) in its own color/size.
+static const char kPreselectionName[] = "_preselect";
+
+// Gather the coordinates of one specific named selection's atoms (same grid-cell
+// filter and current-state logic as ExecutiveGetSelectionCoords, but restricted
+// to `name`). Used to draw the hover preview separately from the committed
+// selection. Appends 3 floats (x,y,z) per matching atom to `coords`.
+void ExecutiveGetNamedSelectionCoords(
+    PyMOLGlobals* G, const char* name, std::vector<float>& coords)
+{
+  auto I = G->Executive;
+
+  int sele = SelectorIndexByName(G, name);
+  if (sele < 0)
+    return;
+
+  for (auto& rec1 : pymol::make_list_adapter(I->Spec)) {
+    if (rec1.type != cExecObject || rec1.obj->type != cObjectMolecule)
+      continue;
+
+    // Same grid-cell filter as ExecutiveGetSelectionCoords: when grid is active,
+    // only collect coords for objects in the cell being rendered.
+    if (!SceneGetDrawFlagGrid(G, &G->Scene->grid, rec1.obj->grid_slot))
+      continue;
+
+    auto* obj = static_cast<ObjectMolecule*>(rec1.obj);
+    int curState = obj->getCurrentState();
+    if (curState < 0) curState = 0;
+    if (curState >= obj->NCSet) continue;
+
+    auto* cs = obj->CSet[curState];
+    if (!cs) continue;
+
+    for (int atIdx = 0; atIdx < obj->NAtom; atIdx++) {
+      if (!SelectorIsMember(G, obj->AtomInfo[atIdx].selEntry, sele))
+        continue;
+
+      int coordIdx = cs->atmToIdx(atIdx);
+      if (coordIdx < 0) continue;
+
+      const float* v = cs->coordPtr(coordIdx);
+      coords.push_back(v[0]);
+      coords.push_back(v[1]);
+      coords.push_back(v[2]);
+    }
+  }
+}
+
 void ExecutiveGetSelectionCoords(PyMOLGlobals* G, std::vector<float>& coords)
 {
   auto I = G->Executive;
@@ -8606,6 +8657,12 @@ void ExecutiveGetSelectionCoords(PyMOLGlobals* G, std::vector<float>& coords)
 
   for (auto& rec : pymol::make_list_adapter(I->Spec)) {
     if (rec.type != cExecSelection || !rec.visible)
+      continue;
+
+    // Skip the transient hover-preview selection — it is drawn separately (in a
+    // distinct color/size) by SceneDrawMetalPreselection, so it must never be
+    // painted in the committed selection color here.
+    if (strcmp(rec.name, kPreselectionName) == 0)
       continue;
 
     int sele = SelectorIndexByName(G, rec.name);

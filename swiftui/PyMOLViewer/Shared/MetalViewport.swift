@@ -104,6 +104,32 @@ class PyMOLMTKView: MTKView {
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // Track pointer motion over the viewport so the hover pre-selection preview
+    // (issue #165) can update as the mouse moves WITHOUT any button held. A
+    // tracking area is required for mouseMoved/mouseExited to fire; recreate it
+    // on every layout change so it always spans the current visible bounds.
+    private var hoverTrackingArea: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = hoverTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow,
+                      .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        coordinator?.handleMouseMoved(event, in: self)
+    }
+    override func mouseExited(with event: NSEvent) {
+        coordinator?.handleMouseExited(event, in: self)
+    }
+
     override func mouseDown(with event: NSEvent) {
         coordinator?.handleMouseDown(event, in: self)
     }
@@ -210,6 +236,14 @@ struct MetalViewport: UIViewRepresentable {
         view.addGestureRecognizer(rotation)
         view.addGestureRecognizer(longPress)
 
+        // TODO(#165, iPad hover follow-up): add a UIHoverGestureRecognizer here
+        // (target: coordinator) so a trackpad/Apple-Pencil-hover on iPadOS drives
+        // the same hover pre-selection preview as macOS mouseMoved. Its .changed
+        // handler would compute NDC exactly like handleTap and call
+        // engine.hoverPreview(...); .ended would call engine.clearHoverPreview().
+        // Deferred: touch has no persistent cursor, so this only helps the
+        // pointer/pencil-hover case and needs its own gate against tap/drag.
+
         return view
     }
 
@@ -297,6 +331,11 @@ extension MetalViewport {
         private var gestureIsClip = false
         private let kClipSignX: CGFloat = 1
         private let kClipSignY: CGFloat = 1
+
+        // Hover pre-selection preview (issue #165): last view-point location fed
+        // to a preview, used to skip re-picking when the pointer barely moved.
+        // .zero is treated as "no prior move" (any first move re-picks).
+        private var lastHoverLoc: CGPoint = .zero
         #endif
 
         #if os(iOS)
@@ -429,8 +468,40 @@ extension MetalViewport {
             // PyMOL's mouse handling for an actual drag (rotate), so the
             // button-down is deferred to the first drag event (below). A pure
             // click selects via metal_pick in mouseUp instead.
+            // A committing click starts: drop any hover preview so it can't
+            // linger under (or fight) the committed selection.
+            engine?.clearHoverPreview()
+            lastHoverLoc = .zero
             mouseDownLoc = view.convert(event.locationInWindow, from: nil)
             didDrag = false
+        }
+
+        // Pointer moved over the viewport with no button held → refresh the hover
+        // pre-selection preview (issue #165). No-op while measuring or during a
+        // drag (didDrag guards the button-held drag path). Computes NDC EXACTLY
+        // like handleMouseUp — bottom-left origin, no Y flip — so the preview
+        // aligns with what a click would select. A sub-pixel move gate skips the
+        // re-pick when the pointer barely moved; the engine additionally
+        // debounces the actual Python pick.
+        func handleMouseMoved(_ event: NSEvent, in view: MTKView) {
+            guard engine?.measureMode == nil, !didDrag else { return }
+            let loc = view.convert(event.locationInWindow, from: nil)
+            if lastHoverLoc != .zero,
+               hypot(loc.x - lastHoverLoc.x, loc.y - lastHoverLoc.y) < 2 {
+                return
+            }
+            lastHoverLoc = loc
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return }
+            let ndcX = Float(loc.x / w) * 2 - 1
+            let ndcY = Float(loc.y / h) * 2 - 1
+            engine?.hoverPreview(ndcX, ndcY, Float(w / h))
+        }
+
+        // Pointer left the viewport → clear the preview so it doesn't linger.
+        func handleMouseExited(_ event: NSEvent, in view: MTKView) {
+            lastHoverLoc = .zero
+            engine?.clearHoverPreview()
         }
 
         func handleMouseUp(_ event: NSEvent, in view: MTKView) {
@@ -514,6 +585,10 @@ extension MetalViewport {
                 // First movement: now send the button-down (at the press point)
                 // so PyMOL enters rotate mode for this drag.
                 didDrag = true
+                // A rotate/drag begins: drop the hover preview (the pointer is no
+                // longer just hovering) and reset the move gate.
+                engine?.clearHoverPreview()
+                lastHoverLoc = .zero
                 let down = pymolPoint(in: view, at: mouseDownLoc)
                 engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_DOWN, x: down.0, y: down.1, modifiers: mods)
             }
