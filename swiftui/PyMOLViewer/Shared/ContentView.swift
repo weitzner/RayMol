@@ -467,7 +467,7 @@ struct ContentView: View {
                     .environmentObject(themeManager)
                     .frame(width: 340)
             } else if showObjectPanel {
-                inspectorSwitcher
+                inspectorSwitcher()
                     .frame(width: 340)   // compact; the Movie-tab transport is shrunk (TransportBar kT* consts) to fit rather than widening the column
             }
         }
@@ -922,7 +922,6 @@ struct ContentView: View {
     @State private var didConfigForCompact = false
     @AppStorage("ipadGestureCoachSeen") private var gestureCoachSeen = false
     @State private var showGestureLegend = false
-    @State private var showPanePopover = false
 
     // Test hook (PYMOL_SKIP_GESTURE_HELP): suppress the first-run gesture-coach
     // overlay entirely. On a fresh simulator gestureCoachSeen defaults to false,
@@ -952,12 +951,17 @@ struct ContentView: View {
     // interface orientation does. Verified on-device (iPhone 15 Pro): when the
     // island sits on the RIGHT the interface orientation is .landscapeRight.
     @State private var islandOnRight = false
+    // True when the interface is in a portrait orientation. On iPad this gates the
+    // expanded-timeline dock (landscape-only): its entry points are disabled and
+    // the dock auto-closes on rotation into portrait. Fed by refreshIslandSide().
+    @State private var interfacePortrait = false
 
     private func refreshIslandSide() {
         #if os(iOS)
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
         if let io = scene?.interfaceOrientation {
+            interfacePortrait = io.isPortrait
             // Verified on-device (iPhone 15 Pro, yellow bg) AND on-sim (cutout visible
             // inside a debug-colored stripe): the Dynamic Island sits on the physical
             // RIGHT when interfaceOrientation == .landscapeLeft. (The naming is
@@ -970,6 +974,10 @@ struct ContentView: View {
     // iPhone landscape == compact width + compact height (iPad is regular height in
     // both orientations; iPhone portrait is compact width + regular height).
     private var isPhoneLandscape: Bool { hSize == .compact && vSize == .compact }
+    // iPad in portrait (regular width + portrait interface orientation). The
+    // expanded timeline dock is landscape-only, so its Expand button + the nav-bar
+    // clapperboard toggle are disabled here and the dock auto-closes on rotation.
+    private var isPadPortrait: Bool { hSize != .compact && interfacePortrait }
     // Effective pane bindings: iPhone landscape uses its own minimal-default state;
     // everywhere else (iPad) uses the shared show* bools.
     private var consoleBinding: Binding<Bool> { isPhoneLandscape ? $landConsole : $showCommandPanel }
@@ -1081,7 +1089,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosTimelineToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosTimelineToolbar; iosPanelToggle; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -1156,6 +1164,11 @@ struct ContentView: View {
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             refreshIslandSide()   // interface orientation is valid immediately (no settle delay)
+            // The expanded timeline dock is landscape-only on iPad: collapse it when
+            // rotating into portrait so it never lingers behind a disabled toggle.
+            if hSize != .compact && interfacePortrait && engine.timelineMode {
+                withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode = false }
+            }
         }
         #endif
         .onAppear {
@@ -1296,6 +1309,26 @@ struct ContentView: View {
         case 2:  return hug(2, cap: total * 0.72)               // Movie — timeline studio
         case 4:  return total * 0.42                             // Settings root — compact
         default: return total * 0.45
+        }
+    }
+
+    // iPad-portrait bottom inspector height — mirrors portraitPanelHeight's policy
+    // but keyed to the inspector's segmented tab. The Movie tab hugs its measured
+    // content (reportPaneHeight(2)); the scroll-based tabs use fixed caps (they
+    // fill a sensible fraction rather than collapsing to nothing).
+    private func inspectorPortraitHeight(total: CGFloat) -> CGFloat {
+        let floor: CGFloat = 150
+        // Segmented picker + blurb row + divider sit above the tab content.
+        let chrome: CGFloat = 96
+        func hug(_ tag: Int, cap: CGFloat) -> CGFloat {
+            let content = paneHeights[tag].map { $0 + chrome }
+            return min(max(content ?? cap, floor), cap)
+        }
+        switch inspectorTab {
+        case .objects: return engine.expandedDetail != nil ? total * 0.5 : total / 3
+        case .scenes:  return hug(5, cap: total * 0.5)
+        case .movie:   return hug(2, cap: total * 0.72)
+        case .display: return total * 0.5
         }
     }
 
@@ -1492,8 +1525,10 @@ struct ContentView: View {
                     }
                     if engine.sequenceVisible {
                         SequencePanel().frame(height: ipadSequenceHeight)
-                        Divider()
                     }
+                    // Twin-tongue seam rail: Console/Sequence show-hide, welded to the
+                    // viewport's top edge (always present) — mirrors the bottom tongue.
+                    topPaneRail()
                     viewportView
                     // Expanded timeline docks full-width under the viewport (the
                     // Movie tab's Expand button toggles engine.timelineMode). Its own
@@ -1515,14 +1550,17 @@ struct ContentView: View {
                         .environmentObject(themeManager)
                         .frame(width: rightW)
                         .background(themeChromeBg)
-                } else if showRight {
-                    Divider()
-                    // Reserve top space so the floating toolbar doesn't hide the
-                    // inspector header / first row on iPhone (full-bleed).
-                    inspectorSwitcher
-                        .padding(.top, panelTopInset)
-                        .frame(width: rightW)
-                        .background(themeChromeBg)
+                } else {
+                    // Tiny vertical "tongue" handle to show/hide the side inspector.
+                    panelTongue(shown: objectsBinding, axis: .vertical)
+                    if showRight {
+                        // Reserve top space so the floating toolbar doesn't hide the
+                        // inspector header / first row on iPhone (full-bleed).
+                        inspectorSwitcher()
+                            .padding(.top, panelTopInset)
+                            .frame(width: rightW)
+                            .background(themeChromeBg)
+                    }
                 }
             }
         } else {
@@ -1535,17 +1573,16 @@ struct ContentView: View {
                 }
                 if engine.sequenceVisible {
                     SequencePanel().frame(height: ipadSequenceHeight)
-                    Divider()
                 }
+                // Twin-tongue seam rail: Console/Sequence show-hide, welded to the
+                // viewport's top edge (always present) — mirrors the bottom tongue.
+                topPaneRail()
                 viewportView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Expanded timeline docks between the viewport and the bottom
-                // inspector (portrait). Toggled by the Movie tab's Expand button.
-                if engine.timelineMode {
-                    Divider()
-                    TimelinePanel()
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // NOTE: the expanded timeline dock is LANDSCAPE-only. In portrait the
+                // timeline is reached via the inspector's Movie tab (below); the
+                // Expand button + nav-bar toggle are disabled here (isPadPortrait) and
+                // the dock auto-closes on rotation into portrait.
                 if showThemeStudio {
                     resizeDivider(landscape: false, total: geo.size.height)
                     ThemeStudioPanel(onClose: { withAnimation(.easeInOut(duration: 0.2)) { showThemeStudio = false } })
@@ -1553,11 +1590,19 @@ struct ContentView: View {
                         .environmentObject(themeManager)
                         .frame(height: bottomH)
                         .background(themeChromeBg)
-                } else if showRight {
-                    resizeDivider(landscape: false, total: geo.size.height)
-                    inspectorSwitcher
-                        .frame(height: bottomH)
-                        .background(themeChromeBg)
+                } else {
+                    // Tiny "tongue" handle to show/hide the bottom inspector.
+                    panelTongue(shown: objectsBinding, axis: .horizontal)
+                    if showRight {
+                        // iPhone-style spacing: hug the active tab's content (no drag
+                        // divider). The Movie tab reports its natural height;
+                        // scroll-based tabs use fixed caps (see inspectorPortraitHeight).
+                        inspectorSwitcher(hugContent: true)
+                            .frame(height: inspectorPortraitHeight(total: geo.size.height))
+                            .background(themeChromeBg)
+                            .onPreferenceChange(PaneHeightKey.self) { paneHeights = $0 }
+                            .animation(.easeInOut(duration: 0.25), value: inspectorTab)
+                    }
                 }
             }
         }
@@ -1579,6 +1624,84 @@ struct ContentView: View {
         themeManager.active.panelBackground.blended(with: themeManager.active.panelText, 0.12).color
     }
     private var dividerPillColor: Color { themeManager.active.panelText.color.opacity(0.4) }
+
+    // A small protruding "tongue" handle that shows/hides an adjacent inspector
+    // panel. Horizontal (a wide little tab) when the panel docks at the bottom;
+    // vertical when it docks on the trailing side. Tapping toggles `shown`; the
+    // chevron points the way the panel will move. Stays visible when collapsed so
+    // the panel can be pulled back. iPad (regular-width) layout only.
+    @ViewBuilder
+    private func panelTongue(shown: Binding<Bool>, axis: Axis) -> some View {
+        let isShown = shown.wrappedValue
+        let chevron = axis == .horizontal
+            ? (isShown ? "chevron.down" : "chevron.up")
+            : (isShown ? "chevron.right" : "chevron.left")
+        let tab = Button {
+            withAnimation(.easeInOut(duration: 0.25)) { shown.wrappedValue.toggle() }
+        } label: {
+            Image(systemName: chevron)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(dividerPillColor)
+                .frame(width: axis == .horizontal ? 52 : 16,
+                       height: axis == .horizontal ? 16 : 52)
+                .background(dividerBarColor,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isShown ? "Hide panel" : "Show panel")
+        // Center the little tab within a thin full-width / full-height strip.
+        if axis == .horizontal {
+            tab.frame(maxWidth: .infinity).padding(.vertical, 1)
+        } else {
+            tab.frame(maxHeight: .infinity).padding(.horizontal, 1)
+        }
+    }
+
+    // The twin-tongue "seam rail" welded to the viewport's TOP edge (iPad). Mirrors
+    // the bottom inspector tongue: two labeled pills in FIXED slots — Console (left)
+    // + Sequence (right) — each toggling its own pane. Shown = accent fill + chevron
+    // up (retract the pane up); hidden = muted outline + chevron down (drop it down).
+    // Always drawn, so it's the permanent seam between the top pane-stack and the 3D
+    // view — the top mirror of the bottom inspector tongue. iPad layout only.
+    @ViewBuilder
+    private func topPaneRail() -> some View {
+        HStack(spacing: 12) {
+            Spacer(minLength: 0)
+            railTongue(icon: "terminal", label: "Console", shown: consoleBinding)
+            railTongue(icon: "textformat.abc", label: "Seq", shown: $engine.sequenceVisible)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 18)
+        // No full-width bar fill — just the two floating pills, so the top stays slim
+        // (matches the bottom tongue, which is likewise a small tab on transparent).
+    }
+
+    private func railTongue(icon: String, label: String, shown: Binding<Bool>) -> some View {
+        let on = shown.wrappedValue
+        return Button {
+            withAnimation(.easeInOut(duration: 0.25)) { shown.wrappedValue.toggle() }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(label).font(.system(size: 11, weight: .medium))
+                Image(systemName: on ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .foregroundColor(on ? .white : dividerPillColor)
+            .padding(.horizontal, 9)
+            .frame(height: 16)
+            .background(
+                Capsule()
+                    .fill(on ? TimelineTheme.accent : Color.clear)
+                    .overlay(Capsule().strokeBorder(on ? Color.clear : dividerPillColor.opacity(0.6), lineWidth: 1))
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label) pane, \(on ? "shown" : "hidden")")
+    }
 
     // down grows the terminal; committed on release. Clamped to [60, maxTerm].
     @ViewBuilder
@@ -1637,70 +1760,9 @@ struct ContentView: View {
         }
     }
 
-    // iPad (regular size class): per-pane visibility toggles in a single menu,
-    // mirroring the macOS toolbar's panelToggles (Sequence / Objects / Console /
-    // Raymond). Lets the user stack the terminal + sequence above the viewport
-    // and show/hide the Objects + Raymond right column — the desktop arrangement.
-    private var iosPadPanelMenu: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            // iPad only (mac-style layout). iPhone — both orientations — uses the
-            // 5-tab control panel + the full-screen toggle (iosPanelToggle).
-            if hSize == .regular {
-                Button {
-                    showPanePopover.toggle()
-                } label: {
-                    Image(systemName: "sidebar.squares.right")
-                }
-                .accessibilityLabel("Panels")
-                // A popover (not a Menu) so it STAYS OPEN while the user flips
-                // several panes; it closes on tap-away. presentationCompactAdaptation
-                // keeps it a popover on iPhone (instead of expanding to a sheet).
-                .popover(isPresented: $showPanePopover, arrowEdge: .top) {
-                    if #available(iOS 16.4, *) {
-                        panePopoverContent.presentationCompactAdaptation(.popover)
-                    } else {
-                        panePopoverContent
-                    }
-                }
-            }
-        }
-    }
-
-    // Pane-visibility list for the iOS toolbar popover. Stays open while toggling;
-    // off rows are grayed ("gray out the other options"). Binds to the effective
-    // bindings — iPhone landscape flips its own minimal-default land* state, iPad
-    // flips the show* bools.
-    @ViewBuilder
-    private var panePopoverContent: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            paneRow("Console",  "terminal",                       consoleBinding)
-            paneRow("Sequence", "textformat.abc",                 $engine.sequenceVisible)
-            paneRow("Objects",  "cube",                           objectsBinding)
-            paneRow("Timeline", "clapperboard",                   $engine.timelineMode)
-        }
-        .padding(6)
-        .frame(minWidth: 240)
-    }
-
-    private func paneRow(_ title: String, _ icon: String, _ isOn: Binding<Bool>) -> some View {
-        Button {
-            isOn.wrappedValue.toggle()    // popover stays open → multi-toggle
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 13, weight: .semibold))
-                    .opacity(isOn.wrappedValue ? 1 : 0)
-                    .frame(width: 16)
-                Image(systemName: icon).frame(width: 22)
-                Text(title)
-                Spacer(minLength: 12)
-            }
-            .contentShape(Rectangle())
-            .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
-        }
-        .buttonStyle(.plain)
-        .padding(.vertical, 7).padding(.horizontal, 8)
-    }
+    // NOTE: the iPad Console/Sequence visibility toggles moved OUT of the top-right
+    // toolbar onto the twin-tongue topPaneRail() at the viewport's top seam, so the
+    // top-right is now just Export. (Objects are shown/hidden via the panel tongue.)
 
     // The 3D viewport — primary in every orientation. Carries the empty-state CTA
     // and a persistent "?" gesture-legend button.
@@ -2166,19 +2228,20 @@ struct ContentView: View {
 
     private var iosTimelineToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    if hSize == .compact {
+            // iPhone only: jumps to the Movie tab. On iPad the timeline lives in the
+            // inspector's Movie tab (its Expand button opens the landscape dock), so
+            // there is no top-bar clapperboard — the top-right is Console/Sequence/Export.
+            if hSize == .compact {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
                         selectedTab = (selectedTab == 2) ? 1 : 2   // Movie tab hosts the timeline
-                    } else {
-                        engine.timelineMode.toggle()               // iPad/desktop docked mode
                     }
+                } label: {
+                    Image(systemName: timelineToggleActive ? "clapperboard.fill" : "clapperboard")
                 }
-            } label: {
-                Image(systemName: timelineToggleActive ? "clapperboard.fill" : "clapperboard")
+                .accessibilityLabel("Movie timeline")
+                .tint(timelineToggleActive ? TimelineTheme.accent : nil)
             }
-            .accessibilityLabel("Movie timeline")
-            .tint(timelineToggleActive ? TimelineTheme.accent : nil)
         }
     }
 
@@ -2345,7 +2408,7 @@ struct ContentView: View {
     // an existing shared view — nothing is rebuilt. Works by touch (iPad) and
     // pointer (macOS); macOS menubar items are additive accelerators.
     @ViewBuilder
-    private var inspectorSwitcher: some View {
+    private func inspectorSwitcher(hugContent: Bool = false) -> some View {
         VStack(spacing: 0) {
             Picker("", selection: $inspectorTab) {
                 ForEach(InspectorTab.allCases) { tab in
@@ -2381,16 +2444,29 @@ struct ContentView: View {
                            onOpenMovie: { inspectorTab = .movie })
             case .movie:
                 // The right-panel timeline mimics the iPhone Movie tab; its Expand
-                // button toggles the full-width bottom dock (engine.timelineMode).
+                // button toggles the full-width bottom dock (engine.timelineMode) —
+                // landscape-only, so it's disabled in iPad portrait (isPadPortrait).
                 // forceCompact → the narrow iPhone-style layout that fits the column.
-                // fill the column height (top-aligned) with the timeline chrome so
-                // the area below the compact panel isn't transparent (desktop
-                // showing through) — the panel otherwise hugs its content.
-                TimelinePanel(showsDone: false,
+                let movie = TimelinePanel(showsDone: false,
                               onExpand: { withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() } },
-                              forceCompact: true)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .background(TimelineTheme.bar)
+                              forceCompact: true,
+                              expandDisabled: isPadPortrait)
+                if hugContent {
+                    // Portrait bottom dock: hug intrinsic height + report it so the
+                    // panel wraps tightly (matches the iPhone Movie tab spacing).
+                    movie
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .reportPaneHeight(2)
+                        .background(TimelineTheme.bar)
+                } else {
+                    // Landscape side column: fill the column height (top-aligned) so
+                    // the area below the compact panel isn't transparent (desktop
+                    // showing through) — the panel otherwise hugs its content.
+                    movie
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .background(TimelineTheme.bar)
+                }
             case .display:
                 // The SCENE render card (bg/lighting/effects/ray); its
                 // "All settings…" opens the shared searchable SettingsSheet. Theme
