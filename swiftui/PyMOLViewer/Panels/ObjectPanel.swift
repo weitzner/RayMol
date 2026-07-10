@@ -935,34 +935,36 @@ struct SelectionModeMenu: View {
     }
 }
 
-/// One-tap "clear selection" — runs the shared two-stage
-/// `engine.escapeClearSelection()` engine helper (issues #163 + #166), the same
-/// path the Esc key uses. Stage 1 (a selection is enabled) hides the pink
-/// markers via `deselect`; stage 2 (markers already hidden but a `sele` named
-/// selection still exists) deletes `sele` so the object list is clean. Lives
-/// right next to `SelectionModeMenu` in the shared inspector chrome (macOS/iPad)
-/// and the iPhone Object-panel header, so it's reachable from every tab. Dimmed
-/// and non-interactive only when there is no `sele` selection at all.
+/// One-click "delete selection" (issue #163): a single tap deletes the `sele`
+/// named selection outright (`delete sele`) — removing the pink markers AND the
+/// lingering entry from the object list, not just deselecting. (The Esc key,
+/// issue #166, is intentionally the two-stage `escapeClearSelection()` —
+/// deselect, then delete on a second press.) Lives right next to
+/// `SelectionModeMenu` in the shared inspector chrome (macOS/iPad) and the
+/// iPhone Object-panel header, so it's reachable from every tab. Dimmed and
+/// non-interactive only when there is no `sele` selection at all.
 struct ClearSelectionButton: View {
     @EnvironmentObject var engine: PyMOLEngine
-    // Enabled whenever a `sele` selection EXISTS — enabled or not — so a first
-    // click can hide its markers (stage 1) and a second click can delete the
-    // now-disabled selection (stage 2). Disabled only when no `sele` exists.
+    // Enabled whenever a `sele` selection EXISTS (enabled or not); a single
+    // click deletes it. Disabled only when no `sele` exists.
     private var hasActiveSelection: Bool {
         engine.objects.contains { $0.isSelection && $0.name == "sele" }
     }
     var body: some View {
-        Button { engine.escapeClearSelection() } label: {
+        Button { engine.runCommand("delete sele") } label: {
             Image(systemName: "xmark.circle")
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 // Accent (blue) when there's something to clear — matches the
                 // panel's action buttons (A/S/H/L/C) — else dimmed grey.
                 .foregroundColor(hasActiveSelection ? PanelTheme.accentColor : PanelTheme.disabledColor)
+                // A real 18pt hit/hover region (not a bare ~10pt glyph) so the
+                // click is easy and the .help tooltip reliably appears on hover.
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!hasActiveSelection)
-        .fixedSize()
-        .help("Delete selection (sele) — removes the highlight and the named selection")
+        .help("Delete selection (sele)")
     }
 }
 
