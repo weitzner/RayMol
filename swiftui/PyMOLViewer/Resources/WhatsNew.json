@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.6.1",
+    "pages": [
+      {
+        "title": "Hover to preview",
+        "body": "Move your pointer across a cartoon and RayMol highlights the residue you'd select in light cyan — a live preview of every click that never touches your committed selection.",
+        "videoName": "whatsnew-161-hover"
+      }
+    ]
+  },
+  {
     "version": "1.5.2",
     "pages": [
       {
