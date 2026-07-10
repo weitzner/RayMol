@@ -1981,6 +1981,16 @@ private struct ObjectCard: View {
                     }
                 }
                 .help(engine.playingObjects.contains(entry.name) ? "Pause" : "Play models")
+                #if os(iOS)
+                // On iOS `.help()` degrades to a VoiceOver-only hint with no visible
+                // surface, so the macOS hover tooltip added in #144 never reaches a
+                // touch user — they just see a greyed-out Play button with no reason.
+                // Surface the same explanation as a tappable (?) that reveals it in a
+                // popover. macOS keeps its hover tooltip and is left untouched.
+                if engine.timelineMode {
+                    HelpButton(text: "Model playback is off while the movie timeline is open — close it to inspect models.")
+                }
+                #endif
                 Spacer(minLength: 0)
                 Menu {
                     ForEach([1.0, 5.0, 10.0, 15.0, 30.0], id: \.self) { f in
