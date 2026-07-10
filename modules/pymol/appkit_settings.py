@@ -35,7 +35,8 @@ def catalog():
             continue
         out.append({'name': name, 'type': t, 'val': '' if v is None else str(v)})
     try:
-        open(_path(), 'w').write(json.dumps(out))
+        with open(_path(), 'w') as f:
+            f.write(json.dumps(out))
         print('SETTINGS:ready')
     except Exception as e:
         print('SETTINGS:err ' + str(e))
