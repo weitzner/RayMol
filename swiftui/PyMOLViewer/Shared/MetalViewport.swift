@@ -517,13 +517,21 @@ extension MetalViewport {
         // re-pick when the pointer barely moved; the engine additionally
         // debounces the actual Python pick.
         func handleMouseMoved(_ event: NSEvent, in view: MTKView) {
-            guard engine?.measureMode == nil, !didDrag else { return }
+            guard !didDrag else { return }
             let loc = view.convert(event.locationInWindow, from: nil)
             if lastHoverLoc != .zero,
                hypot(loc.x - lastHoverLoc.x, loc.y - lastHoverLoc.y) < 2 {
                 return
             }
             lastHoverLoc = loc
+            // Move mode: highlight the gizmo handle under the cursor so it's
+            // obvious which axis/ring/center a drag will grab.
+            if engine?.interactionMode == .move {
+                let hit = gizmoHit(in: view, at: loc)
+                if engine?.hoveredHandle != hit { engine?.hoveredHandle = hit }
+                return
+            }
+            guard engine?.measureMode == nil else { return }
             let w = view.bounds.width, h = view.bounds.height
             guard w > 0, h > 0 else { return }
             let ndcX = Float(loc.x / w) * 2 - 1
@@ -535,6 +543,7 @@ extension MetalViewport {
         func handleMouseExited(_ event: NSEvent, in view: MTKView) {
             lastHoverLoc = .zero
             engine?.clearHoverPreview()
+            if engine?.hoveredHandle != nil { engine?.hoveredHandle = nil }
         }
 
         func handleMouseUp(_ event: NSEvent, in view: MTKView) {

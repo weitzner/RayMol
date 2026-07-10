@@ -134,9 +134,9 @@ final class PyMOLEngine: ObservableObject {
     // MetalViewport; gizmo holds the projected handle geometry the overlay draws
     // and the handlers hit-test; armedAxis is the iOS tap-to-arm state.
     @Published var interactionMode: InteractionMode = .viewing
-    @Published var moveTool: MoveTool = .translate
     @Published var activeMoveObject: String? = nil
-    @Published var armedAxis: GizmoHandle? = nil
+    @Published var armedAxis: GizmoHandle? = nil        // iOS tap-to-arm
+    @Published var hoveredHandle: GizmoHandle? = nil     // macOS hover highlight
     @Published var gizmo: GizmoGeometry? = nil
     // Hover pre-selection preview (issue #165, macOS): when true, moving the
     // pointer over the viewport highlights what a click WOULD select (in a
@@ -1903,17 +1903,11 @@ final class PyMOLEngine: ObservableObject {
             refreshGizmo()
         } else {
             armedAxis = nil
+            hoveredHandle = nil
             activeMoveObject = nil
             gizmo = nil
             runPython("from pymol import metal_move as _mm\n_mm.cleanup()")
         }
-    }
-
-    func setMoveTool(_ tool: MoveTool) {
-        moveTool = tool
-        armedAxis = nil
-        runPython("from pymol import metal_move as _mm\n_mm.set_tool('\(tool.rawValue)', \(gizmoAspect))")
-        readGizmo()
     }
 
     /// Grab-what-you-touch: set the active object to whatever is under the point.
@@ -1926,7 +1920,7 @@ final class PyMOLEngine: ObservableObject {
     func setActiveMoveObject(_ name: String) {
         let nb = Data(name.utf8).base64EncodedString()
         runPython("import base64 as _b64\nfrom pymol import metal_move as _mm\n"
-            + "_mm.set_active(_b64.b64decode('\(nb)').decode('utf-8'), '\(moveTool.rawValue)', \(gizmoAspect))")
+            + "_mm.set_active(_b64.b64decode('\(nb)').decode('utf-8'), \(gizmoAspect))")
         readGizmo()
     }
 

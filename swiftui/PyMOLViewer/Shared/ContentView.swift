@@ -547,6 +547,14 @@ struct ContentView: View {
             if ProcessInfo.processInfo.environment["PYMOL_AUTOSCENEBUTTONS"] != nil {
                 showSceneButtons = true
             }
+            // Test affordance: enter Move mode and make PYMOL_AUTOMOVE=<object>
+            // the active object so the gizmo can be screenshotted without a tap.
+            if let mv = ProcessInfo.processInfo.environment["PYMOL_AUTOMOVE"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.8) {
+                    engine.setInteractionMode(.move)
+                    if !mv.isEmpty { engine.setActiveMoveObject(mv) }
+                }
+            }
             installEscKeyMonitor()
         }
         .onDisappear {
@@ -1232,6 +1240,14 @@ struct ContentView: View {
             if let m = ProcessInfo.processInfo.environment["PYMOL_AUTOMEASURE"] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
                     engine.setMeasureMode(MeasureKind(rawValue: m) ?? .distance)
+                }
+            }
+            // Test affordance: enter Move mode and make PYMOL_AUTOMOVE=<object>
+            // the active object, so the gizmo can be screenshotted without a tap.
+            if let mv = ProcessInfo.processInfo.environment["PYMOL_AUTOMOVE"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.8) {
+                    engine.setInteractionMode(.move)
+                    if !mv.isEmpty { engine.setActiveMoveObject(mv) }
                 }
             }
             if let e = ProcessInfo.processInfo.environment["PYMOL_AUTOEXPORTMOVIE"] {
@@ -2813,15 +2829,8 @@ struct ContentView: View {
     // active-object dropdown, live readout, reset, exit.
     private var moveOverlay: some View {
         HStack(spacing: 10) {
-            Picker("", selection: Binding(
-                get: { engine.moveTool },
-                set: { engine.setMoveTool($0) })) {
-                Text("Move").tag(MoveTool.translate)
-                Text("Rotate").tag(MoveTool.rotate)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 150)
-
+            Image(systemName: "move.3d")
+                .foregroundColor(themeManager.active.accent.color)
             Menu {
                 let names = engine.objects.filter { !$0.isSelection }.map { $0.name }
                 if names.isEmpty {
