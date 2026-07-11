@@ -35,8 +35,11 @@ _drag = None            # in-flight drag: {handle, px, py, dist, deg, dx, dy}
 # Per-object model-space frame: obj -> (com[3], (bx, by, bz)) unit column vectors.
 _frame = {}
 
-_AXIS_NDC = 0.16        # arrow half-length (screen NDC)
-_RING_NDC = 0.15        # ring radius (screen NDC)
+# Gizmo size is tied to the object's radius (world Angstroms), so it stays
+# proportional to the molecule as you zoom, rather than a fixed screen size.
+_AXIS_FRAC = 0.65       # axis arrow length as a fraction of the object radius
+_RING_FRAC = 0.55       # rotation ring radius as a fraction of the object radius
+_MIN_RADIUS = 3.0       # Angstrom floor so tiny objects still get a visible gizmo
 _RING_SEG = 48
 _ELEM_MASS = {'H': 1.008, 'C': 12.011, 'N': 14.007, 'O': 15.999, 'S': 32.06,
               'P': 30.974, 'FE': 55.845, 'ZN': 65.38, 'MG': 24.305,
@@ -232,7 +235,18 @@ def _compute_frame(obj):
         basis = _pca_axes(obj, com)
     if basis is None:
         basis = ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0])
-    return (com, basis)
+    # Object radius = max distance from the COM to any atom (bounding radius).
+    r2 = [0.0]
+    try:
+        cmd.iterate_state(
+            1, '(%s)' % obj,
+            'd = (x - COM[0])**2 + (y - COM[1])**2 + (z - COM[2])**2; '
+            'r2[0] = d if d > r2[0] else r2[0]',
+            space={'r2': r2, 'COM': com, 'd': 0})
+    except Exception:
+        pass
+    radius = max(math.sqrt(r2[0]), _MIN_RADIUS)
+    return (com, basis, radius)
 
 
 def _ensure_frame(obj):
@@ -249,7 +263,7 @@ def _displayed_frame(obj):
     f = _ensure_frame(obj)
     if f is None:
         return None
-    com, (bx, by, bz) = f
+    com, (bx, by, bz), radius = f
     try:
         m = cmd.get_object_matrix(obj)
     except Exception:
@@ -262,8 +276,8 @@ def _displayed_frame(obj):
         comw = [m[0] * com[0] + m[1] * com[1] + m[2] * com[2] + m[3],
                 m[4] * com[0] + m[5] * com[1] + m[6] * com[2] + m[7],
                 m[8] * com[0] + m[9] * com[1] + m[10] * com[2] + m[11]]
-        return (comw, (rot(bx), rot(by), rot(bz)))
-    return (com, (bx, by, bz))
+        return (comw, (rot(bx), rot(by), rot(bz)), radius)
+    return (com, (bx, by, bz), radius)
 
 
 # --- Gizmo geometry emission ------------------------------------------------
@@ -286,29 +300,22 @@ def _emit(active=True):
             params = _view_params(_aspect)
             df = _displayed_frame(_active)
             if params is not None and df is not None:
-                com, (dx, dy, dz) = df
+                com, (dx, dy, dz), radius = df
                 cproj = _project(params, com)
                 if cproj is not None:
                     out = {'active': True, 'obj': _active,
                            'center': [cproj[0], cproj[1]], 'readout': _readout()}
-                    half_h = cproj[2] * params[5]
                     axes = {'x': dx, 'y': dy, 'z': dz}
-                    # Axis arrows.
+                    # Axis arrows sized in world units (fraction of the radius).
+                    axis_len = _AXIS_FRAC * radius
                     out['axes'] = {}
                     for k, av in axes.items():
-                        d = _axis_screen_dir(params, com, av)
-                        if not d:
-                            continue
-                        nrm = math.hypot(d[0], d[1])
-                        if nrm < 1e-9:
-                            continue
-                        s = _AXIS_NDC / nrm
-                        tip = _project(params, [com[i] + av[i] * s for i in range(3)])
+                        tip = _project(params, [com[i] + av[i] * axis_len for i in range(3)])
                         if tip is not None:
                             out['axes'][k] = [tip[0], tip[1]]
                     # Rotation rings: one per axis, in the plane of the other two.
                     ringbasis = {'x': (dy, dz), 'y': (dz, dx), 'z': (dx, dy)}
-                    r_world = _RING_NDC * half_h
+                    r_world = _RING_FRAC * radius
                     out['rings'] = {}
                     for k, (u, vv) in ringbasis.items():
                         pts = []
@@ -394,7 +401,7 @@ def update_drag(ndc_x, ndc_y, aspect):
     df = _displayed_frame(_active)
     if params is None or df is None:
         return
-    com, (dx, dy, dz) = df
+    com, (dx, dy, dz), _radius = df
     axes = {'x': dx, 'y': dy, 'z': dz}
     h = _drag['handle']
     try:
