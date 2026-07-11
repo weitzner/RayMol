@@ -361,10 +361,6 @@ def _hl(key):
     return base
 
 
-def _tube(key, base):
-    return base * 1.7 if _hover == key else base
-
-
 def _delete_cgo():
     try:
         if _GIZMO_OBJ in (cmd.get_names('objects') or []):
@@ -399,34 +395,39 @@ def _build_cgo():
     axis_len = _AXIS_FRAC * radius
     ring_r = _RING_FRAC * radius
     tube = max(0.02 * radius, 0.12)   # thin, stick-like
+    GROW = 1.15                       # hovered element grows to show it's picked
     g = []
-    # Axis tubes + knob spheres (grab targets).
+    # Axis tubes + knob spheres (grab targets). Hovered axis grows + brightens.
     for k, av in (('x', bx), ('y', by), ('z', bz)):
         r, gg, b = _hl(k)
-        t = _tube(k, tube)
-        tip = [com[i] + av[i] * axis_len for i in range(3)]
+        hov = (_hover == k)
+        t = tube * (1.8 if hov else 1.0)
+        al = axis_len * (GROW if hov else 1.0)
+        tip = [com[i] + av[i] * al for i in range(3)]
         g += [cgo.CYLINDER, com[0], com[1], com[2], tip[0], tip[1], tip[2],
               t, r, gg, b, r, gg, b]
-        g += [cgo.COLOR, r, gg, b, cgo.SPHERE, tip[0], tip[1], tip[2], t * 2.3]
-    # Rotation rings (tube segments) in the plane of the other two axes.
+        g += [cgo.COLOR, r, gg, b, cgo.SPHERE, tip[0], tip[1], tip[2],
+              t * (3.0 if hov else 2.3)]
+    # Rotation rings; hovered ring grows in radius + tube.
     for k, u, v in (('x', by, bz), ('y', bz, bx), ('z', bx, by)):
         rk = 'r' + k
         r, gg, b = _hl(rk)
-        t = _tube(rk, tube * 0.8)
+        hov = (_hover == rk)
+        t = tube * 0.8 * (2.0 if hov else 1.0)
+        rr = ring_r * (GROW if hov else 1.0)
         prev = None
         N = 64   # smooth ring
         for j in range(N + 1):
             a = 2.0 * math.pi * j / N
-            p = [com[i] + u[i] * math.cos(a) * ring_r + v[i] * math.sin(a) * ring_r
+            p = [com[i] + u[i] * math.cos(a) * rr + v[i] * math.sin(a) * rr
                  for i in range(3)]
             if prev is not None:
                 g += [cgo.CYLINDER, prev[0], prev[1], prev[2], p[0], p[1], p[2],
                       t, r, gg, b, r, gg, b]
             prev = p
-    # Free center handle.
-    cr = 1.0 if _hover != 'free' else 1.0
-    g += [cgo.COLOR, cr, cr, cr, cgo.SPHERE, com[0], com[1], com[2],
-          tube * (2.6 if _hover == 'free' else 2.1)]
+    # Free center handle; grows noticeably when hovered.
+    g += [cgo.COLOR, 1.0, 1.0, 1.0, cgo.SPHERE, com[0], com[1], com[2],
+          tube * (3.4 if _hover == 'free' else 2.1)]
     try:
         cmd.load_cgo(g, _GIZMO_OBJ, zoom=0)
     except Exception as e:
