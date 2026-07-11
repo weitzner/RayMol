@@ -561,7 +561,12 @@ def update_drag(ndc_x, ndc_y, aspect):
     except Exception as e:
         print('METALMOVE_ERR:' + str(e))
     _sync_gizmo_ttt()   # gizmo rides the molecule via the copied TTT
-    _emit(True)
+    # NOTE: deliberately NO _emit() here. Mid-drag we skip the projection +
+    # JSON-file write (and Swift skips the file read-back) — the gizmo is a 3D
+    # CGO that already tracks the molecule via the synced TTT, and hit-testing
+    # is idle while a handle is grabbed. This keeps the drag as light as a
+    # vanilla-GL matrix update (one cmd.translate/rotate). The full geometry is
+    # re-emitted once on end_drag for the next hit-test.
 
 
 def end_drag():

@@ -146,6 +146,13 @@ def _grid_pick_context(ndc_x, ndc_y, aspect):
     return (target, cell_ndc_x, cell_ndc_y, cell_aspect)
 
 
+def _is_identity(m, eps=1e-6):
+    """True if a 16-float homogeneous matrix is (near) identity — lets picking
+    skip the per-atom transform for the common un-moved object."""
+    ident = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+    return all(abs(m[i] - ident[i]) < eps for i in range(16))
+
+
 def _pick_atom(ndc_x, ndc_y, aspect):
     """Project all DRAWN atoms and return the front-most atom under the click as
     (screen_d2, obj, chain, resi, resn, segi, name, sx, sy), or None for empty
@@ -238,10 +245,27 @@ def _pick_atom(ndc_x, ndc_y, aspect):
                 continue
             if not model or not model.atom:
                 continue
+            # Apply the object's display transform (TTT / state matrix) so a
+            # MOVED object is picked where it RENDERS, not at its raw stored
+            # coordinates. Mirrors the renderer (ObjectPrepareContext) and the
+            # pink selection markers (ExecutiveGetSelectionCoords).
+            om = None
+            try:
+                m = cmd.get_object_matrix(obj)
+                if m and len(m) >= 16 and not _is_identity(m):
+                    om = m
+            except Exception:
+                om = None
             for at in model.atom:
-                dx = at.coord[0] - ox
-                dy = at.coord[1] - oy
-                dz = at.coord[2] - oz
+                cx, cy, cz = at.coord[0], at.coord[1], at.coord[2]
+                if om is not None:
+                    wx = om[0] * cx + om[1] * cy + om[2] * cz + om[3]
+                    wy = om[4] * cx + om[5] * cy + om[6] * cz + om[7]
+                    wz = om[8] * cx + om[9] * cy + om[10] * cz + om[11]
+                    cx, cy, cz = wx, wy, wz
+                dx = cx - ox
+                dy = cy - oy
+                dz = cz - oz
                 # eye = R*(model-origin) + pos
                 ex = r00 * dx + r01 * dy + r02 * dz + tx
                 ey = r10 * dx + r11 * dy + r12 * dz + ty

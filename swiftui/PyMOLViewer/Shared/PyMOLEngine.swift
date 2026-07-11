@@ -1948,8 +1948,13 @@ final class PyMOLEngine: ObservableObject {
     }
 
     func gizmoUpdateDrag(ndcX: Float, ndcY: Float, aspect: Float) {
+        // Mid-drag: only issue the move. Skip readGizmo() — metal_move deliberately
+        // does NOT re-emit geometry per tick (the gizmo is a 3D CGO that tracks the
+        // molecule via its synced TTT, and hit-testing is idle while a handle is
+        // grabbed), so there is no file to read back. This keeps the drag as light
+        // as a vanilla-GL matrix update; the continuous draw loop repaints from
+        // PyMOL's redisplay flag. end_drag re-emits geometry for the next hit-test.
         runPython("from pymol import metal_move as _mm\n_mm.update_drag(\(ndcX), \(ndcY), \(aspect))")
-        readGizmo()
     }
 
     func gizmoEndDrag() {

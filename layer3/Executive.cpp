@@ -8635,6 +8635,11 @@ void ExecutiveGetNamedSelectionCoords(
     auto* cs = obj->CSet[curState];
     if (!cs) continue;
 
+    // Apply the object's display transform (TTT) so a MOVED object's markers
+    // land where it RENDERS, not at its raw coordinates — mirrors the renderer
+    // (ObjectPrepareContext pushes the TTT modelview) and metal_pick.
+    const bool hasTTT = obj->TTTFlag;
+
     for (int atIdx = 0; atIdx < obj->NAtom; atIdx++) {
       if (!SelectorIsMember(G, obj->AtomInfo[atIdx].selEntry, sele))
         continue;
@@ -8643,9 +8648,17 @@ void ExecutiveGetNamedSelectionCoords(
       if (coordIdx < 0) continue;
 
       const float* v = cs->coordPtr(coordIdx);
-      coords.push_back(v[0]);
-      coords.push_back(v[1]);
-      coords.push_back(v[2]);
+      if (hasTTT) {
+        float tv[3];
+        transformTTT44f3f(obj->TTT, v, tv);
+        coords.push_back(tv[0]);
+        coords.push_back(tv[1]);
+        coords.push_back(tv[2]);
+      } else {
+        coords.push_back(v[0]);
+        coords.push_back(v[1]);
+        coords.push_back(v[2]);
+      }
     }
   }
 }
@@ -8687,6 +8700,11 @@ void ExecutiveGetSelectionCoords(PyMOLGlobals* G, std::vector<float>& coords)
       auto* cs = obj->CSet[curState];
       if (!cs) continue;
 
+      // Apply the object's display transform (TTT) so a MOVED object's markers
+      // land where it RENDERS, not at its raw coordinates — mirrors the renderer
+      // (ObjectPrepareContext pushes the TTT modelview) and metal_pick.
+      const bool hasTTT = obj->TTTFlag;
+
       for (int atIdx = 0; atIdx < obj->NAtom; atIdx++) {
         if (!SelectorIsMember(G, obj->AtomInfo[atIdx].selEntry, sele))
           continue;
@@ -8695,9 +8713,17 @@ void ExecutiveGetSelectionCoords(PyMOLGlobals* G, std::vector<float>& coords)
         if (coordIdx < 0) continue;
 
         const float* v = cs->coordPtr(coordIdx);
-        coords.push_back(v[0]);
-        coords.push_back(v[1]);
-        coords.push_back(v[2]);
+        if (hasTTT) {
+          float tv[3];
+          transformTTT44f3f(obj->TTT, v, tv);
+          coords.push_back(tv[0]);
+          coords.push_back(tv[1]);
+          coords.push_back(tv[2]);
+        } else {
+          coords.push_back(v[0]);
+          coords.push_back(v[1]);
+          coords.push_back(v[2]);
+        }
       }
     }
   }
