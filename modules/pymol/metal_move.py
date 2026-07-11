@@ -32,13 +32,23 @@ from pymol import cmd
 _active = None          # active object name, or None
 _aspect = 1.0           # last viewport aspect (width / height)
 _drag = None            # in-flight drag: {handle, px, py, dist, deg, dx, dy}
+_hover = ''             # hovered handle name ('x'/'rx'/... or '') for highlight
 # Per-object model-space frame: obj -> (com[3], (bx, by, bz)) unit column vectors.
 _frame = {}
 
-# Gizmo size is tied to the object's radius (world Angstroms), so it stays
-# proportional to the molecule as you zoom, rather than a fixed screen size.
-_AXIS_FRAC = 0.65       # axis arrow length as a fraction of the object radius
-_RING_FRAC = 0.55       # rotation ring radius as a fraction of the object radius
+# The gizmo is drawn as a real 3D CGO object (lit tubes, like sticks) so it wraps
+# the molecule with proper depth. It is built once in the object's LOCAL frame and
+# rides along by copying the molecule's TTT (no per-frame rebuild); the 2D
+# projection below is used only for hit-testing.
+_GIZMO_OBJ = '_move_gizmo'
+_COL = {'x': (1.0, 0.36, 0.36), 'y': (0.37, 0.84, 0.41), 'z': (0.35, 0.66, 1.0)}
+
+# Gizmo size scales with the object's RADIUS OF GYRATION (world Angstroms) — a
+# robust "protein radius" that, unlike the max-extent bounding radius, isn't
+# inflated by a flexible terminus. So the gizmo stays proportional to the bulk of
+# the molecule as you zoom, wrapping the core rather than dominating the view.
+_AXIS_FRAC = 1.35       # axis arrow length as a multiple of Rg
+_RING_FRAC = 1.1        # rotation ring radius as a multiple of Rg
 _MIN_RADIUS = 3.0       # Angstrom floor so tiny objects still get a visible gizmo
 _RING_SEG = 48
 _ELEM_MASS = {'H': 1.008, 'C': 12.011, 'N': 14.007, 'O': 15.999, 'S': 32.06,
@@ -235,17 +245,18 @@ def _compute_frame(obj):
         basis = _pca_axes(obj, com)
     if basis is None:
         basis = ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0])
-    # Object radius = max distance from the COM to any atom (bounding radius).
-    r2 = [0.0]
+    # Object radius = radius of gyration (RMS distance of atoms from the COM).
+    acc = [0.0, 0]
     try:
         cmd.iterate_state(
             1, '(%s)' % obj,
             'd = (x - COM[0])**2 + (y - COM[1])**2 + (z - COM[2])**2; '
-            'r2[0] = d if d > r2[0] else r2[0]',
-            space={'r2': r2, 'COM': com, 'd': 0})
+            'acc[0] += d; acc[1] += 1',
+            space={'acc': acc, 'COM': com, 'd': 0})
     except Exception:
         pass
-    radius = max(math.sqrt(r2[0]), _MIN_RADIUS)
+    rg = math.sqrt(acc[0] / acc[1]) if acc[1] else 0.0
+    radius = max(rg, _MIN_RADIUS)
     return (com, basis, radius)
 
 
@@ -339,6 +350,90 @@ def _emit(active=True):
     print('GIZMO:ready')
 
 
+# --- 3D CGO gizmo (lit tubes, tracks the molecule via a copied TTT) ---------
+
+def _hl(key):
+    """Axis color for handle `key` ('x'/'y'/'z' or 'rx'/'ry'/'rz'), brightened
+    toward white when it is the hovered handle."""
+    base = _COL[key[-1]]
+    if _hover == key:
+        return tuple(min(1.0, c * 0.45 + 0.55) for c in base)
+    return base
+
+
+def _tube(key, base):
+    return base * 1.7 if _hover == key else base
+
+
+def _delete_cgo():
+    try:
+        if _GIZMO_OBJ in (cmd.get_names('objects') or []):
+            cmd.delete(_GIZMO_OBJ)
+    except Exception:
+        pass
+
+
+def _sync_gizmo_ttt():
+    """Copy the active object's TTT to the gizmo so it moves/tumbles with it."""
+    if not _object_exists(_GIZMO_OBJ) or not _object_exists(_active):
+        return
+    try:
+        ttt = cmd.get_object_ttt(_active)
+        if ttt:
+            cmd.set_object_ttt(_GIZMO_OBJ, list(ttt))
+        else:
+            cmd.matrix_reset(_GIZMO_OBJ, mode=1)
+    except Exception as e:
+        print('METALMOVE_ERR:' + str(e))
+
+
+def _build_cgo():
+    """(Re)build the gizmo CGO in the object's LOCAL frame, then sync its TTT.
+    Cheap enough to call on activate + hover change; NOT called per drag tick."""
+    f = _ensure_frame(_active)
+    if f is None:
+        _delete_cgo()
+        return
+    from pymol import cgo
+    com, (bx, by, bz), radius = f
+    axis_len = _AXIS_FRAC * radius
+    ring_r = _RING_FRAC * radius
+    tube = max(0.02 * radius, 0.12)   # thin, stick-like
+    g = []
+    # Axis tubes + knob spheres (grab targets).
+    for k, av in (('x', bx), ('y', by), ('z', bz)):
+        r, gg, b = _hl(k)
+        t = _tube(k, tube)
+        tip = [com[i] + av[i] * axis_len for i in range(3)]
+        g += [cgo.CYLINDER, com[0], com[1], com[2], tip[0], tip[1], tip[2],
+              t, r, gg, b, r, gg, b]
+        g += [cgo.COLOR, r, gg, b, cgo.SPHERE, tip[0], tip[1], tip[2], t * 2.3]
+    # Rotation rings (tube segments) in the plane of the other two axes.
+    for k, u, v in (('x', by, bz), ('y', bz, bx), ('z', bx, by)):
+        rk = 'r' + k
+        r, gg, b = _hl(rk)
+        t = _tube(rk, tube * 0.8)
+        prev = None
+        N = 64   # smooth ring
+        for j in range(N + 1):
+            a = 2.0 * math.pi * j / N
+            p = [com[i] + u[i] * math.cos(a) * ring_r + v[i] * math.sin(a) * ring_r
+                 for i in range(3)]
+            if prev is not None:
+                g += [cgo.CYLINDER, prev[0], prev[1], prev[2], p[0], p[1], p[2],
+                      t, r, gg, b, r, gg, b]
+            prev = p
+    # Free center handle.
+    cr = 1.0 if _hover != 'free' else 1.0
+    g += [cgo.COLOR, cr, cr, cr, cgo.SPHERE, com[0], com[1], com[2],
+          tube * (2.6 if _hover == 'free' else 2.1)]
+    try:
+        cmd.load_cgo(g, _GIZMO_OBJ, zoom=0)
+    except Exception as e:
+        print('METALMOVE_ERR:' + str(e))
+    _sync_gizmo_ttt()
+
+
 # --- Public API (called from Swift) ----------------------------------------
 
 def set_active(obj, aspect):
@@ -348,12 +443,16 @@ def set_active(obj, aspect):
     _active = obj if (obj and _object_exists(obj)) else None
     if _active:
         _ensure_frame(_active)
+        _build_cgo()
+    else:
+        _delete_cgo()
     _emit(_active is not None)
 
 
 def clear_active():
     global _active
     _active = None
+    _delete_cgo()
     _emit(False)
 
 
@@ -377,7 +476,21 @@ def pick_object(ndc_x, ndc_y, aspect):
         _active = None
     if _active:
         _ensure_frame(_active)
+        _build_cgo()
+    else:
+        _delete_cgo()
     _emit(_active is not None)
+
+
+def set_hover(handle):
+    """Highlight the hovered gizmo handle (rebuilds the CGO). '' clears."""
+    global _hover
+    h = handle or ''
+    if h == _hover:
+        return
+    _hover = h
+    if _active and _object_exists(_active):
+        _build_cgo()
 
 
 def begin_drag(handle, ndc_x, ndc_y, aspect):
@@ -443,6 +556,7 @@ def update_drag(ndc_x, ndc_y, aspect):
                 _drag['dy'] += wy
     except Exception as e:
         print('METALMOVE_ERR:' + str(e))
+    _sync_gizmo_ttt()   # gizmo rides the molecule via the copied TTT
     _emit(True)
 
 
@@ -459,13 +573,17 @@ def reset_active():
             cmd.matrix_reset(_active, mode=1)
         except Exception as e:
             print('METALMOVE_ERR:' + str(e))
+    _sync_gizmo_ttt()
     _emit(_active is not None)
 
 
 def cleanup():
-    """Leave Move mode: clear state + the frame cache. TTT moves persist."""
-    global _active, _drag
+    """Leave Move mode: delete the gizmo, clear state + the frame cache. TTT
+    moves on the molecules persist."""
+    global _active, _drag, _hover
+    _delete_cgo()
     _active = None
     _drag = None
+    _hover = ''
     _frame.clear()
     _emit(False)

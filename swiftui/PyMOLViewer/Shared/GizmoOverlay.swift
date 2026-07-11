@@ -1,16 +1,16 @@
-// GizmoOverlay.swift — Unified molecular-frame Move gizmo (types + Canvas overlay).
+// GizmoOverlay.swift — Unified molecular-frame Move gizmo (types + hit-testing).
 //
 // One gizmo per active object, anchored on a per-object orthonormal frame
-// (center of mass + N/C termini; PCA fallback) computed in metal_move.py and
-// displayed through the object's current transform, so it tumbles with the
-// molecule. The SAME frame drives translation (axis arrows) and rotation (rings)
-// — no mode switch. This view is purely VISUAL (allowsHitTesting=false); all
-// input is handled in MetalViewport, which calls GizmoGeometry.hitTest.
+// (center of mass + N/C termini; PCA fallback). The gizmo is RENDERED as a 3D
+// CGO object in the Metal scene by metal_move.py (lit tubes that wrap the
+// molecule with real depth); this file only holds the shared types and the 2D
+// hit-testing (GizmoGeometry.hitTest) that MetalViewport uses to route drags.
 //
 // NDC convention (matches metal_pick / MetalViewport): bottom-left origin,
 // +x right, +y up, in [-1, 1].
 
-import SwiftUI
+import Foundation
+import CoreGraphics
 
 enum InteractionMode {
     case viewing
@@ -101,98 +101,3 @@ struct GizmoGeometry {
     }
 }
 
-// MARK: - Visual overlay
-
-struct GizmoOverlay: View {
-    @EnvironmentObject var engine: PyMOLEngine
-
-    private let cX = Color(red: 1.0, green: 0.36, blue: 0.36)
-    private let cY = Color(red: 0.37, green: 0.84, blue: 0.41)
-    private let cZ = Color(red: 0.35, green: 0.66, blue: 1.0)
-
-    var body: some View {
-        GeometryReader { _ in
-            if let g = engine.gizmo {
-                Canvas { ctx, size in draw(g, in: &ctx, size: size) }
-            }
-        }
-        .allowsHitTesting(false)
-    }
-
-    // NDC (bottom-left, +y up) -> view point (top-left, +y down).
-    private func pt(_ n: CGPoint, _ s: CGSize) -> CGPoint {
-        CGPoint(x: (n.x + 1) / 2 * s.width, y: (1 - n.y) / 2 * s.height)
-    }
-
-    private func color(for axis: String) -> Color {
-        axis == "x" ? cX : axis == "y" ? cY : cZ
-    }
-
-    // A handle is highlighted when hovered (macOS) or armed (iOS tap-to-arm).
-    private func active(_ h: GizmoHandle) -> Bool {
-        engine.hoveredHandle == h || engine.armedAxis == h
-    }
-
-    private func draw(_ g: GizmoGeometry, in ctx: inout GraphicsContext, size s: CGSize) {
-        let c = pt(g.center, s)
-
-        // Rotation rings (drawn first so the arrows sit on top).
-        for k in ["x", "y", "z"] {
-            guard let poly = g.rings[k], poly.count > 1 else { continue }
-            var path = Path()
-            path.move(to: pt(poly[0], s))
-            for q in poly.dropFirst() { path.addLine(to: pt(q, s)) }
-            let col = color(for: k)
-            let on = active(GizmoHandle(rawValue: "r" + k)!)
-            if on {
-                ctx.stroke(path, with: .color(.white.opacity(0.5)), lineWidth: 6)
-            }
-            ctx.stroke(path, with: .color(col), lineWidth: on ? 3.5 : 2)
-        }
-
-        // Translate axis arrows (thin), knobs, highlight on hover.
-        for k in ["x", "y", "z"] {
-            guard let tipN = g.axes[k] else { continue }
-            let tip = pt(tipN, s)
-            let col = color(for: k)
-            let on = active(GizmoHandle(rawValue: k)!)
-            var line = Path(); line.move(to: c); line.addLine(to: tip)
-            if on {
-                ctx.stroke(line, with: .color(.white.opacity(0.5)), lineWidth: 5)
-            }
-            ctx.stroke(line, with: .color(col), lineWidth: on ? 3 : 2)
-            drawArrowhead(&ctx, from: c, to: tip, color: col, big: on)
-            let r: CGFloat = on ? 8 : 5
-            ctx.fill(Path(ellipseIn: CGRect(x: tip.x - r, y: tip.y - r, width: 2 * r, height: 2 * r)),
-                     with: .color(col))
-            if on {
-                ctx.stroke(Path(ellipseIn: CGRect(x: tip.x - r - 3, y: tip.y - r - 3,
-                                                  width: 2 * r + 6, height: 2 * r + 6)),
-                           with: .color(.white), lineWidth: 1.5)
-            }
-        }
-
-        // Free center handle.
-        let onC = active(.free)
-        let rc: CGFloat = onC ? 8 : 5
-        ctx.fill(Path(ellipseIn: CGRect(x: c.x - rc, y: c.y - rc, width: 2 * rc, height: 2 * rc)),
-                 with: .color(.white))
-        if onC {
-            ctx.stroke(Path(ellipseIn: CGRect(x: c.x - rc - 3, y: c.y - rc - 3,
-                                              width: 2 * rc + 6, height: 2 * rc + 6)),
-                       with: .color(.white.opacity(0.8)), lineWidth: 1.5)
-        }
-    }
-
-    private func drawArrowhead(_ ctx: inout GraphicsContext, from a: CGPoint, to b: CGPoint,
-                               color: Color, big: Bool) {
-        let ang = atan2(b.y - a.y, b.x - a.x)
-        let len: CGFloat = big ? 11 : 8, spread: CGFloat = 0.4
-        var head = Path()
-        head.move(to: b)
-        head.addLine(to: CGPoint(x: b.x - len * cos(ang - spread), y: b.y - len * sin(ang - spread)))
-        head.addLine(to: CGPoint(x: b.x - len * cos(ang + spread), y: b.y - len * sin(ang + spread)))
-        head.closeSubpath()
-        ctx.fill(head, with: .color(color))
-    }
-}

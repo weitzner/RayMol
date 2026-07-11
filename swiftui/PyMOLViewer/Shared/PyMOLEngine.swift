@@ -136,7 +136,14 @@ final class PyMOLEngine: ObservableObject {
     @Published var interactionMode: InteractionMode = .viewing
     @Published var activeMoveObject: String? = nil
     @Published var armedAxis: GizmoHandle? = nil        // iOS tap-to-arm
-    @Published var hoveredHandle: GizmoHandle? = nil     // macOS hover highlight
+    // macOS hover highlight — pushes the hovered handle to metal_move so the CGO
+    // gizmo emphasizes it. Rebuilds are infrequent (only when the handle changes).
+    @Published var hoveredHandle: GizmoHandle? = nil {
+        didSet {
+            guard interactionMode == .move, oldValue != hoveredHandle else { return }
+            runPython("from pymol import metal_move as _mm\n_mm.set_hover('\(hoveredHandle?.pyName ?? "")')")
+        }
+    }
     @Published var gizmo: GizmoGeometry? = nil
     // Hover pre-selection preview (issue #165, macOS): when true, moving the
     // pointer over the viewport highlights what a click WOULD select (in a

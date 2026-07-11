@@ -612,11 +612,9 @@ struct ContentView: View {
                 if engine.measureMode != nil { measureOverlay }
                 else if engine.interactionMode == .move { moveOverlay }
             }
-            // Move-mode manipulation gizmo (visual only; input handled in
-            // MetalViewport).
-            .overlay {
-                if engine.interactionMode == .move { GizmoOverlay() }
-            }
+            // (The Move-mode gizmo is a 3D CGO object rendered in the Metal
+            // scene by metal_move.py; no SwiftUI overlay is needed. Input is
+            // hit-tested against the projected geometry in MetalViewport.)
             // Pick-debug crosshair: marks exactly where the last click landed,
             // so a screenshot shows click-vs-selection offset.
             .overlay { debugClickMarker }
@@ -1778,10 +1776,8 @@ struct ContentView: View {
                 #endif
             }
             .animation(.easeOut(duration: 0.35), value: hasRestoreSnapshot)
-            // Move-mode manipulation gizmo (visual only; input handled in MetalViewport).
-            .overlay {
-                if engine.interactionMode == .move { GizmoOverlay() }
-            }
+            // (The Move-mode gizmo is a 3D CGO object rendered in the Metal scene
+            // by metal_move.py; no SwiftUI overlay is needed.)
             // (The floating viewport transport was removed: movie playback lives in
             // the Movie tab, and multi-state model stepping lives in the Object panel.)
             // Opt-in glanceable scene buttons (Scenes tab → "Show scene buttons
