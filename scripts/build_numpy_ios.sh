@@ -25,7 +25,7 @@ set -euo pipefail
 NUMPY_VERSION="${NUMPY_VERSION:-2.4.6}"
 DEPLOY="${IOS_DEPLOYMENT_TARGET:-16.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PYHOST="${PYHOST:-/opt/homebrew/bin/python3.13}"
+PYHOST="${PYHOST:-${PYMOL_EXTERNAL_PREFIX:-/opt/homebrew}/bin/python3.13}"
 WORK="$(mktemp -d)"
 OUT="$ROOT/deps_ios/numpy-ios"
 
@@ -33,7 +33,7 @@ PY_SIM_HDR="$ROOT/deps_ios/Python.xcframework/ios-arm64_x86_64-simulator/Python.
 PY_DEV_HDR="$ROOT/deps_ios/Python.xcframework/ios-arm64/Python.framework/Headers"
 
 echo ">> host python: $PYHOST"; "$PYHOST" --version
-"$PYHOST" -c "import meson, ninja" 2>/dev/null || {
+"$PYHOST" -c "import mesonbuild, ninja" 2>/dev/null || {
   echo "ERROR: install build tools first:  $PYHOST -m pip install meson ninja cython build"; exit 1; }
 
 echo ">> downloading numpy $NUMPY_VERSION sdist"
