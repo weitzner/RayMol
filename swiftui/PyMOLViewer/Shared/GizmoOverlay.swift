@@ -74,13 +74,22 @@ struct GizmoGeometry {
         let lineR: CGFloat = 0.03      // along-axis line grab distance
         let centerR: CGFloat = 0.045   // free center handle
         let ringR: CGFloat = 0.04      // ring polyline grab distance
+
+        // The white center ball OWNS its core disc: any click/hover within centerR
+        // of the center is a free screen-plane drag, with ABSOLUTE priority. This
+        // is essential because all three axis lines pass THROUGH the center, so
+        // their distToSegment ≈ 0 for any off-by-a-pixel near-center click and
+        // would otherwise steal the grab — the reason the ball was unclickable
+        // except dead-center (a real click is never pixel-perfect). Axes/rings
+        // stay grabbable everywhere outside this disc, out to their tips.
+        if screenDist(p, center, aspect) <= centerR {
+            return .free
+        }
+
         var best: (GizmoHandle, CGFloat)?
         func consider(_ h: GizmoHandle, _ d: CGFloat, _ limit: CGFloat) {
             if d <= limit, best == nil || d < best!.1 { best = (h, d) }
         }
-
-        // Center first so it wins the very middle.
-        consider(.free, screenDist(p, center, aspect), centerR)
 
         let axisMap: [String: GizmoHandle] = ["x": .x, "y": .y, "z": .z]
         for (k, h) in axisMap {
