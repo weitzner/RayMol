@@ -369,16 +369,24 @@ def _delete_cgo():
         pass
 
 
+# Identity TTT (16-float TTT format) used to CLEAR the gizmo's transform.
+_IDENTITY_TTT = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
 def _sync_gizmo_ttt():
-    """Copy the active object's TTT to the gizmo so it moves/tumbles with it."""
+    """Match the gizmo's TTT to the active object's so it moves/tumbles with it.
+
+    ALWAYS set the gizmo TTT explicitly — identity when the target has none.
+    We must NOT fall back to matrix_reset here: matrix_reset(mode=1) does not
+    clear a CGO object's TTT (verified on this build), so when you switched the
+    target to an UN-moved object the gizmo kept the PREVIOUS (moved) target's
+    TTT and rendered off in empty space, detached from every molecule."""
     if not _object_exists(_GIZMO_OBJ) or not _object_exists(_active):
         return
     try:
         ttt = cmd.get_object_ttt(_active)
-        if ttt:
-            cmd.set_object_ttt(_GIZMO_OBJ, list(ttt))
-        else:
-            cmd.matrix_reset(_GIZMO_OBJ, mode=1)
+        cmd.set_object_ttt(_GIZMO_OBJ, list(ttt) if ttt else list(_IDENTITY_TTT))
     except Exception as e:
         print('METALMOVE_ERR:' + str(e))
 
@@ -429,7 +437,12 @@ def _build_cgo():
     g += [cgo.COLOR, 1.0, 1.0, 1.0, cgo.SPHERE, com[0], com[1], com[2],
           tube * (3.4 if _hover == 'free' else 2.1)]
     try:
-        cmd.load_cgo(g, _GIZMO_OBJ, zoom=0)
+        # state=1 so each rebuild REPLACES the geometry. With the default state=0,
+        # load_cgo APPENDS a new state every call, so every rebuild (hover, drag,
+        # target switch) piled up states — and on a target switch the stale
+        # old-target geometry stayed in the rendered state, so the gizmo showed up
+        # detached from the new target (out in empty space between the objects).
+        cmd.load_cgo(g, _GIZMO_OBJ, state=1, zoom=0)
     except Exception as e:
         print('METALMOVE_ERR:' + str(e))
     _sync_gizmo_ttt()
