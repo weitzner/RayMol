@@ -663,7 +663,11 @@ extension MetalViewport {
                     engine?.gizmoUpdateDrag(ndcX: nx, ndcY: ny, aspect: aspect)
                     return
                 }
-                // Empty-space drag → orbit the camera; track the gizmo each tick.
+                // Empty-space drag → orbit the camera. The gizmo is a 3D CGO that
+                // re-renders from the new camera automatically, so we do NOT refresh
+                // its 2D hit-test geometry per tick — that per-tick Python round-trip
+                // + JSON file I/O is what made orbiting laggy (even with no active
+                // object). It's refreshed once on mouseUp for the next hover/click.
                 if !didDrag {
                     didDrag = true
                     let down = pymolPoint(in: view, at: mouseDownLoc)
@@ -671,7 +675,6 @@ extension MetalViewport {
                 }
                 let pt = pymolPoint(in: view, at: loc)
                 engine?.drag(x: pt.0, y: pt.1, modifiers: mods)
-                engine?.refreshGizmo(aspect: aspect)
                 return
             }
 
@@ -848,6 +851,10 @@ extension MetalViewport {
                 engine?.zoomBy(Float(delta * kZoomGain))
             case .ended, .cancelled:
                 lastMag = 0
+                // Zoom changed the projection scale → refresh the gizmo hit-test
+                // once (guarded to move mode) so a handle grab after zooming is
+                // accurate. Not done per .changed tick — that would relag zoom.
+                engine?.refreshGizmo()
             default:
                 break
             }
@@ -957,9 +964,11 @@ extension MetalViewport {
                 if panMoveHandle != nil {
                     engine.gizmoUpdateDrag(ndcX: nx, ndcY: ny, aspect: aspect)
                 } else {
+                    // Orbit: the 3D CGO gizmo tracks the camera on render, so skip the
+                    // per-tick hit-test refresh (Python + file I/O) that made orbiting
+                    // laggy; it's refreshed on .ended for the next tap/drag.
                     let pt = pymolPoint(in: view, at: location)
                     engine.drag(x: pt.0, y: pt.1, modifiers: 0)
-                    engine.refreshGizmo(aspect: aspect)
                 }
             case .ended, .cancelled:
                 if panMoveHandle != nil {
@@ -987,6 +996,10 @@ extension MetalViewport {
                 engine?.zoomBy(Float(delta * kZoomGain))
             case .ended, .cancelled:
                 pinchLastScale = 1.0
+                // Zoom changed the projection scale → refresh the gizmo hit-test
+                // once (guarded to move mode) so a handle grab after zooming is
+                // accurate. Not done per .changed tick — that would relag zoom.
+                engine?.refreshGizmo()
             default:
                 break
             }
