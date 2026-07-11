@@ -1,0 +1,58 @@
+name: RayMol unit tests (embedded)
+
+# Build the fork's pymol on macOS (Apple Silicon / arm64) and run the
+# RayMol-specific test files under the REAL embedded interpreter
+# (pymol -ckqy testing/testing.py --run ...), so the fork's Python layer
+# (appkit_* panels, metal_pick) is exercised faithfully with the actual _cmd
+# core and the project's pytest routing rather than a plain-python stub.
+#
+# Scoped to the fork's own test files on purpose: it stays green independently
+# of the full upstream `--run all` suite (which has unrelated pre-existing
+# failures, and whose CI workflow is currently disabled).
+#
+# Recipe verified locally on an M3 (arm64): Homebrew C deps + a GLUT build
+# (--config-settings glut=true). We deliberately do NOT pass testing=True —
+# that builds the C++ catch2 tests, and Homebrew ships catch2 v3 while PyMOL
+# needs v2. The runner (testing.py) only needs pillow + pytest here.
+
+on: [push, pull_request]
+
+jobs:
+  macos-embedded:
+    runs-on: macos-latest   # Apple Silicon (arm64)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install C dependencies (Homebrew)
+        run: brew install glm glew freeglut freetype libpng netcdf
+
+      - name: Install Python build + test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools wheel numpy cmake pillow pytest
+
+      - name: Build RayMol (pymol core, GLUT backend)
+        run: |
+          PREFIX_PATH=/opt/homebrew python -m pip install \
+              --no-build-isolation --config-settings glut=true .
+
+      - name: Run RayMol unit tests under embedded pymol
+        run: |
+          pymol -ckqy testing/testing.py --run \
+              testing/tests/test_appkit_measure.py \
+              testing/tests/test_appkit_sequence.py \
+              testing/tests/test_appkit_object_panel.py \
+              testing/tests/test_appkit_settings.py \
+              testing/tests/test_appkit_theme_preview.py \
+              testing/tests/test_appkit_command_panel.py \
+              testing/tests/test_appkit_menus.py \
+              testing/tests/test_appkit_sequence_panel.py \
+              testing/tests/test_appkit_ray_overlay.py \
+              testing/tests/test_metal_pick.py \
+              testing/tests/test_mouse_panel.py

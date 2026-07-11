@@ -159,9 +159,12 @@ class TestPickAtIntegration(unittest.TestCase):
             0.0, 0.0, 0.0,
         )
         mock_cmd.get_setting_float.return_value = 30.0
+        # _pick_atom skips non-molecule objects, so the picked object must report
+        # as a molecule for the atom to be considered.
+        mock_cmd.get_type.return_value = "object:molecule"
 
         mock_atom = MagicMock()
-        mock_atom.coord = [10.0, 20.0, 30.0]
+        mock_atom.coord = [10.0, 20.0, 30.0]   # at the rotation origin -> projects to (0,0) NDC
         mock_atom.chain = "A"
         mock_atom.resi = "42"
         mock_atom.resn = "ALA"
@@ -171,8 +174,10 @@ class TestPickAtIntegration(unittest.TestCase):
         mock_model = MagicMock()
         mock_model.atom = [mock_atom]
         mock_cmd.get_model.return_value = mock_model
-        mock_cmd.get_names.return_value = ["protein"]
-        mock_cmd.count_atoms.side_effect = lambda sel: 0 if sel == "sele" else 5
+        # 'objects' enumeration yields the molecule; 'selections' starts empty so
+        # the click takes the additive branch that (re)creates 'sele'.
+        mock_cmd.get_names.side_effect = \
+            lambda kind, **kw: ["protein"] if kind == "objects" else []
 
         # Patch pymol.cmd inside metal_pick
         _pymol_mod = sys.modules["pymol"]
@@ -185,8 +190,15 @@ class TestPickAtIntegration(unittest.TestCase):
         from pymol.metal_pick import pick_at
         pick_at(0.0, 0.0, 1.0)
 
-        mock_cmd.pseudoatom.assert_called_once()
-        mock_cmd.select.assert_called()
+        # pick_at toggles the clicked residue into the named 'sele' (selection
+        # indicators are rendered in C++, NOT via a pseudoatom marker) and enables
+        # it. Default mouse_selection_mode is residue, so the expr is resi-scoped.
+        mock_cmd.select.assert_called_once()
+        sel_name, sel_expr = mock_cmd.select.call_args.args[:2]
+        self.assertEqual(sel_name, "sele")
+        self.assertIn("resi 42", sel_expr)
+        self.assertIn("chain A", sel_expr)
+        mock_cmd.enable.assert_called_with("sele")
 
 
 if __name__ == "__main__":
