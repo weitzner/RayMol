@@ -495,10 +495,13 @@ def set_hover(handle):
 
 
 def begin_drag(handle, ndc_x, ndc_y, aspect):
-    global _drag, _aspect
+    global _drag, _aspect, _hover
     _aspect = float(aspect)
     _drag = {'handle': handle, 'px': float(ndc_x), 'py': float(ndc_y),
              'dist': 0.0, 'deg': 0.0, 'dx': 0.0, 'dy': 0.0}
+    _hover = handle   # grow the grabbed handle for the duration of the drag
+    if _active and _object_exists(_active):
+        _build_cgo()
     _emit(_active is not None)
 
 
@@ -562,8 +565,11 @@ def update_drag(ndc_x, ndc_y, aspect):
 
 
 def end_drag():
-    global _drag
+    global _drag, _hover
     _drag = None
+    _hover = ''
+    if _active and _object_exists(_active):
+        _build_cgo()   # un-grow the handle
     _emit(_active is not None)
 
 

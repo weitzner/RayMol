@@ -547,6 +547,10 @@ extension MetalViewport {
         }
 
         func handleMouseUp(_ event: NSEvent, in view: MTKView) {
+            // Clear the drag flag on exit so passive hover (which is gated on
+            // !didDrag) resumes immediately after a drag, not only after the next
+            // mouse-down.
+            defer { didDrag = false }
             let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
             let moved = hypot(loc.x - mouseDownLoc.x, loc.y - mouseDownLoc.y)
