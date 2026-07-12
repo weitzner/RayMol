@@ -1095,7 +1095,12 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosMoveToolbar; iosTimelineToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
+            // NOTE: iosTimelineToolbar (the clapperboard movie toggle) was removed —
+            // as a .primaryAction it stacked with the panel toggles into a hidden,
+            // overlapping tap target that jumped to the movie panel unexpectedly.
+            // The movie/timeline stays reachable via the Movie tab (iPhone tab bar /
+            // iPad right inspector).
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosMoveToolbar; iosPanelToggle; iosPadPanelMenu; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in

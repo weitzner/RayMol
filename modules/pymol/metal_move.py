@@ -395,7 +395,6 @@ def _emit(active=True):
             json.dump(out, f)
     except Exception:
         pass
-    print('GIZMO:ready')
 
 
 # --- 3D CGO gizmo (lit tubes, tracks the molecule via a copied TTT) ---------
