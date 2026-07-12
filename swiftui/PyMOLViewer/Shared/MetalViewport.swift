@@ -505,6 +505,8 @@ extension MetalViewport {
             // the drag manipulates the object; otherwise the drag orbits the camera.
             moveHandle = nil
             if engine?.interactionMode == .move {
+                // Shift → adjust-frame mode for this drag (re-anchor the gizmo).
+                engine?.moveShiftHeld = event.modifierFlags.contains(.shift)
                 moveHandle = gizmoHit(in: view, at: mouseDownLoc)
             }
         }
@@ -525,8 +527,10 @@ extension MetalViewport {
             }
             lastHoverLoc = loc
             // Move mode: highlight the gizmo handle under the cursor so it's
-            // obvious which axis/ring/center a drag will grab.
+            // obvious which axis/ring/center a drag will grab. Also reflect Shift
+            // so the gizmo greys out (adjust-frame mode) as you hover with it held.
             if engine?.interactionMode == .move {
+                engine?.moveShiftHeld = event.modifierFlags.contains(.shift)
                 let hit = gizmoHit(in: view, at: loc)
                 if engine?.hoveredHandle != hit { engine?.hoveredHandle = hit }
                 return
@@ -544,6 +548,9 @@ extension MetalViewport {
             lastHoverLoc = .zero
             engine?.clearHoverPreview()
             if engine?.hoveredHandle != nil { engine?.hoveredHandle = nil }
+            // Drop Shift adjust-mode when the pointer leaves, so the gizmo doesn't
+            // stay greyed if Shift is released outside the viewport.
+            if engine?.moveShiftHeld == true { engine?.moveShiftHeld = false }
         }
 
         func handleMouseUp(_ event: NSEvent, in view: MTKView) {

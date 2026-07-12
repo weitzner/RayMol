@@ -35,6 +35,15 @@ _drag = None            # in-flight drag: {handle, px, py, dist, deg, dx, dy}
 _hover = ''             # hovered handle name ('x'/'rx'/... or '') for highlight
 # Per-object model-space frame: obj -> (com[3], (bx, by, bz)) unit column vectors.
 _frame = {}
+# Adjust-frame mode: when True the gizmo controls EDIT the gizmo's own frame
+# (origin + inclination) instead of moving the structure. The gizmo renders gray
+# + semitransparent as a signal. Driven by Shift-held (macOS) or an overlay toggle.
+_adjust = False
+# Per-object CUSTOM frame override in MODEL coords: obj -> (com, (bx,by,bz), radius),
+# same shape as _frame. When present it REPLACES the auto molecular frame (so all
+# normal translate/rotate pivots about this custom origin/axes). Edited in adjust
+# mode; cleared by reset_gizmo. Persists across move-mode enter/leave.
+_frame_override = {}
 
 # The gizmo is drawn as a real 3D CGO object (lit tubes, like sticks) so it wraps
 # the molecule with proper depth. It is built once in the object's LOCAL frame and
@@ -76,6 +85,42 @@ def _dot(a, b):
 def _norm(v):
     n = math.sqrt(_dot(v, v))
     return [v[0] / n, v[1] / n, v[2] / n] if n > 1e-9 else None
+
+
+def _world_to_model_vec(obj, wv):
+    """Rotate a WORLD-space displacement into the object's MODEL frame (R^T · wv),
+    so a screen-space drag can edit a frame stored in model coords."""
+    try:
+        m = cmd.get_object_matrix(obj)
+    except Exception:
+        m = None
+    if not m or len(m) < 16:
+        return list(wv)
+    return [m[0] * wv[0] + m[4] * wv[1] + m[8] * wv[2],
+            m[1] * wv[0] + m[5] * wv[1] + m[9] * wv[2],
+            m[2] * wv[0] + m[6] * wv[1] + m[10] * wv[2]]
+
+
+def _rotate_basis(basis, axis, theta):
+    """Rigidly rotate an orthonormal basis about `axis` by `theta` (Rodrigues),
+    re-orthonormalizing to prevent drift over many small steps."""
+    k = _norm(axis)
+    if k is None:
+        return basis
+    ct, st = math.cos(theta), math.sin(theta)
+
+    def rod(v):
+        kv = _dot(k, v)
+        kxv = _cross(k, v)
+        return [v[i] * ct + kxv[i] * st + k[i] * kv * (1.0 - ct) for i in range(3)]
+
+    nb = [rod(basis[0]), rod(basis[1]), rod(basis[2])]
+    x = _norm(nb[0]) or basis[0]
+    z = _norm(_cross(x, nb[1]))
+    if z is None:
+        return basis
+    y = _cross(z, x)
+    return (x, y, z)
 
 
 # --- View / projection (mirrors metal_pick) --------------------------------
@@ -261,6 +306,9 @@ def _compute_frame(obj):
 
 
 def _ensure_frame(obj):
+    # A custom override (set in adjust mode) replaces the auto molecular frame.
+    if obj and obj in _frame_override:
+        return _frame_override[obj]
     if obj and obj not in _frame:
         f = _compute_frame(obj)
         if f is not None:
@@ -354,8 +402,9 @@ def _emit(active=True):
 
 def _hl(key):
     """Axis color for handle `key` ('x'/'y'/'z' or 'rx'/'ry'/'rz'), brightened
-    toward white when it is the hovered handle."""
-    base = _COL[key[-1]]
+    toward white when it is the hovered handle. In adjust-frame mode every element
+    is gray (the controls edit the gizmo frame, not the structure)."""
+    base = (0.62, 0.62, 0.62) if _adjust else _COL[key[-1]]
     if _hover == key:
         return tuple(min(1.0, c * 0.45 + 0.55) for c in base)
     return base
@@ -433,8 +482,10 @@ def _build_cgo():
                 g += [cgo.CYLINDER, prev[0], prev[1], prev[2], p[0], p[1], p[2],
                       t, r, gg, b, r, gg, b]
             prev = p
-    # Free center handle; grows noticeably when hovered.
-    g += [cgo.COLOR, 1.0, 1.0, 1.0, cgo.SPHERE, com[0], com[1], com[2],
+    # Free center handle (the origin); grows noticeably when hovered. Gray in
+    # adjust mode, white otherwise.
+    cc = 0.85 if _adjust else 1.0
+    g += [cgo.COLOR, cc, cc, cc, cgo.SPHERE, com[0], com[1], com[2],
           tube * (3.4 if _hover == 'free' else 2.1)]
     try:
         # state=1 so each rebuild REPLACES the geometry. With the default state=0,
@@ -443,6 +494,8 @@ def _build_cgo():
         # old-target geometry stayed in the rendered state, so the gizmo showed up
         # detached from the new target (out in empty space between the objects).
         cmd.load_cgo(g, _GIZMO_OBJ, state=1, zoom=0)
+        # Semitransparent while editing the frame; fully opaque while manipulating.
+        cmd.set('cgo_transparency', 0.5 if _adjust else 0.0, _GIZMO_OBJ)
     except Exception as e:
         print('METALMOVE_ERR:' + str(e))
     _sync_gizmo_ttt()
@@ -518,6 +571,66 @@ def begin_drag(handle, ndc_x, ndc_y, aspect):
     _emit(_active is not None)
 
 
+def _adjust_drag(h, dnx, dny, params, df):
+    """Adjust-frame mode: the drag EDITS the active object's gizmo frame (its
+    origin and inclination), stored as a model-space override, then rebuilds the
+    gizmo. The structure itself is never moved — only the pivot/axes change."""
+    fm = _ensure_frame(_active)
+    if fm is None:
+        return
+    com_m, basis_m, radius = fm
+    com_w, (dx, dy, dz), _r = df
+    axes_w = {'x': dx, 'y': dy, 'z': dz}
+    axes_m = {'x': basis_m[0], 'y': basis_m[1], 'z': basis_m[2]}
+    new_com = list(com_m)
+    new_basis = basis_m
+    try:
+        if h in ('x', 'y', 'z'):
+            # Slide the ORIGIN along the frame axis. Moving the model com by
+            # dist*model_axis maps to dist*displayed_axis in the view (R·axis).
+            d = _axis_screen_dir(params, com_w, axes_w[h])
+            if d:
+                denom = d[0] * d[0] + d[1] * d[1]
+                if denom > 1e-12:
+                    dist = (dnx * d[0] + dny * d[1]) / denom
+                    am = axes_m[h]
+                    new_com = [com_m[i] + am[i] * dist for i in range(3)]
+                    _drag['dist'] += dist
+        elif h in ('rx', 'ry', 'rz'):
+            # Tilt the whole frame about the ring's axis (the inclination).
+            cproj = _project(params, com_w)
+            if cproj:
+                ang_prev = math.atan2((_drag['py'] - dny) - cproj[1],
+                                      (_drag['px'] - dnx) - cproj[0])
+                ang_cur = math.atan2(_drag['py'] - cproj[1], _drag['px'] - cproj[0])
+                dtheta = ang_cur - ang_prev
+                while dtheta > math.pi:
+                    dtheta -= 2 * math.pi
+                while dtheta < -math.pi:
+                    dtheta += 2 * math.pi
+                new_basis = _rotate_basis(basis_m, axes_m[h[1]], dtheta)
+                _drag['deg'] += math.degrees(dtheta)
+        elif h == 'free':
+            # Free-slide the ORIGIN in the screen plane.
+            cproj = _project(params, com_w)
+            if cproj:
+                half_h = cproj[2] * params[5]
+                half_w = half_h * params[6]
+                wx = dnx * half_w
+                wy = dny * half_h
+                r0, r1 = params[0], params[1]
+                world = [wx * r0[i] + wy * r1[i] for i in range(3)]
+                md = _world_to_model_vec(_active, world)
+                new_com = [com_m[i] + md[i] for i in range(3)]
+                _drag['dx'] += wx
+                _drag['dy'] += wy
+    except Exception as e:
+        print('METALMOVE_ERR:' + str(e))
+        return
+    _frame_override[_active] = (new_com, new_basis, radius)
+    _build_cgo()   # show the re-anchored frame (rides the object via synced TTT)
+
+
 def update_drag(ndc_x, ndc_y, aspect):
     global _aspect
     _aspect = float(aspect)
@@ -534,6 +647,11 @@ def update_drag(ndc_x, ndc_y, aspect):
     com, (dx, dy, dz), _radius = df
     axes = {'x': dx, 'y': dy, 'z': dz}
     h = _drag['handle']
+    if _adjust:
+        # Adjust-frame mode: the drag re-anchors the gizmo (origin + inclination)
+        # instead of moving the structure. _adjust_drag rebuilds the CGO itself.
+        _adjust_drag(h, dnx, dny, params, df)
+        return
     try:
         if h in ('x', 'y', 'z'):
             av = axes[h]
@@ -602,13 +720,40 @@ def reset_active():
     _emit(_active is not None)
 
 
+def set_adjust(on):
+    """Enter/leave adjust-frame mode (gizmo controls re-anchor the frame instead
+    of moving the structure). Rebuilds the gizmo so it greys out / restores."""
+    global _adjust
+    on = bool(int(on)) if isinstance(on, str) else bool(on)
+    if on == _adjust:
+        return
+    _adjust = on
+    if _active and _object_exists(_active):
+        _build_cgo()
+    _emit(_active is not None)
+
+
+def reset_gizmo():
+    """Clear the active object's custom frame override → the gizmo snaps back to
+    the automatic molecular frame. Distinct from reset_active (which resets the
+    object's position); this only affects the gizmo's origin/inclination."""
+    if _active in _frame_override:
+        del _frame_override[_active]
+    if _active and _object_exists(_active):
+        _frame.pop(_active, None)   # force a fresh auto-frame recompute
+        _ensure_frame(_active)
+        _build_cgo()
+    _emit(_active is not None)
+
+
 def cleanup():
-    """Leave Move mode: delete the gizmo, clear state + the frame cache. TTT
-    moves on the molecules persist."""
-    global _active, _drag, _hover
+    """Leave Move mode: delete the gizmo, clear state + the frame cache, and drop
+    adjust mode. TTT moves on the molecules AND custom frame overrides persist."""
+    global _active, _drag, _hover, _adjust
     _delete_cgo()
     _active = None
     _drag = None
     _hover = ''
+    _adjust = False
     _frame.clear()
     _emit(False)

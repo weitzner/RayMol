@@ -2855,6 +2855,28 @@ struct ContentView: View {
                 .foregroundColor(themeManager.active.panelText.color)
             }
 
+            // Adjust-frame controls: the toggle (macOS: also hold Shift) makes the
+            // gizmo grey out and its controls re-anchor the frame (origin + tilt)
+            // instead of moving the structure; reset snaps the frame back to the
+            // automatic molecular center.
+            Button { engine.adjustFrameToggle.toggle() } label: {
+                Image(systemName: "gyroscope")
+                    .foregroundColor(engine.adjustFrameActive
+                        ? themeManager.active.accent.color
+                        : themeManager.active.panelText.color)
+            }
+            .buttonStyle(.plain)
+            .disabled(engine.activeMoveObject == nil)
+            .help("Adjust the gizmo frame — drag to set its origin & tilt (or hold Shift). Moves the gizmo, not the structure.")
+
+            Button { engine.resetGizmoFrame() } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .foregroundColor(themeManager.active.panelText.color)
+            }
+            .buttonStyle(.plain)
+            .disabled(engine.activeMoveObject == nil)
+            .help("Reset the gizmo frame to the automatic center")
+
             Text(engine.gizmo?.readout ?? "")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(themeManager.active.accent.color)

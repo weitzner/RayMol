@@ -136,6 +136,16 @@ final class PyMOLEngine: ObservableObject {
     @Published var interactionMode: InteractionMode = .viewing
     @Published var activeMoveObject: String? = nil
     @Published var armedAxis: GizmoHandle? = nil        // iOS tap-to-arm
+    // Adjust-frame mode: gizmo controls re-anchor the gizmo's own frame (origin +
+    // inclination) instead of moving the structure — for precise custom pivots.
+    // Active when the overlay toggle is on OR Shift is held (macOS). The gizmo
+    // renders gray + semitransparent while active. Synced to metal_move.set_adjust.
+    @Published var adjustFrameToggle = false { didSet { syncAdjustFrame() } }
+    // @Published so the overlay toggle reflects Shift; callers must only assign it
+    // on an actual change (it's polled on every hover move) to avoid re-render spam.
+    @Published var moveShiftHeld = false { didSet { syncAdjustFrame() } }
+    private var lastAdjustSent = false
+    var adjustFrameActive: Bool { interactionMode == .move && (adjustFrameToggle || moveShiftHeld) }
     // macOS hover highlight — pushes the hovered handle to metal_move so the CGO
     // gizmo emphasizes it. Rebuilds are infrequent (only when the handle changes).
     @Published var hoveredHandle: GizmoHandle? = nil {
@@ -1913,8 +1923,28 @@ final class PyMOLEngine: ObservableObject {
             hoveredHandle = nil
             activeMoveObject = nil
             gizmo = nil
+            adjustFrameToggle = false
+            moveShiftHeld = false
+            lastAdjustSent = false
             runPython("from pymol import metal_move as _mm\n_mm.cleanup()")
         }
+    }
+
+    /// Push adjust-frame mode to metal_move when it changes (overlay toggle or the
+    /// Shift key). set_adjust rebuilds the gizmo (greys it / restores it).
+    func syncAdjustFrame() {
+        let want = adjustFrameActive
+        guard want != lastAdjustSent else { return }
+        lastAdjustSent = want
+        runPython("from pymol import metal_move as _mm\n_mm.set_adjust(\(want ? 1 : 0))")
+        readGizmo()
+    }
+
+    /// Clear the active object's custom gizmo frame → snap back to the auto frame.
+    /// Distinct from resetActiveMovePosition (which resets the object's position).
+    func resetGizmoFrame() {
+        runPython("from pymol import metal_move as _mm\n_mm.reset_gizmo()")
+        readGizmo()
     }
 
     /// Grab-what-you-touch: set the active object to whatever is under the point.
