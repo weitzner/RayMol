@@ -400,13 +400,24 @@ def _emit(active=True):
 
 # --- 3D CGO gizmo (lit tubes, tracks the molecule via a copied TTT) ---------
 
+def _sat(c, s, v=1.0):
+    """Scale a color's saturation by `s` about its luminance and brightness by `v`
+    (both clamped to [0, 1])."""
+    L = 0.30 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+    return tuple(max(0.0, min(1.0, (L + (c[i] - L) * s) * v)) for i in range(3))
+
+
 def _hl(key):
-    """Axis color for handle `key` ('x'/'y'/'z' or 'rx'/'ry'/'rz'), brightened
-    toward white when it is the hovered handle. In adjust-frame mode every element
-    is gray (the controls edit the gizmo frame, not the structure)."""
+    """Color for gizmo handle `key` ('x'/'y'/'z' or 'rx'/'ry'/'rz'). The ACTIVE
+    (hovered/grabbed) handle is vivid — more saturated + brighter — while any
+    handle is active the others are MUTED (desaturated + dimmer) so the live
+    control clearly stands out. In adjust-frame mode the base is gray, so this
+    reads as a brighter-vs-dimmer gray."""
     base = (0.62, 0.62, 0.62) if _adjust else _COL[key[-1]]
     if _hover == key:
-        return tuple(min(1.0, c * 0.45 + 0.55) for c in base)
+        return _sat(base, 1.6, 1.12)     # active: vivid
+    if _hover:
+        return _sat(base, 0.6, 0.78)     # something else active: gently muted
     return base
 
 
@@ -474,16 +485,19 @@ def _build_cgo():
         # distance from the center sphere out to the ring doesn't change.
         t = tube * 0.8 * (2.0 if hov else 1.0)
         rr = ring_r
-        prev = None
-        N = 64   # smooth ring
-        for j in range(N + 1):
-            a = 2.0 * math.pi * j / N
-            p = [com[i] + u[i] * math.cos(a) * rr + v[i] * math.sin(a) * rr
-                 for i in range(3)]
-            if prev is not None:
-                g += [cgo.CYLINDER, prev[0], prev[1], prev[2], p[0], p[1], p[2],
-                      t, r, gg, b, r, gg, b]
-            prev = p
+        # Dense sampling + a sphere impostor at every joint: the spheres (which the
+        # Metal backend ray-traces perfectly smooth) fill the angular seam where
+        # two straight cylinders meet, so the ring reads as a smooth torus instead
+        # of a faceted polygon with visible junctions.
+        N = 96
+        pts = [[com[i] + u[i] * math.cos(2.0 * math.pi * j / N) * rr
+                + v[i] * math.sin(2.0 * math.pi * j / N) * rr for i in range(3)]
+               for j in range(N + 1)]
+        for j in range(N):
+            p0, p1 = pts[j], pts[j + 1]
+            g += [cgo.CYLINDER, p0[0], p0[1], p0[2], p1[0], p1[1], p1[2],
+                  t, r, gg, b, r, gg, b]
+            g += [cgo.COLOR, r, gg, b, cgo.SPHERE, p0[0], p0[1], p0[2], t]
     # Free center handle (the origin); grows noticeably when hovered. Gray in
     # adjust mode, white otherwise.
     cc = 0.85 if _adjust else 1.0

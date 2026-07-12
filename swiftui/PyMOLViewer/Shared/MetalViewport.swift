@@ -1103,6 +1103,10 @@ extension MetalViewport {
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
             guard gesture.state == .began, let engine = engine, let view = mtkView else { return }
+            // No long-press context menu in Move mode — the gizmo owns the
+            // gestures there, and the Scene menu (Reset view / Deselect all) just
+            // interferes with dragging handles.
+            guard engine.interactionMode != .move else { return }
             // Identify the atom/residue under the press and let ContentView show
             // a native context menu. NDC in point space with Y flipped (same as
             // handleTap). This replaces the old right-click, which fired a PyMOL
