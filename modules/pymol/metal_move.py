@@ -541,6 +541,19 @@ def pick_object(ndc_x, ndc_y, aspect):
     try:
         from pymol import metal_pick
         best = metal_pick._pick_atom(ndc_x, ndc_y, aspect)
+        if best is None:
+            # Forgiving fallback for OBJECT selection: a finger tap doesn't need
+            # atom precision (unlike atom picking / measuring), so if the tight
+            # atom-pick missed, retry with a much wider radius so tapping on — or
+            # just near — the molecule still grabs it. Only fires on a miss, so
+            # precise taps are unaffected and a tap in clear empty space still
+            # clears the target.
+            saved = metal_pick._MAX_PICK_NDC2
+            try:
+                metal_pick._MAX_PICK_NDC2 = saved * 6.0   # ~2.4x the pick radius
+                best = metal_pick._pick_atom(ndc_x, ndc_y, aspect)
+            finally:
+                metal_pick._MAX_PICK_NDC2 = saved
         _active = best[1] if best is not None else None
     except Exception as e:
         print('METALMOVE_ERR:' + str(e))
