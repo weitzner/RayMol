@@ -452,14 +452,14 @@ def _build_cgo():
     axis_len = _AXIS_FRAC * radius
     ring_r = _RING_FRAC * radius
     tube = max(0.02 * radius, 0.12)   # thin, stick-like
-    GROW = 1.15                       # hovered element grows to show it's picked
     g = []
-    # Axis tubes + knob spheres (grab targets). Hovered axis grows + brightens.
+    # Axis tubes + knob spheres (grab targets). Hovering only THICKENS the tube +
+    # brightens it — the axis length stays fixed so the gizmo doesn't resize.
     for k, av in (('x', bx), ('y', by), ('z', bz)):
         r, gg, b = _hl(k)
         hov = (_hover == k)
         t = tube * (1.8 if hov else 1.0)
-        al = axis_len * (GROW if hov else 1.0)
+        al = axis_len
         tip = [com[i] + av[i] * al for i in range(3)]
         g += [cgo.CYLINDER, com[0], com[1], com[2], tip[0], tip[1], tip[2],
               t, r, gg, b, r, gg, b]
@@ -470,8 +470,10 @@ def _build_cgo():
         rk = 'r' + k
         r, gg, b = _hl(rk)
         hov = (_hover == rk)
+        # Hover only THICKENS the ring tube — the ring radius stays fixed so the
+        # distance from the center sphere out to the ring doesn't change.
         t = tube * 0.8 * (2.0 if hov else 1.0)
-        rr = ring_r * (GROW if hov else 1.0)
+        rr = ring_r
         prev = None
         N = 64   # smooth ring
         for j in range(N + 1):
@@ -608,8 +610,14 @@ def _adjust_drag(h, dnx, dny, params, df):
                     dtheta -= 2 * math.pi
                 while dtheta < -math.pi:
                     dtheta += 2 * math.pi
-                new_basis = _rotate_basis(basis_m, axes_m[h[1]], dtheta)
-                _drag['deg'] += math.degrees(dtheta)
+                # Same camera-facing sign flip as normal rotation, so tilting the
+                # frame follows the drag whether the axis faces toward or away.
+                avw = axes_w[h[1]]
+                r2 = params[2]
+                face = avw[0] * r2[0] + avw[1] * r2[1] + avw[2] * r2[2]
+                theta = dtheta * (1.0 if face >= 0.0 else -1.0)
+                new_basis = _rotate_basis(basis_m, axes_m[h[1]], theta)
+                _drag['deg'] += math.degrees(theta)
         elif h == 'free':
             # Free-slide the ORIGIN in the screen plane.
             cproj = _project(params, com_w)
@@ -675,7 +683,12 @@ def update_drag(ndc_x, ndc_y, aspect):
                     dtheta -= 2 * math.pi
                 while dtheta < -math.pi:
                     dtheta += 2 * math.pi
-                deg = math.degrees(dtheta)
+                # +deg about av reads as CCW on screen only when av points TOWARD
+                # the camera; flip by the axis's camera-facing sign (r2·av) so the
+                # ring always rotates the way you drag it, near side or far side.
+                r2 = params[2]
+                face = av[0] * r2[0] + av[1] * r2[1] + av[2] * r2[2]
+                deg = math.degrees(dtheta) * (1.0 if face >= 0.0 else -1.0)
                 cmd.rotate([av[0], av[1], av[2]], deg, object=_active,
                            origin=com, camera=0)
                 _drag['deg'] += deg
