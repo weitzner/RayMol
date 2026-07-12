@@ -221,12 +221,6 @@ def _pick_atom(ndc_x, ndc_y, aspect):
 
         if pick_objs is None:
             pick_objs = (cmd.get_names('objects', enabled_only=1) or [])
-        # The displayed movie frame / state, so a multi-state object (NMR ensemble
-        # / MD trajectory) is picked at the state it RENDERS, not always state 1.
-        try:
-            cur_state = cmd.get_state()
-        except Exception:
-            cur_state = 1
         for obj in pick_objs:
             if obj.startswith('_'):
                 continue
@@ -246,16 +240,7 @@ def _pick_atom(ndc_x, ndc_y, aspect):
                 # over-reports because cartoon/ribbon set their visRep bit on all
                 # atoms (incl. solvent) though only guide atoms draw — hence the
                 # per-rep _DRAWN_REPS filter (see its definition).
-                # Pick against the DISPLAYED state so a multi-state object is
-                # picked where it renders — otherwise, once you scrub past state 1,
-                # its flexible regions move and taps there miss. Clamp to the
-                # object's own state count (static single-state objects stay at 1).
-                try:
-                    nst = cmd.count_states(obj)
-                    st = max(1, min(cur_state, nst)) if nst else cur_state
-                except Exception:
-                    st = cur_state
-                model = cmd.get_model('(%s) and (%s)' % (obj, _DRAWN_REPS), state=st)
+                model = cmd.get_model('(%s) and (%s)' % (obj, _DRAWN_REPS))
             except Exception:
                 continue
             if not model or not model.atom:
