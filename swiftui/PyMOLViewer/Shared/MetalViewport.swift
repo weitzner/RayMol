@@ -911,14 +911,14 @@ extension MetalViewport {
             let ndcY = 1 - Float(p.y / h) * 2
             let aspect = Float(w / h)
             if engine.interactionMode == .move {
-                // Tap a gizmo knob → arm/disarm that axis; tap elsewhere →
-                // grab-what-you-touch (set the active object).
-                if let g = engine.gizmo,
-                   let hnd = g.hitTest(ndc: CGPoint(x: CGFloat(ndcX), y: CGFloat(ndcY)), aspect: CGFloat(aspect)) {
-                    engine.toggleArmedAxis(hnd)
-                } else {
-                    engine.moveSetActiveAt(ndcX: ndcX, ndcY: ndcY, aspect: aspect)
-                }
+                // A tap ALWAYS selects the object under it (grab-what-you-touch).
+                // Previously it first hit-tested the gizmo and armed an axis, but
+                // the gizmo wraps the whole molecule (rings around it + the center
+                // handle on the COM), so tapping the molecule body — the natural
+                // place to tap to select — hit a handle and armed it instead of
+                // selecting. Handles are manipulated by DRAGGING (handleMovePan),
+                // which is unaffected; this makes tap-to-select consistent.
+                engine.moveSetActiveAt(ndcX: ndcX, ndcY: ndcY, aspect: aspect)
                 return
             }
             if engine.measureMode != nil {
