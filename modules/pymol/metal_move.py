@@ -341,17 +341,6 @@ def _displayed_frame(obj):
 
 # --- Gizmo geometry emission ------------------------------------------------
 
-def _readout():
-    if _drag is None:
-        return ''
-    h = _drag['handle']
-    if h in ('rx', 'ry', 'rz'):
-        return '↻%s %+.0f°' % (h[1].upper(), _drag['deg'])
-    if h in ('x', 'y', 'z'):
-        return 'Δ%s %+.2f Å' % (h.upper(), _drag['dist'])
-    return 'Δ %+.1f, %+.1f Å' % (_drag['dx'], _drag['dy'])
-
-
 def _emit(active=True):
     out = {'active': False}
     try:
@@ -363,7 +352,7 @@ def _emit(active=True):
                 cproj = _project(params, com)
                 if cproj is not None:
                     out = {'active': True, 'obj': _active,
-                           'center': [cproj[0], cproj[1]], 'readout': _readout()}
+                           'center': [cproj[0], cproj[1]]}
                     axes = {'x': dx, 'y': dy, 'z': dz}
                     # Axis arrows sized in world units (fraction of the radius).
                     axis_len = _AXIS_FRAC * radius

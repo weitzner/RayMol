@@ -2882,11 +2882,6 @@ struct ContentView: View {
             .disabled(engine.activeMoveObject == nil)
             .help("Reset the gizmo frame to the automatic center")
 
-            Text(engine.gizmo?.readout ?? "")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(themeManager.active.accent.color)
-                .lineLimit(1).minimumScaleFactor(0.7)
-
             Spacer(minLength: 0)
 
             Button { engine.resetActiveMovePosition() } label: {

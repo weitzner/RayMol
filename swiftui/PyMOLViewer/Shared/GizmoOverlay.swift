@@ -32,13 +32,11 @@ struct GizmoGeometry {
     var center: CGPoint
     var axes: [String: CGPoint]      // "x"/"y"/"z" -> arrow tip
     var rings: [String: [CGPoint]]  // "x"/"y"/"z" -> ring polyline
-    var readout: String
 
     init?(json: [String: Any]) {
         guard let c = json["center"] as? [Double], c.count == 2 else { return nil }
         obj = json["obj"] as? String ?? ""
         center = CGPoint(x: c[0], y: c[1])
-        readout = json["readout"] as? String ?? ""
         var ax: [String: CGPoint] = [:]
         if let a = json["axes"] as? [String: [Double]] {
             for (k, v) in a where v.count == 2 { ax[k] = CGPoint(x: v[0], y: v[1]) }
