@@ -50,7 +50,7 @@ _frame_override = {}
 # rides along by copying the molecule's TTT (no per-frame rebuild); the 2D
 # projection below is used only for hit-testing.
 _GIZMO_OBJ = '_move_gizmo'
-_COL = {'x': (1.0, 0.36, 0.36), 'y': (0.37, 0.84, 0.41), 'z': (0.35, 0.66, 1.0)}
+_COL = {'x': (1.0, 0.36, 0.36), 'y': (0.37, 0.84, 0.41), 'z': (0.30, 0.48, 1.0)}
 
 # Gizmo size scales with the object's RADIUS OF GYRATION (world Angstroms) — a
 # robust "protein radius" that, unlike the max-extent bounding radius, isn't
