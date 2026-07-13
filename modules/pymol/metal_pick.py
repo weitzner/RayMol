@@ -22,6 +22,11 @@ import math
 # Screen pick radius (squared, in NDC). Clicks farther than this from any
 # atom's projection are treated as empty space (which clears 'sele').
 _MAX_PICK_NDC2 = 0.0100  # ~0.1 NDC radius
+# Object selection (move mode) is forgiving: a tap anywhere on/near a molecule
+# should identify the object, not require a precise hit on a guide atom (cartoons
+# are gappy when zoomed out). ~0.3 NDC radius; still picks the NEAREST object, so
+# a clearly-empty tap (beyond this of every atom) correctly deselects.
+_OBJECT_PICK_NDC2 = 0.0900  # ~0.3 NDC radius
 # Atoms whose screen distance² is within this of the closest are treated as
 # overlapping under the cursor; among them the front-most (min depth) is picked.
 _CLUSTER_NDC2 = 0.0009   # ~0.03 NDC
@@ -153,11 +158,16 @@ def _is_identity(m, eps=1e-6):
     return all(abs(m[i] - ident[i]) < eps for i in range(16))
 
 
-def _pick_atom(ndc_x, ndc_y, aspect):
+def _pick_atom(ndc_x, ndc_y, aspect, max_ndc2=None):
     """Project all DRAWN atoms and return the front-most atom under the click as
     (screen_d2, obj, chain, resi, resn, segi, name, sx, sy), or None for empty
-    space. Shared by pick_at (residue toggle) and appkit_measure (atom picks)."""
+    space. Shared by pick_at (residue toggle) and appkit_measure (atom picks).
+
+    max_ndc2 overrides the squared pick radius. Residue/atom picks use the tight
+    default (_MAX_PICK_NDC2); object selection (move mode) passes the larger
+    _OBJECT_PICK_NDC2 so a tap anywhere on/near the molecule still identifies it."""
     from pymol import cmd
+    thresh = _MAX_PICK_NDC2 if max_ndc2 is None else float(max_ndc2)
 
     try:
         v = cmd.get_view()
@@ -172,6 +182,7 @@ def _pick_atom(ndc_x, ndc_y, aspect):
             tx, ty, tz = v[16], v[17], v[18]   # camera pos (eye translation)
             ox, oy, oz = v[19], v[20], v[21]   # rotation origin (model space)
             fov_deg = abs(v[24])
+            clip_front = clip_back = None      # 25-float clip layout unverified; skip
         else:
             # Legacy 18-float layout (what our embedded build returns):
             #   v[0:9]=3x3 rotation, v[9:12]=pos, v[12:15]=origin,
@@ -187,6 +198,7 @@ def _pick_atom(ndc_x, ndc_y, aspect):
             tx, ty, tz = v[9], v[10], v[11]
             ox, oy, oz = v[12], v[13], v[14]
             fov_deg = abs(v[17])
+            clip_front, clip_back = v[15], v[16]   # slab: pickable only in [front,back]
         if fov_deg <= 1.0:
             fov_deg = cmd.get_setting_float('field_of_view')
 
@@ -221,6 +233,15 @@ def _pick_atom(ndc_x, ndc_y, aspect):
 
         if pick_objs is None:
             pick_objs = (cmd.get_names('objects', enabled_only=1) or [])
+        # Displayed movie/model state: pick against the coordinates actually
+        # RENDERED. get_model defaults to state 1, so a multi-state (NMR /
+        # trajectory) object shown at a later state would otherwise be picked at
+        # its state-1 positions — residues can be 20+ A (≈0.4 NDC) off, so a click
+        # or hover lands on the wrong residue.
+        try:
+            cur_state = int(cmd.get_state())
+        except Exception:
+            cur_state = 1
         for obj in pick_objs:
             if obj.startswith('_'):
                 continue
@@ -240,29 +261,35 @@ def _pick_atom(ndc_x, ndc_y, aspect):
                 # over-reports because cartoon/ribbon set their visRep bit on all
                 # atoms (incl. solvent) though only guide atoms draw — hence the
                 # per-rep _DRAWN_REPS filter (see its definition).
-                model = cmd.get_model('(%s) and (%s)' % (obj, _DRAWN_REPS))
+                sel = '(%s) and (%s)' % (obj, _DRAWN_REPS)
+                model = None
+                # Prefer the displayed state so the pick matches the render.
+                # Only when it isn't state 1 (get_model already defaults to 1),
+                # and fall back to the default if an explicit-state query returns
+                # no atoms — some embedded cores return empty for
+                # get_model(state=N); we must never regress those to a dead pick.
+                if cur_state > 1:
+                    try:
+                        m = cmd.get_model(sel, state=cur_state)
+                        if m and m.atom:
+                            model = m
+                    except Exception:
+                        model = None
+                if model is None:
+                    model = cmd.get_model(sel)
             except Exception:
                 continue
             if not model or not model.atom:
                 continue
-            # Apply the object's display transform (TTT / state matrix) so a
-            # MOVED object is picked where it RENDERS, not at its raw stored
-            # coordinates. Mirrors the renderer (ObjectPrepareContext) and the
-            # pink selection markers (ExecutiveGetSelectionCoords).
-            om = None
-            try:
-                m = cmd.get_object_matrix(obj)
-                if m and len(m) >= 16 and not _is_identity(m):
-                    om = m
-            except Exception:
-                om = None
+            # get_model() already returns coordinates with the object's display
+            # transform (TTT) BAKED IN — verified: get_model() == TTT x raw_coords
+            # for a moved object. So we must NOT re-apply the object matrix here:
+            # doing so DOUBLE-transforms a MOVED object (non-identity TTT) and the
+            # pick lands far from where the atom renders. Non-moved objects only
+            # appeared correct because their TTT is identity (the re-apply was a
+            # no-op) — which is why picking broke only after moving an object.
             for at in model.atom:
                 cx, cy, cz = at.coord[0], at.coord[1], at.coord[2]
-                if om is not None:
-                    wx = om[0] * cx + om[1] * cy + om[2] * cz + om[3]
-                    wy = om[4] * cx + om[5] * cy + om[6] * cz + om[7]
-                    wz = om[8] * cx + om[9] * cy + om[10] * cz + om[11]
-                    cx, cy, cz = wx, wy, wz
                 dx = cx - ox
                 dy = cy - oy
                 dz = cz - oz
@@ -273,6 +300,13 @@ def _pick_atom(ndc_x, ndc_y, aspect):
                 depth = -ez                     # camera looks down -Z
                 if depth <= 0.01:
                     continue
+                # Pickability respects the clip slab: an atom clipped away (outside
+                # [front,back]) isn't visible, so it must not be selectable. Guarded
+                # to a sane slab so a bad view layout can never disable picking. (What
+                # IS selected is drawn clip-invariant separately in the renderer.)
+                if clip_front is not None and clip_back > clip_front \
+                        and (depth < clip_front or depth > clip_back):
+                    continue
                 half_h = depth * tan_half
                 half_w = half_h * aspect
                 sx = ex / half_w                # NDC x, +1 = right
@@ -282,7 +316,7 @@ def _pick_atom(ndc_x, ndc_y, aspect):
                 if sy < _ext[2]: _ext[2] = sy
                 if sy > _ext[3]: _ext[3] = sy
                 d2 = (sx - ndc_x) ** 2 + (sy - ndc_y) ** 2
-                if d2 > _MAX_PICK_NDC2:
+                if d2 > thresh:
                     continue
                 ncand += 1
                 cands.append((d2, depth, obj, at.chain or '', at.resi,

@@ -540,7 +540,13 @@ def pick_object(ndc_x, ndc_y, aspect):
     _aspect = float(aspect)
     try:
         from pymol import metal_pick
-        best = metal_pick._pick_atom(ndc_x, ndc_y, aspect)
+        # Forgiving radius: identify the object under/near the tap even when it
+        # lands in a cartoon gap or the molecule is small (zoomed out). Only a
+        # truly-empty tap — beyond _OBJECT_PICK_NDC2 of every atom — returns None
+        # and deselects. A precise guide-atom hit is NOT required to grab an
+        # object for motion.
+        best = metal_pick._pick_atom(ndc_x, ndc_y, aspect,
+                                     max_ndc2=metal_pick._OBJECT_PICK_NDC2)
         _active = best[1] if best is not None else None
     except Exception as e:
         print('METALMOVE_ERR:' + str(e))
