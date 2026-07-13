@@ -3234,6 +3234,17 @@ void RendererMetal::pointSize(float s)
   // Point size is set via vertex shader in Metal
 }
 
+void RendererMetal::setDepthClamp(bool enabled)
+{
+  // MTLDepthClipModeClamp rasterizes primitives outside the near/far planes with
+  // clamped depth instead of clipping them. Used for selection-indicator points
+  // so a selected atom's marker stays on screen even when the atom falls outside
+  // the clip slab. Encoder state — scope it around the draw and reset after.
+  if (_encoder)
+    [_encoder setDepthClipMode:enabled ? MTLDepthClipModeClamp
+                                       : MTLDepthClipModeClip];
+}
+
 // ---------------------------------------------------------------------------
 #pragma mark - Drawing
 // ---------------------------------------------------------------------------
@@ -3709,17 +3720,24 @@ void RendererMetal::endBatch()
   }
 
   NSUInteger byteSize = drawVertices->size() * sizeof(BatchVertex);
-  // Reuse a shared batch buffer, growing only when needed
-  if (!_batchBuffer || _batchBuffer.length < byteSize) {
-    [_batchBuffer release];  // MRC: release the smaller previous buffer (+1)
-    _batchBuffer = [_device newBufferWithLength:std::max(byteSize, (NSUInteger)65536)
-                                        options:MTLResourceStorageModeShared];
-  }
-  memcpy(_batchBuffer.contents, drawVertices->data(), byteSize);
-  id<MTLBuffer> tmpVBO = _batchBuffer;
+  // A single frame can issue MULTIPLE batches (e.g. the hover-preview points
+  // then the committed-selection points). All draws are queued into one command
+  // buffer and execute together at commit, so a SHARED buffer reused at offset 0
+  // would leave every draw reading the LAST batch's vertices — the earlier
+  // batches' points silently vanish (this is why the hover preview disappeared
+  // whenever a committed selection was enabled). Allocate a fresh transient
+  // buffer per batch; the encoder retains it until the frame completes, so each
+  // draw reads its own vertices. (CGO uses its own batch object, and the
+  // renderer's immediate path issues only a handful of batches per frame, so the
+  // per-batch allocation is negligible.)
+  id<MTLBuffer> tmpVBO =
+      [_device newBufferWithLength:std::max(byteSize, (NSUInteger)16)
+                           options:MTLResourceStorageModeShared];
+  memcpy(tmpVBO.contents, drawVertices->data(), byteSize);
 
   // Bind batch VBO at buffer index 0
   [_encoder setVertexBuffer:tmpVBO offset:0 atIndex:0];
+  [tmpVBO release];  // MRC: the encoder holds its own reference for the frame
 
   // Upload modelview, projection matrices, and point size as uniforms
   struct {
