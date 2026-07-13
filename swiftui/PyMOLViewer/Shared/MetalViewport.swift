@@ -81,6 +81,18 @@ struct MetalViewport: NSViewRepresentable {
             }
         }
 
+        // Move-mode tap harness (PYMOL_AUTOMOVETAP="ndcx,ndcy[,jitterpx]"): see
+        // Coordinator.debugMoveTap. Fires once the scene has rendered.
+        if let spec = ProcessInfo.processInfo.environment["PYMOL_AUTOMOVETAP"] {
+            let c = spec.split(separator: ",").compactMap { Double($0) }
+            if c.count >= 2 {
+                let jitter = c.count >= 3 ? CGFloat(c[2]) : 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak coordinator = context.coordinator] in
+                    coordinator?.debugMoveTap(ndcX: CGFloat(c[0]), ndcY: CGFloat(c[1]), jitter: jitter, in: view)
+                }
+            }
+        }
+
         return view
     }
 
@@ -282,6 +294,13 @@ extension MetalViewport {
         // a drag (rotate). Point space, view coordinates.
         private var mouseDownLoc: CGPoint = .zero
         private var didDrag = false
+        // Move mode: distance (view points) the pointer must travel before a
+        // press becomes a DRAG (orbit / gizmo-handle manipulation). Below it, the
+        // press stays a candidate TAP → object select. Without this dead-zone a
+        // sub-pixel jitter during a tap (macOS emits mouseDragged for <1pt moves)
+        // armed didDrag and routed the release to the orbit path, so tap-to-select
+        // only worked for a perfectly still click ("doesn't work consistently").
+        private let moveDragSlop: CGFloat = 6
         // Move mode: the gizmo handle grabbed at mouse-down (nil = none → camera).
         private var moveHandle: GizmoHandle?
         // Right-button equivalents: a pure right-click raises the viewport
@@ -577,8 +596,11 @@ extension MetalViewport {
                     engine?.refreshGizmo(aspect: aspect)
                     return
                 }
-                // Pure click → grab-what-you-touch: set the active object.
-                if moved < 4, let (nx, ny, a) = gizmoNDC(in: view, at: loc) {
+                // Not a drag (the press stayed inside moveDragSlop) → treat as a
+                // TAP and grab-what-you-touch. No separate distance gate here: the
+                // dead-zone in handleMouseDragged already guarantees didDrag is only
+                // set once the pointer really moved, so a shaky tap still selects.
+                if let (nx, ny, a) = gizmoNDC(in: view, at: loc) {
                     engine?.moveSetActiveAt(ndcX: nx, ndcY: ny, aspect: a)
                 }
                 return
@@ -653,12 +675,48 @@ extension MetalViewport {
             if let u = mk(.leftMouseUp)   { view.mouseUp(with: u) }
         }
 
+        // Move-mode variant of debugClick (PYMOL_AUTOMOVETAP harness): switch to
+        // Move mode, then dispatch press → optional jitter mouseDragged → release
+        // through the genuine handler path, exercising the tap-vs-drag
+        // discrimination (moveDragSlop). Verifies tap-to-select without HID
+        // injection (raw CGEvent taps don't reach the window on a second display /
+        // in a VM). jitter < moveDragSlop must SELECT; jitter > moveDragSlop must
+        // ORBIT. Inspect the resulting active object via MCP.
+        func debugMoveTap(ndcX: CGFloat, ndcY: CGFloat, jitter: CGFloat, in view: MTKView) {
+            guard let win = view.window else { return }
+            engine?.setInteractionMode(.move)
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return }
+            let vp = CGPoint(x: (ndcX + 1) / 2 * w, y: (ndcY + 1) / 2 * h) // bottom-left
+            let down = view.convert(vp, to: nil)
+            let moved = CGPoint(x: down.x + jitter, y: down.y + jitter)
+            let ts = ProcessInfo.processInfo.systemUptime
+            let mk = { (type: NSEvent.EventType, p: CGPoint) -> NSEvent? in
+                NSEvent.mouseEvent(with: type, location: p, modifierFlags: [],
+                                   timestamp: ts, windowNumber: win.windowNumber,
+                                   context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            Self.pickDbg(String(format: "debugMoveTap ndc=(%.4f,%.4f) jitter=%.1f",
+                                Float(ndcX), Float(ndcY), Float(jitter)))
+            if let d = mk(.leftMouseDown, down) { view.mouseDown(with: d) }
+            if jitter != 0, let g = mk(.leftMouseDragged, moved) { view.mouseDragged(with: g) }
+            if let u = mk(.leftMouseUp, jitter != 0 ? moved : down) { view.mouseUp(with: u) }
+        }
+
         func handleMouseDragged(_ event: NSEvent, in view: MTKView) {
             let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
 
             if engine?.interactionMode == .move {
                 guard let (nx, ny, aspect) = gizmoNDC(in: view, at: loc) else { return }
+                // Dead-zone: until the pointer has travelled past the slop, keep the
+                // press a candidate TAP (don't arm didDrag or start orbit/handle
+                // drag). This is what makes tap-to-select fire on a slightly shaky
+                // click instead of being swallowed as a tiny camera orbit.
+                if !didDrag,
+                   hypot(loc.x - mouseDownLoc.x, loc.y - mouseDownLoc.y) < moveDragSlop {
+                    return
+                }
                 if let h = moveHandle {
                     // Dragging a gizmo handle → manipulate the active object.
                     if !didDrag {

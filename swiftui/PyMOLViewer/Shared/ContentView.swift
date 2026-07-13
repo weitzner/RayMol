@@ -481,13 +481,14 @@ struct ContentView: View {
             Text("Download a structure from the RCSB PDB.")
         }
         .toolbar {
-            // Leading — tools (mirrors the iOS top-left): Open · Measure.
+            // Leading — Open only.
             macOpenToolbar
-            macMeasureToolbar
+            // Trailing — interaction tools (Move · Measure), then view toggles,
+            // actions, and status. (Measure moved here from the leading edge; the
+            // Timeline/movie toggle was removed — it lives on the Movie menu / ⌥⌘M.
+            // Theme moved into the Display segment, mirroring iOS Settings → Themes.)
             macMoveToolbar
-            // Trailing — view toggles, then actions, then status. (Theme moved into
-            // the Display segment, mirroring iOS Settings → Themes.)
-            macMovieToolbar
+            macMeasureToolbar
             panelToggles
             exportMenu
             #if !RAYMOL_MAS_RESTRICTED
@@ -2495,8 +2496,9 @@ struct ContentView: View {
     #endif
 
     private var macMeasureToolbar: some ToolbarContent {
-        // Leading, beside Open — mirrors the iOS top-left pair (Open · Measure).
-        ToolbarItem(placement: .navigation) {
+        // Trailing, grouped with Move as the interaction tools (.primaryAction so it
+        // sits in the trailing cluster on the right, not the leading edge).
+        ToolbarItem(placement: .primaryAction) {
             Button {
                 engine.setMeasureMode(engine.measureMode == nil ? .distance : nil)
             } label: {
@@ -2507,8 +2509,11 @@ struct ContentView: View {
     }
 
     // Move-mode toggle (macOS). ⌃M also toggles it (see PyMOLApp commands).
+    // .primaryAction (trailing) — grouped with Measure as the interaction tools,
+    // and matching its neighbours' placement so SwiftUI doesn't insert a phantom
+    // empty slot at a default/primaryAction boundary.
     private var macMoveToolbar: some ToolbarContent {
-        ToolbarItem {
+        ToolbarItem(placement: .primaryAction) {
             Button {
                 engine.setInteractionMode(engine.interactionMode == .move ? .viewing : .move)
             } label: {
@@ -2519,19 +2524,9 @@ struct ContentView: View {
         }
     }
 
-    // Primary entry into Timeline (movie studio) mode — a persistent toggle that
-    // works from a cold start (no movie yet), unlike the transport, which is
-    // gated behind hasTimeline. The ⌥⌘M shortcut lives on the Movie menu command.
-    private var macMovieToolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { engine.timelineMode.toggle() }
-            } label: {
-                Label("Timeline", systemImage: engine.timelineMode ? "clapperboard.fill" : "clapperboard")
-            }
-            .help("Movie timeline (⌥⌘M)")
-        }
-    }
+    // Timeline (movie studio) mode is entered from the Movie menu (⌥⌘M) and the
+    // docked transport — there is no toolbar button for it (removed: its icon read
+    // as an empty slot in the trailing cluster).
 
     // The three desktop panes as one consistent toggle group. NOTE the right panel
     // toggle is "Inspector" (sidebar icon), NOT "Objects" — Objects is now a SEGMENT
