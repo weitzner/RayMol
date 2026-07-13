@@ -83,7 +83,7 @@ else()
     # iOS: headers-only mode for static library compilation.
     # Use BeeWare Python.xcframework headers for iOS builds;
     # actual linking happens in the Xcode project.
-    set(BREW_PREFIX "/opt/homebrew")
+    set(BREW_PREFIX "${PYMOL_EXTERNAL_PREFIX}")
     set(PYMOL_IOS_DEPS "${CMAKE_SOURCE_DIR}/../deps_ios" CACHE PATH "iOS dependencies root")
 
     # Python headers from BeeWare Python.xcframework (3.13)
