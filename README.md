@@ -31,6 +31,21 @@ built on top.
   Dawn presets + custom themes) controlling both app chrome and molecular
   defaults.
 
+## Install (macOS)
+
+Install with [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask javierbq/raymol/raymol
+```
+
+RayMol keeps itself up to date in-app (Sparkle), so a one-time install is all
+you need. Prefer a manual download? Grab the notarized DMG from the
+[latest release](https://github.com/javierbq/RayMol/releases/latest).
+
+Requires macOS 13 (Ventura) or newer. The iPad / iPhone app ships through the
+App Store.
+
 ## Building
 
 The cross-platform app lives in [`swiftui/`](swiftui) (Xcode project +
