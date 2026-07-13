@@ -181,6 +181,12 @@ struct PyMOLApp: App {
                     NotificationCenter.default.post(name: .raymolClearSession, object: nil)
                 }
             }
+            // Mouse menu: toggle Move mode (rigid-body object gizmo). ⌃M.
+            CommandMenu("Mouse") {
+                Button(engine.interactionMode == .move ? "Stop Moving Objects" : "Move Objects") {
+                    engine.setInteractionMode(engine.interactionMode == .move ? .viewing : .move)
+                }.keyboardShortcut("m", modifiers: .control)
+            }
             // Movie: enter/exit the Timeline (movie studio) mode. Carries the
             // keyboard shortcut; the toolbar clapperboard is the primary control.
             CommandMenu("Movie") {

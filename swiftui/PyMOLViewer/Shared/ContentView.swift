@@ -481,13 +481,14 @@ struct ContentView: View {
             Text("Download a structure from the RCSB PDB.")
         }
         .toolbar {
-            // Leading — tools (mirrors the iOS top-left): Open · Measure.
+            // Leading — Open only.
             macOpenToolbar
+            // Trailing — interaction tools (Move · Measure), then view toggles,
+            // actions, and status. (Measure moved here from the leading edge; the
+            // Timeline/movie toggle was removed — it lives on the Movie menu / ⌥⌘M.
+            // Theme moved into the Display segment, mirroring iOS Settings → Themes.)
+            macMoveToolbar
             macMeasureToolbar
-            // Trailing — view toggles, then actions, then status. (Theme moved into
-            // the Display segment, mirroring iOS Settings → Themes. Timeline/movie
-            // mode is reached from the Movie menu / ⌥⌘M — no toolbar button, which
-            // rendered as an unlabeled circle and surprised users into movie mode.)
             panelToggles
             exportMenu
             #if !RAYMOL_MAS_RESTRICTED
@@ -547,6 +548,14 @@ struct ContentView: View {
             if ProcessInfo.processInfo.environment["PYMOL_AUTOSCENEBUTTONS"] != nil {
                 showSceneButtons = true
             }
+            // Test affordance: enter Move mode and make PYMOL_AUTOMOVE=<object>
+            // the active object so the gizmo can be screenshotted without a tap.
+            if let mv = ProcessInfo.processInfo.environment["PYMOL_AUTOMOVE"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.8) {
+                    engine.setInteractionMode(.move)
+                    if !mv.isEmpty { engine.setActiveMoveObject(mv) }
+                }
+            }
             installEscKeyMonitor()
         }
         .onDisappear {
@@ -602,7 +611,11 @@ struct ContentView: View {
             .layoutPriority(1)
             .overlay(alignment: .top) {
                 if engine.measureMode != nil { measureOverlay }
+                else if engine.interactionMode == .move { moveOverlay }
             }
+            // (The Move-mode gizmo is a 3D CGO object rendered in the Metal
+            // scene by metal_move.py; no SwiftUI overlay is needed. Input is
+            // hit-tested against the projected geometry in MetalViewport.)
             // Pick-debug crosshair: marks exactly where the last click landed,
             // so a screenshot shows click-vs-selection offset.
             .overlay { debugClickMarker }
@@ -1046,6 +1059,7 @@ struct ContentView: View {
                 // Measurement bar docks in the top safe area while active. (The
                 // sequence strip moved BELOW the viewport — see iPhoneLayout.)
                 if engine.measureMode != nil { measureOverlay }
+                else if engine.interactionMode == .move { moveOverlay }
             }
             .navigationTitle(hSize == .compact ? "" : "RayMol")
             .navigationBarTitleDisplayMode(.inline)
@@ -1090,7 +1104,12 @@ struct ContentView: View {
                     }
                 }
             }
-            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosTimelineToolbar; iosPanelToggle; iosExportToolbar }
+            // Move (Move-mode toggle) replaces the Timeline/movie button here: the
+            // clapperboard rendered as an unlabeled circle and jumped users into
+            // movie mode unexpectedly, so it was removed (movie/timeline stays on
+            // the Movie tab / ⌥⌘M). iPad per-pane toggles now live in master's
+            // reworked inspector (iosPadPanelMenu retired).
+            .toolbar { iosOpenToolbar; iosMeasureToolbar; iosMoveToolbar; iosPanelToggle; iosExportToolbar }
             .fileImporter(isPresented: $showFileImporter,
                           allowedContentTypes: iosImportTypes,
                           allowsMultipleSelection: false) { result in
@@ -1238,6 +1257,14 @@ struct ContentView: View {
             if let m = ProcessInfo.processInfo.environment["PYMOL_AUTOMEASURE"] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
                     engine.setMeasureMode(MeasureKind(rawValue: m) ?? .distance)
+                }
+            }
+            // Test affordance: enter Move mode and make PYMOL_AUTOMOVE=<object>
+            // the active object, so the gizmo can be screenshotted without a tap.
+            if let mv = ProcessInfo.processInfo.environment["PYMOL_AUTOMOVE"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.8) {
+                    engine.setInteractionMode(.move)
+                    if !mv.isEmpty { engine.setActiveMoveObject(mv) }
                 }
             }
             if let e = ProcessInfo.processInfo.environment["PYMOL_AUTOEXPORTMOVIE"] {
@@ -1740,6 +1767,19 @@ struct ContentView: View {
         }
     }
 
+    // Move-mode toggle (iOS). Mirrors the measure ruler toggle.
+    private var iosMoveToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+                engine.setInteractionMode(engine.interactionMode == .move ? .viewing : .move)
+            } label: {
+                Image(systemName: "move.3d")
+                    .foregroundColor(engine.interactionMode == .move ? themeManager.active.accent.color : nil)
+            }
+            .accessibilityLabel("Move objects")
+        }
+    }
+
     private var iosPanelToggle: some ToolbarContent {
         // iPhone (compact) only: collapse/expand the single bottom control panel.
         // The iPad mac-style layout uses iosPadPanelMenu (per-pane toggles) instead.
@@ -1804,6 +1844,8 @@ struct ContentView: View {
                 #endif
             }
             .animation(.easeOut(duration: 0.35), value: hasRestoreSnapshot)
+            // (The Move-mode gizmo is a 3D CGO object rendered in the Metal scene
+            // by metal_move.py; no SwiftUI overlay is needed.)
             // (The floating viewport transport was removed: movie playback lives in
             // the Movie tab, and multi-state model stepping lives in the Object panel.)
             // Opt-in glanceable scene buttons (Scenes tab → "Show scene buttons
@@ -2541,8 +2583,9 @@ struct ContentView: View {
     #endif
 
     private var macMeasureToolbar: some ToolbarContent {
-        // Leading, beside Open — mirrors the iOS top-left pair (Open · Measure).
-        ToolbarItem(placement: .navigation) {
+        // Trailing, grouped with Move as the interaction tools (.primaryAction so it
+        // sits in the trailing cluster on the right, not the leading edge).
+        ToolbarItem(placement: .primaryAction) {
             Button {
                 engine.setMeasureMode(engine.measureMode == nil ? .distance : nil)
             } label: {
@@ -2552,9 +2595,29 @@ struct ContentView: View {
         }
     }
 
+    // Move-mode toggle (macOS). ⌃M also toggles it (see PyMOLApp commands).
+    // .primaryAction (trailing) — grouped with Measure as the interaction tools,
+    // and matching its neighbours' placement so SwiftUI doesn't insert a phantom
+    // empty slot at a default/primaryAction boundary.
+    private var macMoveToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                engine.setInteractionMode(engine.interactionMode == .move ? .viewing : .move)
+            } label: {
+                Label("Move", systemImage: "move.3d")
+                    .foregroundColor(engine.interactionMode == .move ? themeManager.active.accent.color : nil)
+            }
+            .help("Move objects: drag the gizmo to translate / rotate the active object")
+        }
+    }
+
     // (Removed: macMovieToolbar. Timeline/movie mode is entered from the Movie
     // menu / ⌥⌘M. The toolbar button rendered as an unlabeled circle and toggled
     // movie mode unexpectedly, so it was removed.)
+
+    // Timeline (movie studio) mode is entered from the Movie menu (⌥⌘M) and the
+    // docked transport — there is no toolbar button for it (removed: its icon read
+    // as an empty slot in the trailing cluster).
 
     // The three desktop panes as one consistent toggle group. NOTE the right panel
     // toggle is "Inspector" (sidebar icon), NOT "Objects" — Objects is now a SEGMENT
@@ -2843,6 +2906,82 @@ struct ContentView: View {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(themeManager.active.panelText.color.opacity(0.6))
             }.buttonStyle(.plain).accessibilityLabel("Exit measure mode")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(themeManager.active.panelBackground.color)
+        .tint(themeManager.active.accent.color)
+    }
+
+    // Move-mode overlay bar (mirrors measureOverlay): Move/Rotate tool toggle,
+    // active-object dropdown, live readout, reset, exit.
+    private var moveOverlay: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "move.3d")
+                .foregroundColor(themeManager.active.accent.color)
+            Menu {
+                let names = engine.objects.filter { !$0.isSelection }.map { $0.name }
+                if names.isEmpty {
+                    Text("No objects loaded")
+                } else {
+                    ForEach(names, id: \.self) { n in
+                        Button {
+                            engine.setActiveMoveObject(n)
+                        } label: {
+                            if engine.activeMoveObject == n {
+                                Label(n, systemImage: "checkmark")
+                            } else {
+                                Text(n)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "scope")
+                    Text(engine.activeMoveObject ?? "Tap an object")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 9))
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(themeManager.active.panelText.color)
+            }
+
+            // Adjust-frame controls: the toggle (macOS: also hold Shift) makes the
+            // gizmo grey out and its controls re-anchor the frame (origin + tilt)
+            // instead of moving the structure; reset snaps the frame back to the
+            // automatic molecular center.
+            Button { engine.adjustFrameToggle.toggle() } label: {
+                Image(systemName: "gyroscope")
+                    .foregroundColor(engine.adjustFrameActive
+                        ? themeManager.active.accent.color
+                        : themeManager.active.panelText.color)
+            }
+            .buttonStyle(.plain)
+            .disabled(engine.activeMoveObject == nil)
+            .help("Adjust the gizmo frame — drag to set its origin & tilt (or hold Shift). Moves the gizmo, not the structure.")
+
+            Button { engine.resetGizmoFrame() } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .foregroundColor(themeManager.active.panelText.color)
+            }
+            .buttonStyle(.plain)
+            .disabled(engine.activeMoveObject == nil)
+            .help("Reset the gizmo frame to the automatic center")
+
+            Spacer(minLength: 0)
+
+            Button { engine.resetActiveMovePosition() } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .foregroundColor(themeManager.active.panelText.color)
+            }
+            .buttonStyle(.plain)
+            .disabled(engine.activeMoveObject == nil)
+            .help("Reset this object's position")
+
+            Button { engine.setInteractionMode(.viewing) } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(themeManager.active.panelText.color.opacity(0.6))
+            }.buttonStyle(.plain).accessibilityLabel("Exit move mode")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(themeManager.active.panelBackground.color)

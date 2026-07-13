@@ -62,6 +62,7 @@ Z* -------------------------------------------------------------------
 #include"ScrollBar.h"
 #include "ShaderMgr.h"
 #include "Feedback.h"
+#include "Renderer.h"
 #include "GFXManager.h"
 #include "Util2.h"
 
@@ -5491,6 +5492,15 @@ void ScenePopModelViewMatrix(PyMOLGlobals * G, bool immediate) {
 
   I->modelViewMatrix = stack.back();
   stack.pop_back();
+
+  // Metal backend: re-sync the renderer's cached modelview to the restored
+  // matrix, so a per-object TTT applied by ObjectPrepareContext (which pushes
+  // camera*TTT into the renderer, see PyMOLObject.cpp) does not leak into the
+  // next object. The glLoadMatrixf below is a no-op on Metal.
+  if (G->Renderer) {
+    G->Renderer->matrixMode(0); // modelview
+    G->Renderer->loadMatrixf(SceneGetModelViewMatrixPtr(G));
+  }
 
 #ifndef PURE_OPENGL_ES_2
   if (ALWAYS_IMMEDIATE_OR(immediate)) {

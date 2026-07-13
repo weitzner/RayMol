@@ -2254,12 +2254,18 @@ static void SceneDrawMetalSelectionPoints(PyMOLGlobals* G,
     return;
   int nPoints = (int)(coords.size() / 3);
   G->Renderer->disable(pymol::Capability::DepthTest);
+  // Selection indicators are an overlay: what IS selected must stay on screen
+  // regardless of the clip slab (only what CAN be selected is clip-dependent).
+  // Depth-clamp so markers for atoms outside [front,back] are drawn (clamped)
+  // instead of clipped; depth test is already off so the clamped z is harmless.
+  G->Renderer->setDepthClamp(true);
   G->Renderer->pointSize(pointSize); // Retina: need ~2x for visible size
   G->Renderer->beginBatch(pymol::PrimitiveType::Points);
   G->Renderer->batchColor4f(color[0], color[1], color[2], 1.0f);
   for (int i = 0; i < nPoints; i++)
     G->Renderer->batchVertex3f(coords[i * 3], coords[i * 3 + 1], coords[i * 3 + 2]);
   G->Renderer->endBatch();
+  G->Renderer->setDepthClamp(false);
   G->Renderer->enable(pymol::Capability::DepthTest);
 }
 

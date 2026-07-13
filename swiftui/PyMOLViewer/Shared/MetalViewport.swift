@@ -81,6 +81,18 @@ struct MetalViewport: NSViewRepresentable {
             }
         }
 
+        // Move-mode tap harness (PYMOL_AUTOMOVETAP="ndcx,ndcy[,jitterpx]"): see
+        // Coordinator.debugMoveTap. Fires once the scene has rendered.
+        if let spec = ProcessInfo.processInfo.environment["PYMOL_AUTOMOVETAP"] {
+            let c = spec.split(separator: ",").compactMap { Double($0) }
+            if c.count >= 2 {
+                let jitter = c.count >= 3 ? CGFloat(c[2]) : 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak coordinator = context.coordinator] in
+                    coordinator?.debugMoveTap(ndcX: CGFloat(c[0]), ndcY: CGFloat(c[1]), jitter: jitter, in: view)
+                }
+            }
+        }
+
         return view
     }
 
@@ -282,6 +294,15 @@ extension MetalViewport {
         // a drag (rotate). Point space, view coordinates.
         private var mouseDownLoc: CGPoint = .zero
         private var didDrag = false
+        // Move mode: distance (view points) the pointer must travel before a
+        // press becomes a DRAG (orbit / gizmo-handle manipulation). Below it, the
+        // press stays a candidate TAP → object select. Without this dead-zone a
+        // sub-pixel jitter during a tap (macOS emits mouseDragged for <1pt moves)
+        // armed didDrag and routed the release to the orbit path, so tap-to-select
+        // only worked for a perfectly still click ("doesn't work consistently").
+        private let moveDragSlop: CGFloat = 6
+        // Move mode: the gizmo handle grabbed at mouse-down (nil = none → camera).
+        private var moveHandle: GizmoHandle?
         // Right-button equivalents: a pure right-click raises the viewport
         // context menu (CPU pick → engine.longPressHit), while a right-DRAG
         // still drives PyMOL's clip (slab). The button-down is deferred to the
@@ -361,6 +382,9 @@ extension MetalViewport {
         // touch/trackpad drag has both components, so feeding X too would move
         // both planes (a slab) — the "cull from front AND back" the user saw.
         private var clipAnchorX: Int32?
+        // Move mode: the gizmo handle a one-finger pan is manipulating (nil =
+        // none → the pan orbits the camera).
+        private var panMoveHandle: GizmoHandle?
         #endif
 
         // MARK: - MTKViewDelegate
@@ -458,6 +482,28 @@ extension MetalViewport {
             return mods
         }
 
+        // MARK: - Move-mode gizmo hit-testing (shared)
+
+        // A view point -> (ndc_x, ndc_y, aspect) in PyMOL NDC (bottom-left, +y up).
+        // macOS view points are already bottom-left; UIKit points are top-left.
+        private func gizmoNDC(in view: MTKView, at p: CGPoint) -> (Float, Float, Float)? {
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return nil }
+            let nx = Float(p.x / w) * 2 - 1
+            #if os(macOS)
+            let ny = Float(p.y / h) * 2 - 1
+            #else
+            let ny = 1 - Float(p.y / h) * 2
+            #endif
+            return (nx, ny, Float(w / h))
+        }
+
+        // The gizmo handle under a view point (Move mode only), or nil.
+        private func gizmoHit(in view: MTKView, at p: CGPoint) -> GizmoHandle? {
+            guard let g = engine?.gizmo, let (nx, ny, aspect) = gizmoNDC(in: view, at: p) else { return nil }
+            return g.hitTest(ndc: CGPoint(x: CGFloat(nx), y: CGFloat(ny)), aspect: CGFloat(aspect))
+        }
+
         // MARK: - macOS mouse handling
 
         #if os(macOS)
@@ -474,6 +520,14 @@ extension MetalViewport {
             lastHoverLoc = .zero
             mouseDownLoc = view.convert(event.locationInWindow, from: nil)
             didDrag = false
+            // Move mode: remember whether the press landed on a gizmo handle, so
+            // the drag manipulates the object; otherwise the drag orbits the camera.
+            moveHandle = nil
+            if engine?.interactionMode == .move {
+                // Shift → adjust-frame mode for this drag (re-anchor the gizmo).
+                engine?.moveShiftHeld = event.modifierFlags.contains(.shift)
+                moveHandle = gizmoHit(in: view, at: mouseDownLoc)
+            }
         }
 
         // Pointer moved over the viewport with no button held → refresh the hover
@@ -484,13 +538,23 @@ extension MetalViewport {
         // re-pick when the pointer barely moved; the engine additionally
         // debounces the actual Python pick.
         func handleMouseMoved(_ event: NSEvent, in view: MTKView) {
-            guard engine?.measureMode == nil, !didDrag else { return }
+            guard !didDrag else { return }
             let loc = view.convert(event.locationInWindow, from: nil)
             if lastHoverLoc != .zero,
                hypot(loc.x - lastHoverLoc.x, loc.y - lastHoverLoc.y) < 2 {
                 return
             }
             lastHoverLoc = loc
+            // Move mode: highlight the gizmo handle under the cursor so it's
+            // obvious which axis/ring/center a drag will grab. Also reflect Shift
+            // so the gizmo greys out (adjust-frame mode) as you hover with it held.
+            if engine?.interactionMode == .move {
+                engine?.moveShiftHeld = event.modifierFlags.contains(.shift)
+                let hit = gizmoHit(in: view, at: loc)
+                if engine?.hoveredHandle != hit { engine?.hoveredHandle = hit }
+                return
+            }
+            guard engine?.measureMode == nil else { return }
             let w = view.bounds.width, h = view.bounds.height
             guard w > 0, h > 0 else { return }
             let ndcX = Float(loc.x / w) * 2 - 1
@@ -502,12 +566,45 @@ extension MetalViewport {
         func handleMouseExited(_ event: NSEvent, in view: MTKView) {
             lastHoverLoc = .zero
             engine?.clearHoverPreview()
+            if engine?.hoveredHandle != nil { engine?.hoveredHandle = nil }
+            // Drop Shift adjust-mode when the pointer leaves, so the gizmo doesn't
+            // stay greyed if Shift is released outside the viewport.
+            if engine?.moveShiftHeld == true { engine?.moveShiftHeld = false }
         }
 
         func handleMouseUp(_ event: NSEvent, in view: MTKView) {
+            // Clear the drag flag on exit so passive hover (which is gated on
+            // !didDrag) resumes immediately after a drag, not only after the next
+            // mouse-down.
+            defer { didDrag = false }
             let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
             let moved = hypot(loc.x - mouseDownLoc.x, loc.y - mouseDownLoc.y)
+
+            if engine?.interactionMode == .move {
+                let aspect = Float(view.bounds.width / max(view.bounds.height, 1))
+                if moveHandle != nil, didDrag {
+                    engine?.gizmoEndDrag()
+                    moveHandle = nil
+                    return
+                }
+                moveHandle = nil
+                if didDrag {
+                    // Finish the camera orbit (empty-space drag).
+                    let pt = pymolPoint(in: view, at: loc)
+                    engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: mods)
+                    engine?.refreshGizmo(aspect: aspect)
+                    return
+                }
+                // Not a drag (the press stayed inside moveDragSlop) → treat as a
+                // TAP and grab-what-you-touch. No separate distance gate here: the
+                // dead-zone in handleMouseDragged already guarantees didDrag is only
+                // set once the pointer really moved, so a shaky tap still selects.
+                if let (nx, ny, a) = gizmoNDC(in: view, at: loc) {
+                    engine?.moveSetActiveAt(ndcX: nx, ndcY: ny, aspect: a)
+                }
+                return
+            }
 
             if didDrag {
                 // Finish the rotate drag.
@@ -584,9 +681,74 @@ extension MetalViewport {
             if let u = mk(.leftMouseUp)   { view.mouseUp(with: u) }
         }
 
+        // Move-mode variant of debugClick (PYMOL_AUTOMOVETAP harness): switch to
+        // Move mode, then dispatch press → optional jitter mouseDragged → release
+        // through the genuine handler path, exercising the tap-vs-drag
+        // discrimination (moveDragSlop). Verifies tap-to-select without HID
+        // injection (raw CGEvent taps don't reach the window on a second display /
+        // in a VM). jitter < moveDragSlop must SELECT; jitter > moveDragSlop must
+        // ORBIT. Inspect the resulting active object via MCP.
+        func debugMoveTap(ndcX: CGFloat, ndcY: CGFloat, jitter: CGFloat, in view: MTKView) {
+            guard let win = view.window else { return }
+            engine?.setInteractionMode(.move)
+            let w = view.bounds.width, h = view.bounds.height
+            guard w > 0, h > 0 else { return }
+            let vp = CGPoint(x: (ndcX + 1) / 2 * w, y: (ndcY + 1) / 2 * h) // bottom-left
+            let down = view.convert(vp, to: nil)
+            let moved = CGPoint(x: down.x + jitter, y: down.y + jitter)
+            let ts = ProcessInfo.processInfo.systemUptime
+            let mk = { (type: NSEvent.EventType, p: CGPoint) -> NSEvent? in
+                NSEvent.mouseEvent(with: type, location: p, modifierFlags: [],
+                                   timestamp: ts, windowNumber: win.windowNumber,
+                                   context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            }
+            Self.pickDbg(String(format: "debugMoveTap ndc=(%.4f,%.4f) jitter=%.1f",
+                                Float(ndcX), Float(ndcY), Float(jitter)))
+            if let d = mk(.leftMouseDown, down) { view.mouseDown(with: d) }
+            if jitter != 0, let g = mk(.leftMouseDragged, moved) { view.mouseDragged(with: g) }
+            if let u = mk(.leftMouseUp, jitter != 0 ? moved : down) { view.mouseUp(with: u) }
+        }
+
         func handleMouseDragged(_ event: NSEvent, in view: MTKView) {
             let loc = view.convert(event.locationInWindow, from: nil)
             let mods = pymolModifiers(event.modifierFlags.rawValue)
+
+            if engine?.interactionMode == .move {
+                guard let (nx, ny, aspect) = gizmoNDC(in: view, at: loc) else { return }
+                // Dead-zone: until the pointer has travelled past the slop, keep the
+                // press a candidate TAP (don't arm didDrag or start orbit/handle
+                // drag). This is what makes tap-to-select fire on a slightly shaky
+                // click instead of being swallowed as a tiny camera orbit.
+                if !didDrag,
+                   hypot(loc.x - mouseDownLoc.x, loc.y - mouseDownLoc.y) < moveDragSlop {
+                    return
+                }
+                if let h = moveHandle {
+                    // Dragging a gizmo handle → manipulate the active object.
+                    if !didDrag {
+                        didDrag = true
+                        if let (dnx, dny, _) = gizmoNDC(in: view, at: mouseDownLoc) {
+                            engine?.gizmoBeginDrag(h, ndcX: dnx, ndcY: dny, aspect: aspect)
+                        }
+                    }
+                    engine?.gizmoUpdateDrag(ndcX: nx, ndcY: ny, aspect: aspect)
+                    return
+                }
+                // Empty-space drag → orbit the camera. The gizmo is a 3D CGO that
+                // re-renders from the new camera automatically, so we do NOT refresh
+                // its 2D hit-test geometry per tick — that per-tick Python round-trip
+                // + JSON file I/O is what made orbiting laggy (even with no active
+                // object). It's refreshed once on mouseUp for the next hover/click.
+                if !didDrag {
+                    didDrag = true
+                    let down = pymolPoint(in: view, at: mouseDownLoc)
+                    engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_DOWN, x: down.0, y: down.1, modifiers: mods)
+                }
+                let pt = pymolPoint(in: view, at: loc)
+                engine?.drag(x: pt.0, y: pt.1, modifiers: mods)
+                return
+            }
+
             if !didDrag {
                 // First movement: now send the button-down (at the press point)
                 // so PyMOL enters rotate mode for this drag.
@@ -760,6 +922,10 @@ extension MetalViewport {
                 engine?.zoomBy(Float(delta * kZoomGain))
             case .ended, .cancelled:
                 lastMag = 0
+                // Zoom changed the projection scale → refresh the gizmo hit-test
+                // once (guarded to move mode) so a handle grab after zooming is
+                // accurate. Not done per .changed tick — that would relag zoom.
+                engine?.refreshGizmo()
             default:
                 break
             }
@@ -807,18 +973,35 @@ extension MetalViewport {
             guard w > 0, h > 0 else { return }
             let ndcX = Float(p.x / w) * 2 - 1
             let ndcY = 1 - Float(p.y / h) * 2
+            let aspect = Float(w / h)
+            if engine.interactionMode == .move {
+                // A tap ALWAYS selects the object under it (grab-what-you-touch).
+                // Previously it first hit-tested the gizmo and armed an axis, but
+                // the gizmo wraps the whole molecule (rings around it + the center
+                // handle on the COM), so tapping the molecule body — the natural
+                // place to tap to select — hit a handle and armed it instead of
+                // selecting. Handles are manipulated by DRAGGING (handleMovePan),
+                // which is unaffected; this makes tap-to-select consistent.
+                engine.moveSetActiveAt(ndcX: ndcX, ndcY: ndcY, aspect: aspect)
+                return
+            }
             if engine.measureMode != nil {
-                engine.measurePick(ndcX: ndcX, ndcY: ndcY, aspect: Float(w / h))
+                engine.measurePick(ndcX: ndcX, ndcY: ndcY, aspect: aspect)
             } else {
-                engine.pick(ndcX: ndcX, ndcY: ndcY, aspect: Float(w / h))
+                engine.pick(ndcX: ndcX, ndcY: ndcY, aspect: aspect)
             }
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
             guard let view = mtkView else { return }
             let location = gesture.location(in: view)
-            let pt = pymolPoint(in: view, at: location)
 
+            if engine?.interactionMode == .move {
+                handleMovePan(gesture, in: view, at: location)
+                return
+            }
+
+            let pt = pymolPoint(in: view, at: location)
             switch gesture.state {
             case .began:
                 // Single-finger pan = left drag (rotation)
@@ -827,6 +1010,46 @@ extension MetalViewport {
                 engine?.drag(x: pt.0, y: pt.1, modifiers: 0)
             case .ended, .cancelled:
                 engine?.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: 0)
+            default: break
+            }
+        }
+
+        // One-finger pan in Move mode: if it starts on a gizmo handle (or an axis
+        // is armed), drag that handle; otherwise orbit the camera (and keep the
+        // gizmo tracking). Pinch/two-finger still zoom/orbit the camera as usual.
+        private func handleMovePan(_ gesture: UIPanGestureRecognizer, in view: MTKView, at location: CGPoint) {
+            guard let engine = engine, let (nx, ny, aspect) = gizmoNDC(in: view, at: location) else { return }
+            switch gesture.state {
+            case .began:
+                var handle = engine.gizmo?.hitTest(ndc: CGPoint(x: CGFloat(nx), y: CGFloat(ny)),
+                                                   aspect: CGFloat(aspect))
+                if handle == nil { handle = engine.armedAxis }  // armed-axis drag
+                panMoveHandle = handle
+                if let hnd = handle {
+                    engine.gizmoBeginDrag(hnd, ndcX: nx, ndcY: ny, aspect: aspect)
+                } else {
+                    let pt = pymolPoint(in: view, at: location)
+                    engine.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_DOWN, x: pt.0, y: pt.1, modifiers: 0)
+                }
+            case .changed:
+                if panMoveHandle != nil {
+                    engine.gizmoUpdateDrag(ndcX: nx, ndcY: ny, aspect: aspect)
+                } else {
+                    // Orbit: the 3D CGO gizmo tracks the camera on render, so skip the
+                    // per-tick hit-test refresh (Python + file I/O) that made orbiting
+                    // laggy; it's refreshed on .ended for the next tap/drag.
+                    let pt = pymolPoint(in: view, at: location)
+                    engine.drag(x: pt.0, y: pt.1, modifiers: 0)
+                }
+            case .ended, .cancelled:
+                if panMoveHandle != nil {
+                    engine.gizmoEndDrag()
+                    panMoveHandle = nil
+                } else {
+                    let pt = pymolPoint(in: view, at: location)
+                    engine.button(PYMOL_BUTTON_LEFT, state: PYMOL_BUTTON_UP, x: pt.0, y: pt.1, modifiers: 0)
+                    engine.refreshGizmo(aspect: aspect)
+                }
             default: break
             }
         }
@@ -844,6 +1067,10 @@ extension MetalViewport {
                 engine?.zoomBy(Float(delta * kZoomGain))
             case .ended, .cancelled:
                 pinchLastScale = 1.0
+                // Zoom changed the projection scale → refresh the gizmo hit-test
+                // once (guarded to move mode) so a handle grab after zooming is
+                // accurate. Not done per .changed tick — that would relag zoom.
+                engine?.refreshGizmo()
             default:
                 break
             }
@@ -940,6 +1167,10 @@ extension MetalViewport {
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
             guard gesture.state == .began, let engine = engine, let view = mtkView else { return }
+            // No long-press context menu in Move mode — the gizmo owns the
+            // gestures there, and the Scene menu (Reset view / Deselect all) just
+            // interferes with dragging handles.
+            guard engine.interactionMode != .move else { return }
             // Identify the atom/residue under the press and let ContentView show
             // a native context menu. NDC in point space with Y flipped (same as
             // handleTap). This replaces the old right-click, which fired a PyMOL

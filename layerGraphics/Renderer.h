@@ -89,6 +89,12 @@ public:
   virtual void colorMask(bool r, bool g, bool b, bool a) = 0;
   virtual void lineWidth(float w) = 0;
   virtual void pointSize(float s) = 0;
+  // Depth clamp: when enabled, primitives outside the near/far clip planes are
+  // rasterized with their depth clamped, instead of being clipped away. Used to
+  // draw selection-indicator overlays that must stay on screen regardless of the
+  // scene clip slab (what is selected is shown invariant to clip; only what CAN
+  // be selected is clip-dependent). Default no-op — the GL path is unaffected.
+  virtual void setDepthClamp(bool /*enabled*/) {}
 
   // Drawing
   virtual void drawArrays(PrimitiveType mode, int first, int count) = 0;

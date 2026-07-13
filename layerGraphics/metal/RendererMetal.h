@@ -50,6 +50,7 @@ public:
   void colorMask(bool r, bool g, bool b, bool a) override;
   void lineWidth(float w) override;
   void pointSize(float s) override;
+  void setDepthClamp(bool enabled) override;
 
   // Drawing
   void drawArrays(PrimitiveType mode, int first, int count) override;

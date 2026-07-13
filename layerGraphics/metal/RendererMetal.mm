@@ -3234,6 +3234,17 @@ void RendererMetal::pointSize(float s)
   // Point size is set via vertex shader in Metal
 }
 
+void RendererMetal::setDepthClamp(bool enabled)
+{
+  // MTLDepthClipModeClamp rasterizes primitives outside the near/far planes with
+  // clamped depth instead of clipping them. Used for selection-indicator points
+  // so a selected atom's marker stays on screen even when the atom falls outside
+  // the clip slab. Encoder state — scope it around the draw and reset after.
+  if (_encoder)
+    [_encoder setDepthClipMode:enabled ? MTLDepthClipModeClamp
+                                       : MTLDepthClipModeClip];
+}
+
 // ---------------------------------------------------------------------------
 #pragma mark - Drawing
 // ---------------------------------------------------------------------------
