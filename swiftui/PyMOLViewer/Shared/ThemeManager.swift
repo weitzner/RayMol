@@ -39,7 +39,13 @@ final class ThemeManager: ObservableObject {
         // across an app purge); fall back to id lookup, then Classic.
         if let data = d.data(forKey: activeFullKey),
            let full = try? JSONDecoder().decode(Theme.self, from: data) {
-            active = full
+            // Built-in themes are code-defined — edits fork to a custom id via
+            // saveCustom, so a built-in id is always meant to BE its preset. The
+            // cache must not pin a stale built-in look (e.g. a Paper saved before
+            // outline defaulted off would keep re-applying metal_outline=1), so
+            // re-derive built-ins from the current preset. Custom themes (their
+            // own ids) keep the cached JSON, preserving unsaved edits.
+            active = Theme.builtInPresets.first(where: { $0.id == full.id }) ?? full
         } else {
             let storedID = d.string(forKey: activeKey).flatMap { UUID(uuidString: $0) }
             let pool = Theme.builtInPresets + loadedCustom

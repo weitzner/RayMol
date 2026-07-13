@@ -1,11 +1,14 @@
 #!/bin/bash
-# publish_release.sh — EdDSA-sign the notarized DMG, regenerate appcast.xml, and
-# publish the DMG + appcast to GitHub Releases on javierbq/RayMol.
+# publish_release.sh — EdDSA-sign the notarized DMG, regenerate appcast.xml,
+# publish the DMG + appcast to GitHub Releases on javierbq/RayMol, and bump the
+# Homebrew cask tap (javierbq/homebrew-raymol) so `brew` serves the new version.
 #
 # Run AFTER make_dmg.sh has produced a notarized RayMol-<VERSION>.dmg at the repo
 # root. The appcast feed served at
 #   https://github.com/javierbq/RayMol/releases/latest/download/appcast.xml
-# is what installed RayMol.app polls (SUFeedURL in Info.plist).
+# is what installed RayMol.app polls (SUFeedURL in Info.plist). The Homebrew cask
+# bump is the LAST step (it needs the release asset live); it is non-fatal and
+# can be skipped with SKIP_CASK=1.
 #
 # Usage:
 #   VERSION=1.1.0 BUILD=5 NOTES_FILE=docs/release-notes/v1.1.0.md \
@@ -26,6 +29,12 @@ VERSION="${VERSION:?Set VERSION, e.g. 1.1.0}"
 BUILD="${BUILD:?Set BUILD (CFBundleVersion), e.g. 5}"
 DMG="$ROOT/RayMol-$VERSION.dmg"
 APPCAST="$ROOT/appcast.xml"
+# RayMol also ships via a Homebrew Cask tap so users can
+#   brew install --cask javierbq/raymol/raymol
+# The cask pins an exact version + sha256 of the versioned DMG, so it is bumped
+# at the end of this script (after the GitHub release exists). SKIP_CASK=1 skips.
+CASK_TAP_REPO="${CASK_TAP_REPO:-javierbq/homebrew-raymol}"
+SKIP_CASK="${SKIP_CASK:-0}"
 
 [ -f "$DMG" ] || { echo "ERROR: $DMG not found (run make_dmg.sh first)"; exit 1; }
 
@@ -135,6 +144,45 @@ else
       --title "RayMol $VERSION" \
       --notes "${NOTES:-Automatic updates are here. RayMol now checks for new versions and installs them with one click — no more manual DMG downloads. Built on the open-source PyMOL engine.}"
   fi
+fi
+
+echo "RELEASE PUBLISHED → https://github.com/$REPO/releases/tag/v$VERSION"
+
+# == Bump the Homebrew cask =====================================================
+# Update version + sha256 in the tap's Casks/raymol.rb and push. Runs AFTER the
+# GitHub release is live (the cask URL resolves to that release's DMG asset).
+# NON-FATAL by design: the release itself already succeeded, so a tap hiccup
+# must not fail the run — it just prints a warning and tells you how to recover.
+if [ "$SKIP_CASK" = "1" ]; then
+  echo "== Skipping Homebrew cask bump (SKIP_CASK=1) =="
+else
+  echo "== Bump Homebrew cask ($CASK_TAP_REPO) =="
+  CASK_SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+  echo "  version=$VERSION sha256=$CASK_SHA"
+  CASK_TMP="$(mktemp -d -t raymol-cask)"
+  if gh repo clone "$CASK_TAP_REPO" "$CASK_TMP/tap" -- -q 2>/dev/null; then
+    CASK_FILE="$CASK_TMP/tap/Casks/raymol.rb"
+    if [ -f "$CASK_FILE" ]; then
+      # Rewrite only the version/sha256 lines (anchored to the stanza indent).
+      sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/" "$CASK_FILE"
+      sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$CASK_SHA\"/" "$CASK_FILE"
+      if git -C "$CASK_TMP/tap" diff --quiet -- Casks/raymol.rb; then
+        echo "  cask already at $VERSION / $CASK_SHA — nothing to push"
+      else
+        git -C "$CASK_TMP/tap" add Casks/raymol.rb
+        git -C "$CASK_TMP/tap" commit -qm "raymol $VERSION"
+        git -C "$CASK_TMP/tap" push -q origin HEAD
+        echo "  pushed cask $VERSION → $CASK_TAP_REPO"
+      fi
+    else
+      echo "  WARNING: $CASK_FILE missing in tap; cask NOT bumped."
+    fi
+  else
+    echo "  WARNING: could not clone $CASK_TAP_REPO; cask NOT bumped."
+    echo "           Create the tap once, then bump by hand or re-run with"
+    echo "           SKIP_CASK unset. Users would otherwise get the old version."
+  fi
+  rm -rf "$CASK_TMP"
 fi
 
 echo "DONE → https://github.com/$REPO/releases/tag/v$VERSION"

@@ -158,8 +158,13 @@ final class PyMOLEngine: ObservableObject {
     // Hover pre-selection preview (issue #165, macOS): when true, moving the
     // pointer over the viewport highlights what a click WOULD select (in a
     // distinct light-cyan) without committing to 'sele'. User-toggleable in the
-    // Mouse panel. When false, hoverPreview() is a no-op.
-    @Published var hoverPreviewEnabled = true
+    // Mouse panel AND Scene ▸ Canvas. When false, hoverPreview() is a no-op.
+    // Persisted across launches via UserDefaults (didSet); default on.
+    @Published var hoverPreviewEnabled: Bool =
+        (UserDefaults.standard.object(forKey: PyMOLEngine.hoverDefaultsKey) as? Bool ?? true) {
+        didSet { UserDefaults.standard.set(hoverPreviewEnabled, forKey: PyMOLEngine.hoverDefaultsKey) }
+    }
+    static let hoverDefaultsKey = "raymol.hoverPreviewEnabled"
     // Full settings catalog for the searchable Settings panel (loaded on demand).
     @Published var settingsCatalog: [SettingItem] = []
     // The single detail view that is currently open (accordion: at most one).
@@ -1128,7 +1133,9 @@ final class PyMOLEngine: ObservableObject {
         py += "    from pymol import cmd as _c\n"
         py += "    _c.bg_color('\(bgHex)')\n"
         if applyRenderToggles {
-            py += "    _c.set('metal_outline', \(theme.outline ? 1 : 0))\n"
+            // Outline is off in every theme (RayMol 1.6.1) — force off regardless
+            // of theme.outline, matching raymol_theme.set_palette.
+            py += "    _c.set('metal_outline', 0)\n"
             py += "    _c.set('metal_raytrace', \(theme.rayTrace ? 1 : 0)); _c.set('metal_shadows', \(theme.shadows ? 1 : 0))\n"
         }
         runPython(py)
@@ -2130,13 +2137,15 @@ final class PyMOLEngine: ObservableObject {
     // projection over all atoms is the cost we're throttling.
     private var hoverWork: DispatchWorkItem?
     private var lastHoverNDC: (Float, Float)? = nil
-    private let kHoverDebounce = 0.033        // ~33 ms trailing coalesce
+    private var lastHoverFire = Date.distantPast
+    private let kHoverInterval = 0.045        // leading-edge throttle: ≤~22 picks/s
     private let kHoverMinNDC: Float = 0.004   // sub-pixel move gate (NDC²-ish)
 
     /// Update the hover pre-selection preview to what a click at (ndcX,ndcY)
     /// would select, without committing to 'sele'. No-op while the feature is
-    /// disabled. Debounced + sub-pixel gated so a fast sweep doesn't spam the
-    /// Python projection pick.
+    /// disabled. LEADING-EDGE throttled (+ trailing catch-up) so the preview
+    /// tracks CONTINUOUSLY while the pointer sweeps — a pure trailing debounce
+    /// only fired once the pointer paused, which read as "hover doesn't work".
     func hoverPreview(_ ndcX: Float, _ ndcY: Float, _ aspect: Float) {
         guard isReady, hoverPreviewEnabled else { return }
         if let last = lastHoverNDC {
@@ -2145,13 +2154,22 @@ final class PyMOLEngine: ObservableObject {
         }
         lastHoverNDC = (ndcX, ndcY)
         hoverWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.runPython(
+        let fire: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            self.lastHoverFire = Date()
+            self.runPython(
                 "from pymol import metal_pick as _mp; "
                 + "_mp.hover_preview_at(\(ndcX), \(ndcY), \(aspect))")
         }
-        hoverWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + kHoverDebounce, execute: work)
+        let elapsed = Date().timeIntervalSince(lastHoverFire)
+        if elapsed >= kHoverInterval {
+            fire()                                  // leading edge — update now
+        } else {
+            let work = DispatchWorkItem(block: fire) // trailing — final rest position
+            hoverWork = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + (kHoverInterval - elapsed), execute: work)
+        }
     }
 
     /// Cancel any pending hover pick and empty the preview selection. Cheap and

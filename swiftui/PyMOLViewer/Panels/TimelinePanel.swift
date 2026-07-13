@@ -40,6 +40,9 @@ struct TimelinePanel: View {
     /// right-inspector instance so it fits the ~400pt column instead of rendering
     /// the wide desktop transport that overflows.
     var forceCompact: Bool = false
+    /// Gray out (disable) the Expand button. The expanded full-width dock is
+    /// landscape-only on iPad, so its entry point is disabled in portrait.
+    var expandDisabled: Bool = false
 
     @State private var showClearConfirm = false
     // Export the authored movie — lives on the top bar (right of the trashcan) so
@@ -305,7 +308,11 @@ struct TimelinePanel: View {
         }
         .buttonStyle(.plain)
         .foregroundColor(open ? .white : TimelineTheme.text)
-        .help(open ? "Collapse the full editor" : "Expand into a full editor at the bottom")
+        .disabled(expandDisabled)
+        .opacity(expandDisabled ? 0.35 : 1)
+        .help(expandDisabled
+              ? "Rotate to landscape to expand the timeline into a full editor"
+              : (open ? "Collapse the full editor" : "Expand into a full editor at the bottom"))
         .accessibilityLabel(open ? "Collapse timeline editor" : "Expand timeline editor")
     }
 
