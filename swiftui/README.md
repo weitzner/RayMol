@@ -17,9 +17,9 @@ tested by hand.
    app is Metal-only; see [Package-manager portability](#package-manager-portability)
    below for why that matters more than it sounds).
 
-   Homebrew:
+   Homebrew (the repo's `Brewfile` also covers `cmake` and `xcodegen`):
    ```bash
-   brew install glm libpng freetype libomp
+   brew bundle --file=Brewfile
    ```
    MacPorts:
    ```bash
